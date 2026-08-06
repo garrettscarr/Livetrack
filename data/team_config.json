@@ -1,0 +1,29 @@
+{
+  "team_name": "Home",
+  "booth_pin": "0851",
+  "comment": "booth_pin gates shared Wi-Fi mode (FOOTBALL_EPA_SHARED=1). Change before district.",
+  "play_word_aliases": {
+    "axel": "Axle",
+    "axle": "Axle"
+  },
+  "phrase_token_aliases": {
+    "tricks": "trix",
+    "trick": "trix",
+    "trips": "trix",
+    "wright": "right",
+    "write": "right",
+    "axel": "axle"
+  },
+  "week1_opponent": "Farmersville",
+  "product_surface": {
+    "halftime_path": "live_track",
+    "orphaned_pages": [
+      "in_game_page",
+      "combo_page",
+      "scout_room",
+      "play_call_sheet_page",
+      "sideline"
+    ],
+    "note": "Live Track is the sole game-night + HT path. Orphaned pages stay in code for offseason revive."
+  }
+}

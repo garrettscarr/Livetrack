@@ -1,0 +1,148 @@
+{
+  "formations": [
+    "Slot Dip",
+    "Slot Trig",
+    "Texas",
+    "Nasty",
+    "Fox RT",
+    "Trix",
+    "Dot",
+    "Fox LT",
+    "Pack LT",
+    "East",
+    "Fever LT",
+    "Fever RT",
+    "Cowboy",
+    "Pack RT",
+    "Empty",
+    "Diamond",
+    "Patriot",
+    "2 Play",
+    "Cat 5",
+    "Victory",
+    "Tiger",
+    "34 Dot"
+  ],
+  "variants": [
+    "Bash",
+    "Quads",
+    "Stack",
+    "Wide"
+  ],
+  "variants_by_formation": {
+    "Slot Trig": [
+      "Bash",
+      "Stack"
+    ],
+    "Texas": [
+      "Quads",
+      "Bash"
+    ],
+    "Slot Dip": [
+      "Stack",
+      "Bash"
+    ],
+    "Dot": [
+      "Stack"
+    ],
+    "Trix": [
+      "Bash"
+    ],
+    "Cowboy": [
+      "Wide"
+    ]
+  },
+  "motions": [
+    "Sooner",
+    "Oklahoma",
+    "Cheetah",
+    "Away",
+    "Zip",
+    "R Away",
+    "Bump",
+    "Dash",
+    "Home"
+  ],
+  "plays": {
+    "run": [
+      "Army",
+      "Army Back",
+      "Axle",
+      "Heels",
+      "Heels Back",
+      "Horns",
+      "Horns Back",
+      "Horns Slice",
+      "Illinois",
+      "Illinois Q",
+      "Illinois Slice",
+      "Ireland",
+      "Ireland Slice",
+      "Jackal",
+      "Jaguar",
+      "Lava",
+      "Mary",
+      "Mary Back",
+      "Mary Insert",
+      "Mary Q",
+      "Molly",
+      "Molly Insert",
+      "Molly Q",
+      "Molly Toss",
+      "Rock"
+    ],
+    "pass": [
+      "Backside",
+      "Batman",
+      "Cyborg",
+      "Devil",
+      "Firework",
+      "Fist",
+      "Gift GO",
+      "H Fist",
+      "Ice",
+      "Joker",
+      "Out",
+      "Post",
+      "Spot",
+      "Superman",
+      "Switch",
+      "Tiny",
+      "Vegas",
+      "Water",
+      "Wave",
+      "Wizard",
+      "Zebra",
+      "Gift And GO"
+    ],
+    "rpo": [
+      "Army Bronco",
+      "Illinois Bear",
+      "Army Cheetah Bronco",
+      "Heels Back Bear",
+      "Ireland Slice Stab",
+      "Army Backside",
+      "Army Bear",
+      "Army Stab",
+      "Axle Bronco",
+      "Heels Back Stab",
+      "Horns Back Backside",
+      "Horns Back Return",
+      "Horns Backside",
+      "Illinois Seattle",
+      "Illinois Stab",
+      "Ireland Seattle"
+    ],
+    "special": [
+      "2 Play",
+      "Woke AF",
+      "Big Balls"
+    ]
+  },
+  "inbox_plays": [
+    "Away Switch",
+    "Axle Stab",
+    "Horns Return",
+    "Ireland Backside"
+  ]
+}

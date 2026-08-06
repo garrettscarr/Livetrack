@@ -1,0 +1,50 @@
+{
+  "play_call": [
+    "Frog",
+    "Ireland",
+    "Post",
+    "Illinois",
+    "Joker",
+    "Big Balls",
+    "Molly",
+    "Superman",
+    "Heels",
+    "Rock",
+    "Devil",
+    "Tiny",
+    "Army",
+    "Army Bronco",
+    "Gift And GO",
+    "Firework",
+    "Mary",
+    "Illinois Bear",
+    "Army Cheetah Bronco",
+    "Wizard"
+  ],
+  "formation": [
+    "Slot Trig",
+    "Slot Dip",
+    "Trix",
+    "Empty",
+    "Fox RT",
+    "Cowboy",
+    "Pack RT"
+  ],
+  "motion": [
+    "Sooner"
+  ],
+  "def_front": [
+    "Even",
+    "Odd"
+  ],
+  "coverage": [
+    "Cover 3",
+    "Cover 4",
+    "Cover 2",
+    "Cover 2 Man",
+    "Cover 1"
+  ],
+  "formation_variant": [
+    "Bash"
+  ]
+}

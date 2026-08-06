@@ -1,0 +1,11 @@
+{
+  "opponent": "Farmersville",
+  "offense_pins": [
+    {
+      "call": "SUPERMAN",
+      "why": "test"
+    }
+  ],
+  "defense_pins": [],
+  "updated_at": "2026-07-29T15:35:41"
+}

@@ -1,0 +1,34 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+*.log
+.streamlit/secrets.toml
+
+# Local runtime / booth state (keep schemas in repo via samples if needed)
+data/live_log.csv
+data/live_log.csv.lock
+data/game_state.json
+data/drive_state.json
+data/lineup_state.json
+data/football.db
+data/*.lock
+data/*.tmp
+data/halftime_reports/*
+!data/halftime_reports/.gitkeep
+
+# Proprietary / regenerable Hudl exports (keep README)
+data/hudl_exports/*.xlsx
+data/hudl_exports/~$*
+
+# Packaging output
+dist/
+build/
+*.spec
+packaging/out/
+
+# Editor
+.idea/
+.vscode/

@@ -1,0 +1,136 @@
+{
+  "players": [
+    {
+      "name": "Nate Harris",
+      "positions": [
+        "QB"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Luke Harris",
+      "positions": [
+        "WR",
+        "RB"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Tyse Lennon",
+      "positions": [
+        "WR",
+        "RB"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Andrew Lemberg",
+      "positions": [
+        "WR"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Jonathan Cheatham",
+      "positions": [
+        "WR"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Andrew Gaddis",
+      "positions": [
+        "WR"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Liam Finan",
+      "positions": [
+        "QB"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Jacob Walker",
+      "positions": [
+        "WR",
+        "RB"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Jadyn Rice",
+      "positions": [
+        "RB",
+        "TE"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Jayce Harris",
+      "positions": [
+        "OL"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Harley Norris",
+      "positions": [
+        "OL"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Simon Martinez",
+      "positions": [
+        "OL"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Murphy Grace",
+      "positions": [
+        "OL"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Jonny Espinoza",
+      "positions": [
+        "OL"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Caleb Gaddis",
+      "positions": [
+        "WR",
+        "QB",
+        "RB"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Brody Goodman",
+      "positions": [
+        "WR"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Mike Santillano",
+      "positions": [
+        "RB"
+      ],
+      "starter": false
+    },
+    {
+      "name": "JJ Contreras",
+      "positions": [
+        "WR"
+      ],
+      "starter": false
+    }
+  ]
+}
