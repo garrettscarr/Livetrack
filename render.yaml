@@ -1,0 +1,17 @@
+# Render.com — one-click style booth host
+# Dashboard → New → Blueprint → connect this repo
+services:
+  - type: web
+    name: football-epa-booth
+    runtime: docker
+    plan: starter
+    healthCheckPath: /
+    envVars:
+      - key: FOOTBALL_EPA_SHARED
+        value: "1"
+      - key: BOOTH_PUBLIC_URL
+        sync: false
+    disk:
+      name: football-epa-data
+      mountPath: /app/data
+      sizeGB: 1

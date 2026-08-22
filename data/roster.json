@@ -1,11 +1,13 @@
 {
+  "active_season": "26-27",
+  "season": "26-27",
   "players": [
     {
       "name": "Nate Harris",
       "positions": [
         "QB"
       ],
-      "starter": false
+      "starter": true
     },
     {
       "name": "Luke Harris",
@@ -35,42 +37,12 @@
       "positions": [
         "WR"
       ],
-      "starter": false
+      "starter": true
     },
     {
       "name": "Andrew Gaddis",
       "positions": [
         "WR"
-      ],
-      "starter": false
-    },
-    {
-      "name": "Liam Finan",
-      "positions": [
-        "QB"
-      ],
-      "starter": true
-    },
-    {
-      "name": "Jacob Walker",
-      "positions": [
-        "WR",
-        "RB"
-      ],
-      "starter": true
-    },
-    {
-      "name": "Jadyn Rice",
-      "positions": [
-        "RB",
-        "TE"
-      ],
-      "starter": true
-    },
-    {
-      "name": "Jayce Harris",
-      "positions": [
-        "OL"
       ],
       "starter": true
     },
@@ -79,14 +51,7 @@
       "positions": [
         "OL"
       ],
-      "starter": true
-    },
-    {
-      "name": "Simon Martinez",
-      "positions": [
-        "OL"
-      ],
-      "starter": true
+      "starter": false
     },
     {
       "name": "Murphy Grace",
@@ -103,34 +68,565 @@
       "starter": true
     },
     {
-      "name": "Caleb Gaddis",
+      "name": "Mike Santillano",
       "positions": [
-        "WR",
-        "QB",
         "RB"
       ],
       "starter": true
     },
     {
-      "name": "Brody Goodman",
+      "name": "Logan Carlock",
       "positions": [
-        "WR"
+        "OL"
       ],
       "starter": true
     },
     {
-      "name": "Mike Santillano",
+      "name": "Zane Schraeder",
+      "positions": [
+        "OL"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Achillius Saman",
+      "positions": [
+        "OL"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Caden Ingrum",
+      "positions": [
+        "TE"
+      ],
+      "starter": true
+    },
+    {
+      "name": "Brody Needham",
+      "positions": [
+        "QB"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Casen Edwards",
+      "positions": [
+        "OL"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Caleb Holloway",
+      "positions": [
+        "TE"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Ryn Johnson",
+      "positions": [
+        "WR",
+        "RB"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Layson Ray",
+      "positions": [
+        "WR"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Bryant Purser",
+      "positions": [
+        "WR"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Shiloh Love",
+      "positions": [
+        "OL"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Nathan Rodriguez",
+      "positions": [
+        "OL"
+      ],
+      "starter": false
+    },
+    {
+      "name": "JJ Rodriguez",
+      "positions": [
+        "OL"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Ben Pitts",
+      "positions": [
+        "OL"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Pryce Wallace",
+      "positions": [
+        "TE"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Clayton Boswell",
+      "positions": [
+        "TE"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Colton Harris",
       "positions": [
         "RB"
       ],
       "starter": false
     },
     {
-      "name": "JJ Contreras",
+      "name": "Caiden Manley",
+      "positions": [
+        "RB"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Rick Castorena",
+      "positions": [
+        "RB"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Evan Elias",
+      "positions": [
+        "WR"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Nathan Mitchell",
+      "positions": [
+        "WR"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Collin Edwards",
+      "positions": [
+        "WR"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Cayden Cates",
+      "positions": [
+        "WR"
+      ],
+      "starter": false
+    },
+    {
+      "name": "Taylor Kirk",
       "positions": [
         "WR"
       ],
       "starter": false
     }
-  ]
+  ],
+  "seasons": {
+    "25-26": {
+      "players": [
+        {
+          "name": "Nate Harris",
+          "positions": [
+            "QB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Luke Harris",
+          "positions": [
+            "WR",
+            "RB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Tyse Lennon",
+          "positions": [
+            "WR",
+            "RB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Andrew Lemberg",
+          "positions": [
+            "WR"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Jonathan Cheatham",
+          "positions": [
+            "WR"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Andrew Gaddis",
+          "positions": [
+            "WR"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Liam Finan",
+          "positions": [
+            "QB"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Jacob Walker",
+          "positions": [
+            "WR",
+            "RB"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Jadyn Rice",
+          "positions": [
+            "RB",
+            "TE"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Jayce Harris",
+          "positions": [
+            "OL"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Harley Norris",
+          "positions": [
+            "OL"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Simon Martinez",
+          "positions": [
+            "OL"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Murphy Grace",
+          "positions": [
+            "OL"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Jonny Espinoza",
+          "positions": [
+            "OL"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Caleb Gaddis",
+          "positions": [
+            "WR",
+            "QB",
+            "RB"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Brody Goodman",
+          "positions": [
+            "WR"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Mike Santillano",
+          "positions": [
+            "RB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "JJ Contreras",
+          "positions": [
+            "WR"
+          ],
+          "starter": false
+        }
+      ],
+      "label": "2025-26"
+    },
+    "26-27": {
+      "players": [
+        {
+          "name": "Nate Harris",
+          "positions": [
+            "QB"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Luke Harris",
+          "positions": [
+            "WR",
+            "RB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Tyse Lennon",
+          "positions": [
+            "WR",
+            "RB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Andrew Lemberg",
+          "positions": [
+            "WR"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Jonathan Cheatham",
+          "positions": [
+            "WR"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Andrew Gaddis",
+          "positions": [
+            "WR"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Harley Norris",
+          "positions": [
+            "OL"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Murphy Grace",
+          "positions": [
+            "OL"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Jonny Espinoza",
+          "positions": [
+            "OL"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Mike Santillano",
+          "positions": [
+            "RB"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Logan Carlock",
+          "positions": [
+            "OL"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Zane Schraeder",
+          "positions": [
+            "OL"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Achillius Saman",
+          "positions": [
+            "OL"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Caden Ingrum",
+          "positions": [
+            "TE"
+          ],
+          "starter": true
+        },
+        {
+          "name": "Brody Needham",
+          "positions": [
+            "QB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Casen Edwards",
+          "positions": [
+            "OL"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Caleb Holloway",
+          "positions": [
+            "TE"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Ryn Johnson",
+          "positions": [
+            "WR",
+            "RB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Layson Ray",
+          "positions": [
+            "WR"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Bryant Purser",
+          "positions": [
+            "WR"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Shiloh Love",
+          "positions": [
+            "OL"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Nathan Rodriguez",
+          "positions": [
+            "OL"
+          ],
+          "starter": false
+        },
+        {
+          "name": "JJ Rodriguez",
+          "positions": [
+            "OL"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Ben Pitts",
+          "positions": [
+            "OL"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Pryce Wallace",
+          "positions": [
+            "TE"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Clayton Boswell",
+          "positions": [
+            "TE"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Colton Harris",
+          "positions": [
+            "RB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Caiden Manley",
+          "positions": [
+            "RB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Rick Castorena",
+          "positions": [
+            "RB"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Evan Elias",
+          "positions": [
+            "WR"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Nathan Mitchell",
+          "positions": [
+            "WR"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Collin Edwards",
+          "positions": [
+            "WR"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Cayden Cates",
+          "positions": [
+            "WR"
+          ],
+          "starter": false
+        },
+        {
+          "name": "Taylor Kirk",
+          "positions": [
+            "WR"
+          ],
+          "starter": false
+        }
+      ],
+      "label": "2026-2027 Season"
+    }
+  }
 }

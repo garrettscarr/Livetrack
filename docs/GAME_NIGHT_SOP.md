@@ -7,12 +7,14 @@
 1. Drop latest Hudl if needed → `python refresh_all.py` (or confirm DB already current).
 2. Open **Game Plan** → pin edges for tonight’s opponent.
 3. Open **Database** → confirm roster / starters / favorites.
-4. Start shared mode:
-   - Mac: double-click `run_live_shared.command` (or `./run_live_shared.sh`)
-   - Windows: `run_live_shared.bat`
+4. Start the booth:
+   - **Hosted (recommended for multi-iPad):** deploy once — see [HOSTED_BOOTH.md](HOSTED_BOOTH.md).  
+     Laptop: `https://YOUR-HOST/?station=call` · iPad: `?station=defense`
+   - **Local shared:** Mac `run_live_shared.command` / Windows `run_live_shared.bat`  
+     (same Wi‑Fi or phone hotspot; laptop-as-hotspot if client isolation blocks tablets)
 5. Unlock with booth PIN (`data/team_config.json` → `booth_pin`, default `0851`).
-6. Tablet: same Wi‑Fi → `http://<laptop-ip>:8501` → enter PIN.
-7. Live Track → select opponent → Half 1 → Log.
+6. Devices: open the hosted URL (or `http://<laptop-ip>:8501`) → enter PIN.
+7. Live Track → select opponent → Half 1 → Call station logs; Defense fills film.
 
 ## During the half
 

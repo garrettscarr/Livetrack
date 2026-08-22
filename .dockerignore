@@ -1,0 +1,13 @@
+.venv
+__pycache__
+*.pyc
+.git
+.gitignore
+.cursor
+agent-transcripts
+data/live_log_archive
+data/halftime_reports
+data/hudl_exports/~$*
+**/.DS_Store
+*.lock
+packaging/dist

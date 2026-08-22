@@ -19,7 +19,23 @@
     "Mary",
     "Illinois Bear",
     "Army Cheetah Bronco",
-    "Wizard"
+    "Wizard",
+    "Molly Wizard",
+    "Mary Bear",
+    "Batman",
+    "Fist",
+    "Horns",
+    "Horns Bear",
+    "Ice",
+    "Cyborg",
+    "Horns Return",
+    "Return",
+    "Vegas",
+    "Axle",
+    "Bear",
+    "Heels Bear",
+    "Stab",
+    "Axle Bronco"
   ],
   "formation": [
     "Slot Trig",
@@ -35,14 +51,19 @@
   ],
   "def_front": [
     "Even",
-    "Odd"
+    "Odd",
+    "Bear"
   ],
   "coverage": [
     "Cover 3",
     "Cover 4",
     "Cover 2",
     "Cover 2 Man",
-    "Cover 1"
+    "Cover 1",
+    "Cover 2 Press Man",
+    "Cover 1 Press Man",
+    "0",
+    "Cover 0"
   ],
   "formation_variant": [
     "Bash"

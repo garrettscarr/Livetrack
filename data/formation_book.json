@@ -1,0 +1,94 @@
+{
+  "comment": "Coach formation book. East=right West=left (compass). Dip=H to 1-WR side, Trig=H to 2-WR side, Fox=H to 3-WR side, Fever=Fox with attached TE. Override notes here if the scheme evolves.",
+  "families": {
+    "east": {
+      "label": "East",
+      "family": "trips",
+      "note": "Trips right (East = compass right)",
+      "layout": "TripsRight",
+      "side": "right"
+    },
+    "west": {
+      "label": "West",
+      "family": "trips",
+      "note": "Trips left (West = compass left)",
+      "layout": "TripsLeft",
+      "side": "left"
+    },
+    "slot_dip": {
+      "label": "Slot Dip",
+      "family": "slot",
+      "note": "Slot · H to the 1-WR side (Dip)",
+      "layout": "SlotDip",
+      "h_align": "1_wr"
+    },
+    "slot_trig": {
+      "label": "Slot Trig",
+      "family": "slot",
+      "note": "Slot · H to the 2-WR side (Trig)",
+      "layout": "SlotTrig",
+      "h_align": "2_wr"
+    },
+    "dot": {
+      "label": "Dot",
+      "family": "doubles",
+      "note": "Doubles (2×2)",
+      "layout": "Doubles"
+    },
+    "empty": {
+      "label": "Empty",
+      "family": "empty",
+      "note": "Empty",
+      "layout": "Empty",
+      "personnel": "empty"
+    },
+    "trix": {
+      "label": "Trix",
+      "family": "trix",
+      "note": "TE attached to the boundary · trips to the field",
+      "layout": "Trix",
+      "personnel": "TE + trips"
+    },
+    "fox": {
+      "label": "Fox",
+      "family": "fox",
+      "note": "H to the 3-WR side (Fox)",
+      "layout": "Fox",
+      "h_align": "3_wr"
+    },
+    "fever": {
+      "label": "Fever",
+      "family": "fever",
+      "note": "Same as Fox, but attached TE to the 3-WR side",
+      "layout": "Fever",
+      "h_align": "3_wr_te"
+    },
+    "pack": {
+      "label": "Pack",
+      "family": "bunch",
+      "note": "Bunch (Pack)",
+      "layout": "Pack"
+    },
+    "cowboy": {
+      "label": "Cowboy",
+      "family": "empty_bunch",
+      "note": "Empty Bunch (Cowboy)",
+      "layout": "Cowboy",
+      "personnel": "empty bunch"
+    },
+    "texas": {
+      "label": "Texas",
+      "family": "12",
+      "note": "12 personnel (2 TE/H)",
+      "layout": "Texas",
+      "personnel": "12"
+    },
+    "nasty": {
+      "label": "Nasty",
+      "family": "jumbo",
+      "note": "6 OL + TE (Nasty)",
+      "layout": "Nasty",
+      "personnel": "6 OL + TE"
+    }
+  }
+}

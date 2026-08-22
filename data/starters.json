@@ -1,15 +1,35 @@
 {
+  "active_season": "26-27",
+  "season": "26-27",
   "offense": {
-    "TE": "Jadyn Rice",
     "WR3": "Andrew Lemberg",
-    "LT": "Jayce Harris",
-    "LG": "Harley Norris",
-    "C": "Simon Martinez",
-    "RG": "Murphy Grace",
+    "LG": "Zane Schraeder",
+    "RG": "Achillius Saman",
     "RT": "Jonny Espinoza",
-    "RB": "Jacob Walker",
-    "QB": "Liam Finan",
-    "WR2": "Caleb Gaddis",
-    "WR1": "Brody Goodman"
+    "WR2": "Andrew Gaddis",
+    "TE": "Caden Ingrum",
+    "LT": "Logan Carlock",
+    "C": "Murphy Grace",
+    "RB": "Mike Santillano",
+    "QB": "Brody Needham",
+    "WR1": "Tyse Lennon"
+  },
+  "seasons": {
+    "26-27": {
+      "offense": {
+        "WR3": "Andrew Lemberg",
+        "LG": "Zane Schraeder",
+        "RG": "Achillius Saman",
+        "RT": "Jonny Espinoza",
+        "WR2": "Andrew Gaddis",
+        "TE": "Caden Ingrum",
+        "LT": "Logan Carlock",
+        "C": "Murphy Grace",
+        "RB": "Mike Santillano",
+        "QB": "Brody Needham",
+        "WR1": "Tyse Lennon"
+      },
+      "label": "2026-2027 Season"
+    }
   }
 }

@@ -12,6 +12,7 @@ Scout notes:
     scout often only includes snaps where the opponent was on defense)
   - ODK=D → opponent defense (fronts / coverages) for OUR offense planning
   - ODK=O → opponent offense (formations / play type) for OUR defense planning
+  - `Farmersville D.xlsx` → current season; `Farmersville D_24-25.xlsx` → prior
 """
 
 from pathlib import Path
@@ -110,22 +111,39 @@ def _is_tagged(series: pd.Series) -> pd.Series:
 
 
 def load_opponents(season_label: str = "current") -> pd.DataFrame | None:
-    """Load opponents.csv, or opponents_{season}.csv for prior years."""
-    path = OPPONENTS_FILE
-    if season_label and season_label not in {"current", "25-26"}:
-        alt = PROJECT_DIR / "data" / f"opponents_{season_label}.csv"
-        if alt.exists():
-            path = alt
+    """Load opponents.csv for current season, or opponents_{season}.csv for priors."""
+    try:
+        from schedule import load_schedule, schedule_path
+        from team_config import is_current_season_value
+
+        label = str(season_label or "current").strip() or "current"
+        if is_current_season_value(label) or label.lower() in {"current", ""}:
+            path = schedule_path("current")
         else:
+            path = schedule_path(label)
+        if not path.exists():
             return None
-    if not path.exists():
-        return None
-    opponents = pd.read_csv(path)
-    opponents["game_id"] = opponents["game_id"].astype(int)
-    if "notes" not in opponents.columns:
-        opponents["notes"] = ""
-    opponents["notes"] = opponents["notes"].fillna("")
-    return opponents[["game_id", "opponent", "notes"]]
+        opponents = load_schedule(label if not is_current_season_value(label) else None)
+        if opponents.empty:
+            return None
+        return opponents[["game_id", "opponent", "notes"]]
+    except Exception:
+        # Fallback without schedule module
+        path = OPPONENTS_FILE
+        if season_label and str(season_label).strip().lower() not in {"current", "25-26", ""}:
+            alt = PROJECT_DIR / "data" / f"opponents_{season_label}.csv"
+            if alt.exists():
+                path = alt
+            else:
+                return None
+        if not path.exists():
+            return None
+        opponents = pd.read_csv(path)
+        opponents["game_id"] = opponents["game_id"].astype(int)
+        if "notes" not in opponents.columns:
+            opponents["notes"] = ""
+        opponents["notes"] = opponents["notes"].fillna("")
+        return opponents[["game_id", "opponent", "notes"]]
 
 
 def result_flags(result: str) -> dict:
@@ -141,10 +159,15 @@ def result_flags(result: str) -> dict:
 
 
 def season_label_from_path(path: Path) -> str:
-    """season.xlsx → current; season_24-25.xlsx → 24-25."""
+    """season.xlsx → active season id; season_24-25.xlsx → 24-25."""
     stem = path.stem.strip().lower()
     if stem == "season":
-        return "current"
+        try:
+            from team_config import current_season_id
+
+            return current_season_id()
+        except Exception:
+            return "current"
     m = re.match(r"season[_\s\-]*(.+)$", stem, flags=re.I)
     if m:
         return re.sub(r"\s+", "-", m.group(1).strip())
@@ -158,7 +181,7 @@ def find_season_files() -> list[tuple[Path, str]]:
         return found
     primary = SCOUT_DIR / "season.xlsx"
     if primary.exists():
-        found.append((primary, "current"))
+        found.append((primary, season_label_from_path(primary)))
     for path in sorted(SCOUT_DIR.glob("season*.xlsx")):
         if path.name.startswith("~$"):
             continue
@@ -220,7 +243,13 @@ def clean_side(
     df["play_tagged"] = _is_tagged(df["play_call"]).astype(int)
     # Prior-year formations are untrusted (wrong scheme / bad tags) — never board them.
     # Tagged play calls + all situation/gain rows still feed EPA.
-    if str(season).strip().lower() not in {"current", "25-26", ""}:
+    try:
+        from team_config import is_current_season_value
+
+        form_ok = is_current_season_value(season)
+    except Exception:
+        form_ok = str(season).strip().lower() in {"current", "25-26", "26-27", ""}
+    if not form_ok:
         df["form_tagged"] = 0
     df["tags_ok"] = ((df["form_tagged"] == 1) & (df["play_tagged"] == 1)).astype(int)
     df["def_tagged"] = (
@@ -250,16 +279,23 @@ def clean_side(
     return df
 
 
-def find_named_scout_files() -> list[tuple[Path, str, str]]:
+def find_named_scout_files() -> list[tuple[Path, str, str, str]]:
     """
     Find scout exports named like:
-      Farmersville D.xlsx  → opponent defense (for our offense)
-      Farmersville O.xlsx  → opponent offense (for our defense)
+      Farmersville D.xlsx         → opponent defense, current season
+      Farmersville O.xlsx         → opponent offense, current season
+      Farmersville D_24-25.xlsx   → prior-season scout
+    Returns (path, opponent, role, season_label).
     """
-    found: list[tuple[Path, str, str]] = []
+    found: list[tuple[Path, str, str, str]] = []
     if not SCOUT_DIR.exists():
         return found
 
+    # Opponent + D/O + optional season suffix
+    pat = re.compile(
+        r"^(.+?)\s+([DO])(?:[_\s\-]+(.+))?$",
+        flags=re.I,
+    )
     for path in sorted(SCOUT_DIR.glob("*.xlsx")):
         if path.name.startswith("~$"):
             continue
@@ -270,12 +306,22 @@ def find_named_scout_files() -> list[tuple[Path, str, str]]:
             continue
         if lower in {"scout_season"}:
             continue
-        if lower.endswith(" d") or stem.endswith(" D"):
-            opponent = stem[:-2].strip()
-            found.append((path, opponent, "opponent_defense"))
-        elif lower.endswith(" o") or stem.endswith(" O"):
-            opponent = stem[:-2].strip()
-            found.append((path, opponent, "opponent_offense"))
+        m = pat.match(stem)
+        if not m:
+            continue
+        opponent = m.group(1).strip()
+        side = m.group(2).upper()
+        season = (m.group(3) or "current").strip() or "current"
+        # Only blank/"current" mean active; keep explicit prior labels (25-26, 24-25, …)
+        if season.lower() in {"current", ""}:
+            try:
+                from team_config import current_season_id
+
+                season = current_season_id()
+            except Exception:
+                season = "current"
+        role = "opponent_defense" if side == "D" else "opponent_offense"
+        found.append((path, opponent, role, season))
     return found
 
 
@@ -284,6 +330,7 @@ def clean_scout_file(
     opponent: str,
     scout_role: str,
     source_name: str,
+    season: str = "current",
 ) -> pd.DataFrame:
     """Clean one opponent scout workbook. Role comes from the filename (D/O)."""
     if "game_id" not in raw.columns:
@@ -308,6 +355,7 @@ def clean_scout_file(
     df["scout_role"] = scout_role
     df["opponent"] = opponent
     df["source_file"] = source_name
+    df["season"] = season or "current"
     df["field_position"] = df["yard_line"].apply(yard_line_to_field_position)
     df["distance_bucket"] = df["distance"].apply(distance_bucket)
     df["field_zone"] = df["field_position"].apply(field_zone)
@@ -357,12 +405,12 @@ def import_all_scout() -> pd.DataFrame:
 
     if named:
         print(f"\nLoading named scout files ({len(named)}):")
-        for path, opponent, role in named:
-            print(f"  {path.name} -> {opponent} / {role}")
+        for path, opponent, role, season in named:
+            print(f"  {path.name} -> {opponent} / {role} / season={season}")
             raw = pd.read_excel(path)
             raw["game_id"] = assign_game_ids(raw["PLAY #"])
             print(f"    rows={len(raw):,}  scout cuts={raw['game_id'].nunique()}")
-            frames.append(clean_scout_file(raw, opponent, role, path.name))
+            frames.append(clean_scout_file(raw, opponent, role, path.name, season=season))
     elif SCOUT_FILE.exists():
         print(f"\nLoading legacy scout file: {SCOUT_FILE.name}")
         print("  Tip: prefer files named like 'Farmersville D.xlsx' and 'Farmersville O.xlsx'")
@@ -373,7 +421,9 @@ def import_all_scout() -> pd.DataFrame:
             part = raw[raw["ODK"] == odk].copy()
             if part.empty:
                 continue
-            frames.append(clean_scout_file(part, "", role, SCOUT_FILE.name))
+            frames.append(
+                clean_scout_file(part, "", role, SCOUT_FILE.name, season="current")
+            )
     else:
         print("\nNo scout files found.")
         print("  Add files like: data/hudl_exports/Farmersville D.xlsx")
@@ -451,7 +501,13 @@ def import_all_season() -> tuple[pd.DataFrame, pd.DataFrame]:
             opp["game_id"] = opp["game_id"] + game_offset
         else:
             opp = None
-            if season != "current":
+            try:
+                from team_config import is_current_season_value
+
+                is_active = is_current_season_value(season)
+            except Exception:
+                is_active = str(season).strip().lower() in {"current", ""}
+            if not is_active:
                 print(
                     f"    note: no opponents_{season}.csv — opponents left Unknown "
                     "(EPA still uses these snaps)"

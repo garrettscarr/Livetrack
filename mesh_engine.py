@@ -19,6 +19,27 @@ LIVE_LOG_FILE = PROJECT_DIR / "data" / "live_log.csv"
 OPPONENTS_FILE = PROJECT_DIR / "data" / "opponents.csv"
 
 
+def _is_current_season_value(value) -> bool:
+    """Resolve season helper even if Streamlit cached an older team_config."""
+    import importlib
+
+    import team_config as tc
+
+    if not hasattr(tc, "is_current_season_value"):
+        tc = importlib.reload(tc)
+    return tc.is_current_season_value(value)
+
+
+def _current_season_aliases() -> set[str]:
+    import importlib
+
+    import team_config as tc
+
+    if not hasattr(tc, "current_season_aliases"):
+        tc = importlib.reload(tc)
+    return tc.current_season_aliases()
+
+
 def load_table(sql: str) -> pd.DataFrame:
     if not DB_FILE.exists():
         return pd.DataFrame()
@@ -29,7 +50,13 @@ def load_table(sql: str) -> pd.DataFrame:
             return pd.DataFrame()
 
 
-def load_scout(role: str | None = None, opponent: str | None = None) -> pd.DataFrame:
+def load_scout(
+    role: str | None = None,
+    opponent: str | None = None,
+    *,
+    season: str | None = "current",
+) -> pd.DataFrame:
+    """Load scout plays. season='current' (default), a label like '24-25', or 'all'."""
     df = load_table("SELECT * FROM scout_plays")
     if df.empty:
         return df
@@ -37,10 +64,29 @@ def load_scout(role: str | None = None, opponent: str | None = None) -> pd.DataF
         df = df[df["scout_role"] == role]
     if opponent and str(opponent).strip() and "opponent" in df.columns:
         df = df[df["opponent"].astype(str).str.strip().str.lower() == opponent.strip().lower()]
+    if season and str(season).strip().lower() != "all" and "season" in df.columns:
+        want = str(season).strip().lower()
+        if want in {"current", ""} or want in _current_season_aliases():
+            mask = df["season"].map(_is_current_season_value)
+            # Legacy rows with no season stamp count as current
+            missing = df["season"].isna() | (df["season"].astype(str).str.strip() == "")
+            df = df[mask | missing]
+        else:
+            s = df["season"].fillna("").astype(str).str.strip().str.lower()
+            df = df[s == want]
     return df
 
 
 def load_season_opponents() -> list[str]:
+    """Ordered opponent names from the active season schedule."""
+    try:
+        from schedule import load_schedule
+
+        sched = load_schedule(None)
+        if not sched.empty and "opponent" in sched.columns:
+            return [str(x) for x in sched["opponent"].tolist() if str(x).strip()]
+    except Exception:
+        pass
     if not OPPONENTS_FILE.exists():
         return []
     opps = pd.read_csv(OPPONENTS_FILE)
@@ -277,16 +323,12 @@ def live_log_adjustments(
         return {}
 
     if opponent and "opponent" in unit_logs.columns:
-        filtered = unit_logs[
+        unit_logs = unit_logs[
             unit_logs["opponent"].astype(str).str.strip().str.lower() == opponent.strip().lower()
         ]
-        if not filtered.empty:
-            unit_logs = filtered
 
-    if half is not None and "half" in unit_logs.columns:
-        half_logs = unit_logs[unit_logs["half"].astype(str) == str(half)]
-        if not half_logs.empty:
-            unit_logs = half_logs
+    if half is not None and "half" in unit_logs.columns and not unit_logs.empty:
+        unit_logs = unit_logs[_half_equals(unit_logs["half"], half)]
 
     sit = unit_logs.copy()
     if {"down", "distance", "field_zone"}.issubset(sit.columns):
@@ -481,11 +523,11 @@ def score_live_calls(
         return pd.DataFrame(columns=["call", "plays", "score", "good", "bad"])
     logs = log_df[log_df["unit"].astype(str).str.lower() == unit.lower()].copy()
     if opponent and "opponent" in logs.columns:
-        filt = logs[logs["opponent"].astype(str).str.strip().str.lower() == opponent.strip().lower()]
-        if not filt.empty:
-            logs = filt
-    if half is not None and "half" in logs.columns:
-        logs = logs[logs["half"].astype(str) == str(half)]
+        logs = logs[
+            logs["opponent"].astype(str).str.strip().str.lower() == opponent.strip().lower()
+        ]
+    if half is not None and "half" in logs.columns and not logs.empty:
+        logs = logs[_half_equals(logs["half"], half)]
     if logs.empty:
         return pd.DataFrame(columns=["call", "plays", "score", "good", "bad"])
 
@@ -567,18 +609,19 @@ def load_game_state() -> dict:
 def save_game_state(state: dict) -> Path:
     import json
 
-    GAME_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    # Prefer atomic-ish write under lock when available
-    try:
-        from file_lock import file_lock
+    from file_lock import file_lock
 
-        with file_lock(GAME_STATE_FILE):
-            tmp = GAME_STATE_FILE.with_suffix(".json.tmp")
-            tmp.write_text(json.dumps(state, indent=2))
-            tmp.replace(GAME_STATE_FILE)
-    except Exception:
-        GAME_STATE_FILE.write_text(json.dumps(state, indent=2))
+    GAME_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with file_lock(GAME_STATE_FILE):
+        tmp = GAME_STATE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(state, indent=2))
+        tmp.replace(GAME_STATE_FILE)
     return GAME_STATE_FILE
+
+
+def _half_equals(series: pd.Series, half: int) -> pd.Series:
+    """Match half whether stored as 1, '1', or 1.0."""
+    return pd.to_numeric(series, errors="coerce") == int(half)
 
 
 def filter_live_logs(
@@ -590,11 +633,12 @@ def filter_live_logs(
         return pd.DataFrame()
     logs = log_df.copy()
     if opponent and "opponent" in logs.columns:
-        filt = logs[logs["opponent"].astype(str).str.strip().str.lower() == opponent.strip().lower()]
-        if not filt.empty:
-            logs = filt
-    if half is not None and "half" in logs.columns:
-        logs = logs[logs["half"].astype(str) == str(half)]
+        # Always apply — empty result means no plays for this opponent tonight
+        logs = logs[
+            logs["opponent"].astype(str).str.strip().str.lower() == opponent.strip().lower()
+        ]
+    if half is not None and "half" in logs.columns and not logs.empty:
+        logs = logs[_half_equals(logs["half"], half)]
     return logs
 
 
@@ -1048,8 +1092,7 @@ def live_half_xp(log_df: pd.DataFrame, unit: str = "Offense") -> dict:
             f"FROM {table} GROUP BY game_id"
         )
     elif "season" in season.columns:
-        s = season["season"].fillna("current").astype(str).str.strip().str.lower()
-        season = season[s.isin({"current", "25-26", ""})]
+        season = season[season["season"].map(_is_current_season_value)]
     if season.empty or season["plays"].mean() <= 0:
         # Fallback: process-only scoreboard
         return {
@@ -1081,6 +1124,43 @@ def live_half_xp(log_df: pd.DataFrame, unit: str = "Offense") -> dict:
         "season_avg_epa": round(avg_epa, 2),
         "season_avg_plays": round(avg_plays, 1),
     }
+
+
+def _play_call_overall_key(row: pd.Series) -> str:
+    """Display play call for the overall board (Army Bear)."""
+    for col in ("play_call", "call"):
+        key = _clean_tag(row.get(col, ""))
+        if key:
+            return key
+    return ""
+
+
+def _play_call_mode_key(row: pd.Series) -> str:
+    """
+    Dual-tag RPO outcomes as `Army Bear · run` / `Army Bear · pass`.
+    Single-tag snaps stay on the overall board only (empty mode key).
+    """
+    overall = _play_call_overall_key(row)
+    if not overall:
+        return ""
+    run_tag = _clean_tag(row.get("run_tag", ""))
+    pass_tag = _clean_tag(row.get("pass_tag", ""))
+    if not (run_tag and pass_tag):
+        return ""
+    ptype = str(row.get("play_type") or "").strip().lower()
+    if ptype not in {"run", "pass"}:
+        return ""
+    return f"{overall} · {ptype}"
+
+
+def annotate_play_call_keys(log_df: pd.DataFrame) -> pd.DataFrame:
+    """Add play_call_overall + play_call_mode columns for HT boards."""
+    if log_df is None or log_df.empty:
+        return pd.DataFrame()
+    work = log_df.copy()
+    work["play_call_overall"] = work.apply(_play_call_overall_key, axis=1)
+    work["play_call_mode"] = work.apply(_play_call_mode_key, axis=1)
+    return work
 
 
 def _formation_play_key(row: pd.Series) -> str:
@@ -1241,6 +1321,14 @@ def _pair_boards(
     """Tonight + year formation/play boards for one situation slice."""
     return {
         "tonight_n": int(len(live_df)) if live_df is not None else 0,
+        "overall": {
+            "tonight": _live_slice_overall(live_df),
+            "season": _season_slice_overall(
+                downs=downs,
+                distance_bucket=distance_bucket,
+                first_and_ten=first_and_ten,
+            ),
+        },
         "formations": _scenario_board(live_df, "formation", min_plays=live_min, limit=limit),
         "plays": _scenario_board(live_df, "play_call", min_plays=live_min, limit=limit),
         "season_formations": _season_scenario_board(
@@ -1259,6 +1347,102 @@ def _pair_boards(
             min_plays=season_min,
             limit=limit,
         ),
+    }
+
+
+def _live_slice_overall(live_df: pd.DataFrame) -> dict:
+    """Aggregate tonight EPA + result score for one situation slice."""
+    empty = {
+        "plays": 0,
+        "avg_epa": None,
+        "total_epa": None,
+        "score": 0.0,
+        "avg_yards": None,
+        "success_rate": None,
+    }
+    if live_df is None or live_df.empty:
+        return empty
+    ep_table = _load_ep_table_from_season()
+    epas = [_estimate_live_play_epa(row, ep_table) for _, row in live_df.iterrows()]
+    n = int(len(epas))
+    total = float(sum(epas))
+    avg = total / n if n else 0.0
+    good_set, bad_set = _live_result_sets("Offense")
+    results = (
+        live_df["result"].astype(str) if "result" in live_df.columns else pd.Series(dtype=str)
+    )
+    good = int(results.isin(good_set).sum()) if not results.empty else 0
+    bad = int(results.isin(bad_set).sum()) if not results.empty else 0
+    yards = (
+        pd.to_numeric(live_df["yards_gained"], errors="coerce")
+        if "yards_gained" in live_df.columns
+        else pd.Series(dtype=float)
+    )
+    return {
+        "plays": n,
+        "avg_epa": round(avg, 3),
+        "total_epa": round(total, 2),
+        "score": round(good * 0.15 - bad * 0.20, 3),
+        "avg_yards": round(float(yards.mean()), 2)
+        if len(yards) and yards.notna().any()
+        else None,
+        "success_rate": round(good / n, 3) if n else None,
+    }
+
+
+def _season_slice_overall(
+    *,
+    downs: list[int] | None = None,
+    distance_bucket: str | None = None,
+    first_and_ten: bool = False,
+) -> dict:
+    """Year EPA for a down / distance slice (all tagged snaps, not by call)."""
+    empty = {
+        "plays": 0,
+        "avg_epa": None,
+        "success_rate": None,
+    }
+    df = load_table(
+        "SELECT down, distance_bucket, epa, is_success, play_tagged, tags_ok "
+        "FROM offense_plays_epa"
+    )
+    if df is None or df.empty:
+        df = load_table(
+            "SELECT down, distance_bucket, epa, is_success FROM offense_plays_epa"
+        )
+    if df is None or df.empty:
+        return empty
+    work = df.copy()
+    if "play_tagged" in work.columns:
+        work = work[pd.to_numeric(work["play_tagged"], errors="coerce").fillna(0) == 1]
+    elif "tags_ok" in work.columns:
+        work = work[pd.to_numeric(work["tags_ok"], errors="coerce").fillna(0) == 1]
+    if downs:
+        work = work[pd.to_numeric(work["down"], errors="coerce").isin(downs)]
+    if distance_bucket:
+        work = work[
+            work["distance_bucket"].astype(str).str.lower() == str(distance_bucket).lower()
+        ]
+    if first_and_ten:
+        work = work[
+            (pd.to_numeric(work["down"], errors="coerce") == 1)
+            & (work["distance_bucket"].astype(str).str.lower() == "long")
+        ]
+    if work.empty:
+        return empty
+    epa = pd.to_numeric(work["epa"], errors="coerce")
+    succ = (
+        pd.to_numeric(work["is_success"], errors="coerce")
+        if "is_success" in work.columns
+        else pd.Series(dtype=float)
+    )
+    n = int(len(work))
+    avg_epa = float(epa.mean()) if epa.notna().any() else 0.0
+    sr = float(succ.mean()) if len(succ) and succ.notna().any() else None
+    return {
+        "plays": n,
+        "avg_epa": round(avg_epa, 3),
+        "success_rate": round(sr, 3) if sr is not None else None,
     }
 
 
@@ -1293,8 +1477,7 @@ def _season_scenario_board(
     # Formation boards: current season only (prior-year formations are flawed).
     # Play-call boards: any season if play_tagged. EPA model still uses all snaps.
     if "season" in work.columns and group_col in {"formation", "formation_play"}:
-        s = work["season"].fillna("current").astype(str).str.strip().str.lower()
-        work = work[s.isin({"current", "25-26", ""})]
+        work = work[work["season"].map(_is_current_season_value)]
     if group_col == "formation" and "form_tagged" in work.columns:
         work = work[pd.to_numeric(work["form_tagged"], errors="coerce").fillna(0) == 1]
     elif group_col == "play_call" and "play_tagged" in work.columns:
@@ -1496,11 +1679,19 @@ def build_halftime_report(
     from datetime import datetime
 
     half1 = filter_live_logs(live_logs, opponent=opponent, half=1)
-    # If nothing tagged half=1 yet, fall back to all tonight (legacy logs)
+    # Fallback to all tonight ONLY when half was never tagged (legacy / blank half)
     scope = "1st_half"
     if half1.empty:
-        half1 = filter_live_logs(live_logs, opponent=opponent, half=None)
-        scope = "all_logged_tonight"
+        all_tonight = filter_live_logs(live_logs, opponent=opponent, half=None)
+        if not all_tonight.empty and "half" in all_tonight.columns:
+            half_num = pd.to_numeric(all_tonight["half"], errors="coerce")
+            if half_num.isna().all():
+                half1 = all_tonight
+                scope = "all_logged_tonight"
+            # else: keep empty — do not mix 2nd-half snaps into HT
+        elif not all_tonight.empty:
+            half1 = all_tonight
+            scope = "all_logged_tonight"
 
     off_scores = score_live_calls(half1, "Offense", opponent, half=None)
     def_scores = score_live_calls(half1, "Defense", opponent, half=None)
@@ -1533,6 +1724,22 @@ def build_halftime_report(
         half1_fp = half1_fp[half1_fp["formation_play"].astype(str).str.len() > 0]
     combos_o = score_live_dimension(half1_fp, "formation_play", "Offense", min_plays=max(2, HT_MIN_SAMPLE - 1))
     combos_d = score_live_dimension(half1_fp, "formation_play", "Defense", min_plays=max(2, HT_MIN_SAMPLE - 1))
+
+    # Play calls: overall (Army Bear) + dual-tag run/pass split (Army Bear · run)
+    half1_pc = annotate_play_call_keys(half1)
+    plays_overall_o = score_live_dimension(
+        half1_pc, "play_call_overall", "Offense", min_plays=max(2, HT_MIN_SAMPLE - 1)
+    )
+    plays_overall_d = score_live_dimension(
+        half1_pc, "play_call_overall", "Defense", min_plays=max(2, HT_MIN_SAMPLE - 1)
+    )
+    half1_mode = half1_pc[half1_pc["play_call_mode"].astype(str).str.len() > 0] if not half1_pc.empty else half1_pc
+    plays_mode_o = score_live_dimension(
+        half1_mode, "play_call_mode", "Offense", min_plays=max(1, HT_MIN_SAMPLE - 2)
+    )
+    plays_mode_d = score_live_dimension(
+        half1_mode, "play_call_mode", "Defense", min_plays=max(1, HT_MIN_SAMPLE - 2)
+    )
 
     # Down & distance (shorter labels for charts)
     if not half1.empty and {"down", "distance"}.issubset(half1.columns):
@@ -1581,23 +1788,22 @@ def build_halftime_report(
                 limit=6,
             ),
         }
-        if d in (3, 4):
-            by_dist: dict = {}
-            for bucket in ("short", "medium", "long"):
-                live_b = _filter_live_down(half1, d, bucket)
-                by_dist[bucket] = {
-                    "label": f"{down_labels[d]} & {bucket}",
-                    "distance": bucket,
-                    **_pair_boards(
-                        live_b,
-                        downs=[d],
-                        distance_bucket=bucket,
-                        live_min=1,
-                        season_min=3,
-                        limit=6,
-                    ),
-                }
-            block["by_distance"] = by_dist
+        by_dist: dict = {}
+        for bucket in ("short", "medium", "long"):
+            live_b = _filter_live_down(half1, d, bucket)
+            by_dist[bucket] = {
+                "label": f"{down_labels[d]} & {bucket}",
+                "distance": bucket,
+                **_pair_boards(
+                    live_b,
+                    downs=[d],
+                    distance_bucket=bucket,
+                    live_min=1,
+                    season_min=3 if d >= 3 else 4,
+                    limit=6,
+                ),
+            }
+        block["by_distance"] = by_dist
         by_down[str(d)] = block
 
     scenarios = {
@@ -1847,7 +2053,7 @@ def build_halftime_report(
     report = {
         "opponent": opponent,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "version": 8,
+        "version": 9,
         "summary": summary,
         "working": {
             "offense": _scores_to_records(working_o),
@@ -1868,6 +2074,16 @@ def build_halftime_report(
         "formation_play": {
             "offense": _dim_records(combos_o, limit=12),
             "defense": _dim_records(combos_d, limit=12),
+        },
+        "play_calls": {
+            "overall": {
+                "offense": _dim_records(plays_overall_o, limit=12),
+                "defense": _dim_records(plays_overall_d, limit=12),
+            },
+            "by_mode": {
+                "offense": _dim_records(plays_mode_o, limit=12),
+                "defense": _dim_records(plays_mode_d, limit=12),
+            },
         },
         "formation_vs_look": {
             "vs_coverage": form_vs_cov,
@@ -2019,6 +2235,17 @@ def format_halftime_report_markdown(report: dict) -> str:
         (report.get("formation_play") or {}).get("offense") or [],
         n=4,
     )
+    play_calls = report.get("play_calls") or {}
+    _short_board(
+        "Play calls overall",
+        (play_calls.get("overall") or {}).get("offense") or [],
+        n=4,
+    )
+    _short_board(
+        "Play calls · run vs pass",
+        (play_calls.get("by_mode") or {}).get("offense") or [],
+        n=4,
+    )
 
     scenarios = report.get("scenarios") or {}
 
@@ -2044,6 +2271,16 @@ def format_halftime_report_markdown(report: dict) -> str:
             continue
         lines.append("")
         lines.append(f"## {block.get('label', d_key)} (tonight n={block.get('tonight_n', 0)})")
+        overall = block.get("overall") or {}
+        ton = overall.get("tonight") or {}
+        sea = overall.get("season") or {}
+        ov_bits = []
+        if ton.get("plays") and ton.get("avg_epa") is not None:
+            ov_bits.append(f"tonight EPA {float(ton['avg_epa']):+.2f} (n={ton['plays']})")
+        if sea.get("plays") and sea.get("avg_epa") is not None:
+            ov_bits.append(f"year EPA {float(sea['avg_epa']):+.2f} (n={sea['plays']})")
+        if ov_bits:
+            lines.append(f"- **Overall:** {' · '.join(ov_bits)}")
         _md_board("Tonight formations", block.get("formations") or [])
         _md_board("Tonight plays", block.get("plays") or [])
         _md_board("Year formations", block.get("season_formations") or [])
@@ -2051,9 +2288,27 @@ def format_halftime_report_markdown(report: dict) -> str:
         if block.get("by_distance"):
             for bucket in ("short", "medium", "long"):
                 sub = (block.get("by_distance") or {}).get(bucket) or {}
-                if not sub or not (sub.get("formations") or sub.get("season_formations")):
+                if not sub or not (
+                    sub.get("formations")
+                    or sub.get("season_formations")
+                    or (sub.get("overall") or {}).get("tonight", {}).get("plays")
+                ):
                     continue
                 lines.append(f"- **& {bucket}** (n={sub.get('tonight_n', 0)}):")
+                sub_ov = sub.get("overall") or {}
+                sub_ton = sub_ov.get("tonight") or {}
+                sub_sea = sub_ov.get("season") or {}
+                sub_bits = []
+                if sub_ton.get("plays") and sub_ton.get("avg_epa") is not None:
+                    sub_bits.append(
+                        f"tonight EPA {float(sub_ton['avg_epa']):+.2f} (n={sub_ton['plays']})"
+                    )
+                if sub_sea.get("plays") and sub_sea.get("avg_epa") is not None:
+                    sub_bits.append(
+                        f"year EPA {float(sub_sea['avg_epa']):+.2f} (n={sub_sea['plays']})"
+                    )
+                if sub_bits:
+                    lines.append(f"  - **Overall:** {' · '.join(sub_bits)}")
                 _md_board("  Tonight formations", sub.get("formations") or [])
                 _md_board("  Tonight plays", sub.get("plays") or [])
                 _md_board("  Year formations", sub.get("season_formations") or [])
@@ -2110,8 +2365,11 @@ def end_first_half(opponent: str, live_logs: pd.DataFrame, plan: dict, player_bo
         "opponent": opponent,
         "phase": "halftime",
         "halftime_at": report["generated_at"],
-        "report_path": str(path),
-        "report_md": str(path.with_suffix(".md")),
+        # Store relative paths so reports still open if the project folder moves
+        "report_path": str(path.relative_to(PROJECT_DIR)) if path.is_relative_to(PROJECT_DIR) else path.name,
+        "report_md": str(path.with_suffix(".md").relative_to(PROJECT_DIR))
+        if path.with_suffix(".md").is_relative_to(PROJECT_DIR)
+        else path.with_suffix(".md").name,
     }
     save_game_state(state)
     return {"state": state, "report": report, "markdown": format_halftime_report_markdown(report)}

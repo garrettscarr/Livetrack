@@ -84,12 +84,30 @@ def main() -> None:
     for script_name, description in STEPS:
         run_step(script_name, description)
 
+    # Re-attach booth Live Track games (survive Hudl replace)
+    try:
+        from live_games import remerge_all_live_games
+
+        live_info = remerge_all_live_games()
+        print(
+            f"\nLive Track remerge: {live_info.get('merged', 0)} game(s), "
+            f"{live_info.get('plays', 0)} plays"
+            + (
+                f" ({live_info.get('skipped', 0)} skipped)"
+                if live_info.get("skipped")
+                else ""
+            )
+        )
+    except Exception as exc:
+        print(f"\nLive Track remerge skipped: {exc}")
+
     print("\n" + "=" * 60)
     print("REFRESH COMPLETE")
     print("=" * 60)
     print("  Database updated: data/football.db")
     print("  EPA tables ready: offense_plays_epa, defense_plays_epa")
     print("  Scout table:      scout_plays (if scout_season.xlsx present)")
+    print("  Live games:       data/live_games/ (remerged after Hudl)")
     print("\nTo open the dashboard:")
     print("  python -m streamlit run step4_dashboard.py")
     print("  Mac: run_live_local.command   Windows: run_live_local.bat")

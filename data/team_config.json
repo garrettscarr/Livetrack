@@ -4,17 +4,30 @@
   "comment": "booth_pin gates shared Wi-Fi mode (FOOTBALL_EPA_SHARED=1). Change before district.",
   "play_word_aliases": {
     "axel": "Axle",
-    "axle": "Axle"
+    "axle": "Axle",
+    "bare": "Bear"
   },
   "phrase_token_aliases": {
     "tricks": "trix",
     "trick": "trix",
-    "trips": "trix",
     "wright": "right",
     "write": "right",
-    "axel": "axle"
+    "axel": "axle",
+    "axle": "axle",
+    "bare": "bear"
   },
   "week1_opponent": "Farmersville",
+  "season": {
+    "id": "26-27",
+    "label": "2026-2027 Season",
+    "current_aliases": [
+      "current",
+      "26-27",
+      ""
+    ],
+    "note": "Roster, Game Review, and Scout default to this season. Prior years still feed EPA / tagged play calls.",
+    "prior_id": "25-26"
+  },
   "product_surface": {
     "halftime_path": "live_track",
     "orphaned_pages": [

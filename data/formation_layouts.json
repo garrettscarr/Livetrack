@@ -1,0 +1,329 @@
+{
+  "default": "Base",
+  "comment": "dx = yards from LOS (negative = behind toward own GL). dy = yards from midfield (negative = left sideline, positive = right). East=right West=left. Layout keys match formation_logic.py.",
+  "layouts": {
+    "Base": {
+      "label": "Base / Shotgun",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": 3},
+        "TE": {"dx": 0, "dy": 10},
+        "WR1": {"dx": 0, "dy": -20},
+        "WR2": {"dx": 1, "dy": -13},
+        "WR3": {"dx": 0, "dy": 20},
+        "WR4": {"dx": 2, "dy": -16},
+        "WR5": {"dx": 2, "dy": 16},
+        "RB2": {"dx": -7, "dy": -3},
+        "TE2": {"dx": 0, "dy": -10}
+      }
+    },
+    "TripsRight": {
+      "label": "East / Trips right",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": -2},
+        "TE": {"dx": 0, "dy": 8},
+        "WR1": {"dx": 0, "dy": -20},
+        "WR2": {"dx": 1, "dy": 12},
+        "WR3": {"dx": 0, "dy": 18},
+        "WR4": {"dx": 2, "dy": 22},
+        "WR5": {"dx": 2, "dy": -16},
+        "RB2": {"dx": -7, "dy": 3},
+        "TE2": {"dx": 0, "dy": -10}
+      }
+    },
+    "TripsLeft": {
+      "label": "West / Trips left",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": 2},
+        "TE": {"dx": 0, "dy": -8},
+        "WR1": {"dx": 0, "dy": 20},
+        "WR2": {"dx": 1, "dy": -12},
+        "WR3": {"dx": 0, "dy": -18},
+        "WR4": {"dx": 2, "dy": -22},
+        "WR5": {"dx": 2, "dy": 16},
+        "RB2": {"dx": -7, "dy": -3},
+        "TE2": {"dx": 0, "dy": 10}
+      }
+    },
+    "SlotDipRight": {
+      "label": "Slot Dip (H to 1-WR side) · right strength",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -6, "dy": -6},
+        "TE": {"dx": -1, "dy": -9},
+        "WR1": {"dx": 0, "dy": -20},
+        "WR2": {"dx": 1, "dy": 11},
+        "WR3": {"dx": 0, "dy": 17},
+        "WR4": {"dx": 2, "dy": 21},
+        "WR5": {"dx": 2, "dy": -15},
+        "RB2": {"dx": -7, "dy": 3},
+        "TE2": {"dx": 0, "dy": 8}
+      }
+    },
+    "SlotDipLeft": {
+      "label": "Slot Dip (H to 1-WR side) · left strength",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -6, "dy": 6},
+        "TE": {"dx": -1, "dy": 9},
+        "WR1": {"dx": 0, "dy": 20},
+        "WR2": {"dx": 1, "dy": -11},
+        "WR3": {"dx": 0, "dy": -17},
+        "WR4": {"dx": 2, "dy": -21},
+        "WR5": {"dx": 2, "dy": 15},
+        "RB2": {"dx": -7, "dy": -3},
+        "TE2": {"dx": 0, "dy": -8}
+      }
+    },
+    "SlotTrigRight": {
+      "label": "Slot Trig (H to 2-WR side) · right strength",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -6, "dy": 7},
+        "TE": {"dx": -1, "dy": 10},
+        "WR1": {"dx": 0, "dy": -20},
+        "WR2": {"dx": 1, "dy": 12},
+        "WR3": {"dx": 0, "dy": 18},
+        "WR4": {"dx": 2, "dy": 14},
+        "WR5": {"dx": 2, "dy": -15},
+        "RB2": {"dx": -7, "dy": -3},
+        "TE2": {"dx": 0, "dy": -9}
+      }
+    },
+    "SlotTrigLeft": {
+      "label": "Slot Trig (H to 2-WR side) · left strength",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -6, "dy": -7},
+        "TE": {"dx": -1, "dy": -10},
+        "WR1": {"dx": 0, "dy": 20},
+        "WR2": {"dx": 1, "dy": -12},
+        "WR3": {"dx": 0, "dy": -18},
+        "WR4": {"dx": 2, "dy": -14},
+        "WR5": {"dx": 2, "dy": 15},
+        "RB2": {"dx": -7, "dy": 3},
+        "TE2": {"dx": 0, "dy": 9}
+      }
+    },
+    "Doubles": {
+      "label": "Dot / Doubles",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": 0},
+        "TE": {"dx": 0, "dy": 11},
+        "WR1": {"dx": 0, "dy": -20},
+        "WR2": {"dx": 1, "dy": -12},
+        "WR3": {"dx": 0, "dy": 20},
+        "WR4": {"dx": 1, "dy": 12},
+        "WR5": {"dx": 2, "dy": 16},
+        "RB2": {"dx": -7, "dy": -4},
+        "TE2": {"dx": 0, "dy": -11}
+      }
+    },
+    "Empty": {
+      "label": "Empty",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -8, "dy": 14},
+        "TE": {"dx": 0, "dy": 10},
+        "WR1": {"dx": 0, "dy": -21},
+        "WR2": {"dx": 1, "dy": -12},
+        "WR3": {"dx": 0, "dy": 21},
+        "WR4": {"dx": 1, "dy": 12},
+        "WR5": {"dx": 2, "dy": 0},
+        "RB2": {"dx": -8, "dy": -14},
+        "TE2": {"dx": 0, "dy": -10}
+      }
+    },
+    "TrixFieldRight": {
+      "label": "Trix · TE boundary left · trips field right",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": -2},
+        "TE": {"dx": 0, "dy": -18},
+        "WR1": {"dx": 0, "dy": 10},
+        "WR2": {"dx": 1, "dy": 15},
+        "WR3": {"dx": 0, "dy": 21},
+        "WR4": {"dx": 2, "dy": 12},
+        "WR5": {"dx": 2, "dy": -12},
+        "RB2": {"dx": -7, "dy": 3},
+        "TE2": {"dx": 0, "dy": -10}
+      }
+    },
+    "TrixFieldLeft": {
+      "label": "Trix · TE boundary right · trips field left",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": 2},
+        "TE": {"dx": 0, "dy": 18},
+        "WR1": {"dx": 0, "dy": -10},
+        "WR2": {"dx": 1, "dy": -15},
+        "WR3": {"dx": 0, "dy": -21},
+        "WR4": {"dx": 2, "dy": -12},
+        "WR5": {"dx": 2, "dy": 12},
+        "RB2": {"dx": -7, "dy": -3},
+        "TE2": {"dx": 0, "dy": 10}
+      }
+    },
+    "FoxRight": {
+      "label": "Fox · H to 3-WR (right)",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -6, "dy": 9},
+        "TE": {"dx": -1, "dy": 11},
+        "WR1": {"dx": 0, "dy": -20},
+        "WR2": {"dx": 1, "dy": 12},
+        "WR3": {"dx": 0, "dy": 17},
+        "WR4": {"dx": 2, "dy": 22},
+        "WR5": {"dx": 2, "dy": -14},
+        "RB2": {"dx": -7, "dy": -3},
+        "TE2": {"dx": 0, "dy": -9}
+      }
+    },
+    "FoxLeft": {
+      "label": "Fox · H to 3-WR (left)",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -6, "dy": -9},
+        "TE": {"dx": -1, "dy": -11},
+        "WR1": {"dx": 0, "dy": 20},
+        "WR2": {"dx": 1, "dy": -12},
+        "WR3": {"dx": 0, "dy": -17},
+        "WR4": {"dx": 2, "dy": -22},
+        "WR5": {"dx": 2, "dy": 14},
+        "RB2": {"dx": -7, "dy": 3},
+        "TE2": {"dx": 0, "dy": 9}
+      }
+    },
+    "FeverRight": {
+      "label": "Fever · attached TE to 3-WR (right)",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": -2},
+        "TE": {"dx": 0, "dy": 9},
+        "WR1": {"dx": 0, "dy": -20},
+        "WR2": {"dx": 1, "dy": 13},
+        "WR3": {"dx": 0, "dy": 18},
+        "WR4": {"dx": 2, "dy": 22},
+        "WR5": {"dx": 2, "dy": -14},
+        "RB2": {"dx": -7, "dy": 3},
+        "TE2": {"dx": 0, "dy": 11}
+      }
+    },
+    "FeverLeft": {
+      "label": "Fever · attached TE to 3-WR (left)",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": 2},
+        "TE": {"dx": 0, "dy": -9},
+        "WR1": {"dx": 0, "dy": 20},
+        "WR2": {"dx": 1, "dy": -13},
+        "WR3": {"dx": 0, "dy": -18},
+        "WR4": {"dx": 2, "dy": -22},
+        "WR5": {"dx": 2, "dy": 14},
+        "RB2": {"dx": -7, "dy": -3},
+        "TE2": {"dx": 0, "dy": -11}
+      }
+    },
+    "PackRight": {
+      "label": "Pack / Bunch right",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": -2},
+        "TE": {"dx": 0, "dy": 8},
+        "WR1": {"dx": 0, "dy": -20},
+        "WR2": {"dx": 0.5, "dy": 14},
+        "WR3": {"dx": 0, "dy": 16.5},
+        "WR4": {"dx": 1, "dy": 19},
+        "WR5": {"dx": 2, "dy": -14},
+        "RB2": {"dx": -7, "dy": 3},
+        "TE2": {"dx": 0, "dy": -10}
+      }
+    },
+    "PackLeft": {
+      "label": "Pack / Bunch left",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": 2},
+        "TE": {"dx": 0, "dy": -8},
+        "WR1": {"dx": 0, "dy": 20},
+        "WR2": {"dx": 0.5, "dy": -14},
+        "WR3": {"dx": 0, "dy": -16.5},
+        "WR4": {"dx": 1, "dy": -19},
+        "WR5": {"dx": 2, "dy": 14},
+        "RB2": {"dx": -7, "dy": -3},
+        "TE2": {"dx": 0, "dy": 10}
+      }
+    },
+    "Cowboy": {
+      "label": "Cowboy / Empty Bunch",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -8, "dy": 12},
+        "TE": {"dx": 0, "dy": 8},
+        "WR1": {"dx": 0.5, "dy": 13},
+        "WR2": {"dx": 0, "dy": 15.5},
+        "WR3": {"dx": 1, "dy": 18},
+        "WR4": {"dx": 0, "dy": -20},
+        "WR5": {"dx": 2, "dy": -12},
+        "RB2": {"dx": -8, "dy": -12},
+        "TE2": {"dx": 0, "dy": -9}
+      }
+    },
+    "Texas": {
+      "label": "Texas / 12 personnel",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": 2},
+        "TE": {"dx": 0, "dy": 9},
+        "TE2": {"dx": 0, "dy": -9},
+        "WR1": {"dx": 0, "dy": -20},
+        "WR2": {"dx": 1, "dy": 18},
+        "WR3": {"dx": 0, "dy": 13},
+        "WR4": {"dx": 2, "dy": -14},
+        "WR5": {"dx": 2, "dy": 16},
+        "RB2": {"dx": -7, "dy": -3}
+      }
+    },
+    "Nasty": {
+      "label": "Nasty / 6 OL + TE",
+      "slots": {
+        "QB": {"dx": -5, "dy": 0},
+        "RB": {"dx": -7, "dy": 0},
+        "TE": {"dx": 0, "dy": 10},
+        "WR1": {"dx": 0, "dy": -18},
+        "WR2": {"dx": 1, "dy": 16},
+        "WR3": {"dx": 0, "dy": -12},
+        "WR4": {"dx": 2, "dy": 12},
+        "WR5": {"dx": 2, "dy": -8},
+        "RB2": {"dx": -7, "dy": -4},
+        "TE2": {"dx": 0, "dy": -10}
+      }
+    }
+  },
+  "aliases": {
+    "east": "TripsRight",
+    "west": "TripsLeft",
+    "slot dip": "SlotDipRight",
+    "slot trig": "SlotTrigRight",
+    "dot": "Doubles",
+    "34 dot": "Doubles",
+    "empty": "Empty",
+    "trix": "TrixFieldRight",
+    "fox": "FoxRight",
+    "fox rt": "FoxRight",
+    "fox lt": "FoxLeft",
+    "fever": "FeverRight",
+    "fever rt": "FeverRight",
+    "fever lt": "FeverLeft",
+    "pack": "PackRight",
+    "pack rt": "PackRight",
+    "pack lt": "PackLeft",
+    "cowboy": "Cowboy",
+    "texas": "Texas",
+    "nasty": "Nasty",
+    "trips": "TripsRight"
+  }
+}

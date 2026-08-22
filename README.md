@@ -58,9 +58,10 @@ python -m streamlit run step4_dashboard.py
 | Mode | Mac | Windows |
 |------|-----|---------|
 | Local | `run_live_local.command` | `run_live_local.bat` |
-| Booth + tablet | `run_live_shared.command` | `run_live_shared.bat` |
+| Booth + tablet (LAN / hotspot) | `run_live_shared.command` | `run_live_shared.bat` |
+| Hosted multi-device URL | [docs/HOSTED_BOOTH.md](docs/HOSTED_BOOTH.md) | same |
 
-Shared mode sets `FOOTBALL_EPA_SHARED=1` and requires the booth PIN from `data/team_config.json` (default `0851`).
+Shared / hosted mode sets `FOOTBALL_EPA_SHARED=1` and requires the booth PIN from `data/team_config.json` (default `0851`). Bookmark `?station=call` or `?station=defense` on each device.
 
 **Pages:** Live Track · Game Review · Database · Game Plan · Opponent Scout
 
