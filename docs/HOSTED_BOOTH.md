@@ -5,19 +5,16 @@ devices have cellular. Updates deploy to that same URL.
 
 ## What this gives you
 
-| Device | Link | Sees |
-|--------|------|------|
-| **You (master)** | `https://YOUR-APP.streamlit.app` | **Full** — everything |
-| Extra tagger | `…/?station=tag` | Chooses Front / Coverage / Blitz / Snap log |
-| Front only | `…/?station=tag&focus=front` | Front tags only |
-| Coverage only | `…/?station=tag&focus=coverage` | Coverage only |
-| Blitz only | `…/?station=tag&focus=blitz` | Blitz only |
-| Snap logger | `…/?station=tag&focus=snaps` (or `?station=call`) | Log snaps only |
-| All film | `…/?station=defense` | Front + coverage + blitz |
+On open, the app asks **Main** or **Tagger**:
 
-Tagger bookmarks stay locked — they can’t flip into Full from the UI.
+| Choice | Gets |
+|--------|------|
+| **Main** | Full booth (same interface as today) |
+| **Tagger** | Pick Snap log / Front / Coverage / Blitz → simplified UI for only those |
 
-All sessions hit the **same server** and the same `data/live_log.csv`.
+Sidebar → **Switch Main / Tagger** to change later.
+
+Optional bookmarks still work (`?station=tag&focus=front`, etc.).
 
 ## Streamlit Community Cloud
 

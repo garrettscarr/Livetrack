@@ -1,39 +1,22 @@
 """
-Multi-device booth helpers: master (Full) vs taggers with chosen focuses.
+Booth roles: Main (full app) vs Tagger (pick focuses → simplified UI).
 
-Master
-------
-Open the plain app URL (no ?station=) → Full booth (everything).
+On load the app asks Main or Tagger (unless a bookmark sets ?station=).
 
-Taggers
--------
-Open ?station=tag then pick what they tag, or bookmark focuses:
-
+Tagger bookmarks:
   ?station=tag&focus=front
-  ?station=tag&focus=coverage
-  ?station=tag&focus=blitz
-  ?station=tag&focus=snaps
-  ?station=tag&focus=front,coverage
-
-Legacy bookmarks still work:
+  ?station=tag&focus=coverage,blitz
   ?station=call     → snaps
-  ?station=defense  → front + coverage + blitz
+  ?station=defense  → all film
 """
 
 from __future__ import annotations
 
 from typing import Literal
 
+BoothRole = Literal["main", "tagger"]
 BoothStation = Literal["full", "call", "defense", "tag"]
 
-STATION_LABELS: dict[str, str] = {
-    "full": "Full — everything",
-    "call": "Call — log snaps",
-    "defense": "Defense — all film",
-    "tag": "Tagger — choose focuses",
-}
-
-# Keys stored in session / URL
 FOCUS_SNAPS = "snaps"
 FOCUS_FRONT = "front"
 FOCUS_COVERAGE = "coverage"
@@ -47,21 +30,29 @@ ALL_FOCUSES: tuple[str, ...] = (
 )
 
 FOCUS_LABELS: dict[str, str] = {
-    FOCUS_SNAPS: "Snap log (formation / play / result)",
+    FOCUS_SNAPS: "Snap log",
     FOCUS_FRONT: "Front",
     FOCUS_COVERAGE: "Coverage",
     FOCUS_BLITZ: "Blitz",
+}
+
+FOCUS_HELP: dict[str, str] = {
+    FOCUS_SNAPS: "Formation, play, result",
+    FOCUS_FRONT: "Defensive front",
+    FOCUS_COVERAGE: "Coverage shell",
+    FOCUS_BLITZ: "Yes / No blitz",
 }
 
 FILM_FOCUSES: frozenset[str] = frozenset(
     {FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ}
 )
 
-STATION_HELP = (
-    "You (Full): whole booth. "
-    "Extras: open ?station=tag and pick Front / Coverage / Blitz / Snap log "
-    "(or bookmark ?station=tag&focus=front)."
-)
+STATION_LABELS: dict[str, str] = {
+    "full": "Main",
+    "call": "Snap log",
+    "defense": "All film",
+    "tag": "Tagger",
+}
 
 
 def normalize_station(raw: str | None) -> BoothStation:
@@ -72,16 +63,16 @@ def normalize_station(raw: str | None) -> BoothStation:
         return "defense"
     if s in {"tag", "tagger", "extra", "helper"}:
         return "tag"
+    if s in {"main", "full", "coach", "master"}:
+        return "full"
     return "full"
 
 
 def is_tagger_station(station: str | None) -> bool:
-    """Call / Defense / Tag are locked tagger views (not Full)."""
     return normalize_station(station) in {"call", "defense", "tag"}
 
 
 def normalize_focuses(raw) -> list[str]:
-    """Parse focus list from URL, session, or comma/space-separated string."""
     if raw is None:
         return []
     if isinstance(raw, (list, tuple, set)):
@@ -112,7 +103,6 @@ def normalize_focuses(raw) -> list[str]:
 
 
 def focuses_from_query(params) -> list[str] | None:
-    """Read ?focus= from query params. None if not set."""
     if params is None:
         return None
     try:
@@ -123,8 +113,7 @@ def focuses_from_query(params) -> list[str] | None:
         return None
     if isinstance(raw, (list, tuple)):
         raw = ",".join(str(x) for x in raw if x)
-    parsed = normalize_focuses(raw)
-    return parsed  # may be empty list if focus= was present but invalid
+    return normalize_focuses(raw)
 
 
 def default_focuses_for_station(station: BoothStation) -> list[str]:
@@ -136,7 +125,6 @@ def default_focuses_for_station(station: BoothStation) -> list[str]:
 
 
 def station_from_query(params) -> BoothStation | None:
-    """Read ?station= from Streamlit query_params (Mapping-like)."""
     if params is None:
         return None
     try:
@@ -152,30 +140,71 @@ def station_from_query(params) -> BoothStation | None:
     return normalize_station(str(raw))
 
 
-def resolve_booth_station(session_state, query_params) -> BoothStation:
+def apply_bookmark_role(session_state, query_params) -> bool:
     """
-    Prefer bookmark ?station= (locks tagger devices).
-    Full can still change role in-session via the station radio.
+    If URL has ?station=tagger-style, lock role without showing Main/Tagger gate.
+    Returns True if a bookmark applied.
     """
     qp = station_from_query(query_params)
-    if qp and is_tagger_station(qp):
+    if not qp:
+        return False
+    if qp == "full" or str(query_params.get("station") or "").lower() in {
+        "main",
+        "full",
+        "coach",
+        "master",
+    }:
+        session_state["booth_role"] = "main"
+        session_state["booth_station"] = "full"
+        session_state["booth_station_locked"] = False
+        session_state["tag_focuses"] = list(ALL_FOCUSES)
+        return True
+    if is_tagger_station(qp):
+        session_state["booth_role"] = "tagger"
         session_state["booth_station"] = qp
         session_state["booth_station_locked"] = True
-        return qp
+        qf = focuses_from_query(query_params)
+        if qf:
+            session_state["tag_focuses"] = qf
+        else:
+            preset = default_focuses_for_station(qp)
+            if preset:
+                session_state["tag_focuses"] = preset
+        return True
+    return False
+
+
+def resolve_booth_station(session_state, query_params) -> BoothStation:
+    role = str(session_state.get("booth_role") or "").strip().lower()
+    if role == "main":
+        session_state["booth_station"] = "full"
+        session_state["booth_station_locked"] = False
+        return "full"
+    if role == "tagger":
+        session_state["booth_station_locked"] = True
+        stored = normalize_station(session_state.get("booth_station") or "tag")
+        if stored == "full":
+            stored = "tag"
+        session_state["booth_station"] = stored
+        return stored
+
+    # Legacy / bookmark path
+    apply_bookmark_role(session_state, query_params)
+    if session_state.get("booth_role") == "main":
+        return "full"
+    if session_state.get("booth_role") == "tagger":
+        return normalize_station(session_state.get("booth_station") or "tag")
 
     if "booth_station" not in session_state:
-        session_state["booth_station"] = qp or "full"
+        session_state["booth_station"] = "full"
     session_state["booth_station_locked"] = False
     return normalize_station(session_state.get("booth_station"))
 
 
 def resolve_tag_focuses(session_state, query_params, station: BoothStation) -> list[str]:
-    """
-    What this device is tagging.
-    Master (full) → all focuses.
-    Taggers → URL ?focus=, else session picker, else station defaults.
-    """
-    if not is_tagger_station(station):
+    if str(session_state.get("booth_role") or "").lower() == "main":
+        return list(ALL_FOCUSES)
+    if not is_tagger_station(station) and str(session_state.get("booth_role") or "") != "tagger":
         return list(ALL_FOCUSES)
 
     qf = focuses_from_query(query_params)
@@ -185,11 +214,11 @@ def resolve_tag_focuses(session_state, query_params, station: BoothStation) -> l
 
     preset = default_focuses_for_station(station)
     if preset and station in {"call", "defense"}:
-        session_state["tag_focuses"] = preset
-        return preset
+        if not session_state.get("tag_focuses"):
+            session_state["tag_focuses"] = preset
+            return preset
 
-    stored = normalize_focuses(session_state.get("tag_focuses"))
-    return stored
+    return normalize_focuses(session_state.get("tag_focuses"))
 
 
 def has_film_focus(focuses: list[str] | None) -> bool:
@@ -206,3 +235,7 @@ def focus_summary(focuses: list[str] | None) -> str:
     if set(focuses) >= set(ALL_FOCUSES):
         return "everything"
     return " · ".join(FOCUS_LABELS.get(f, f) for f in focuses if f in FOCUS_LABELS)
+
+
+def role_chosen(session_state) -> bool:
+    return str(session_state.get("booth_role") or "").lower() in {"main", "tagger"}

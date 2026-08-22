@@ -6387,97 +6387,154 @@ def _render_start_new_game_panel(season_opps: list[str]) -> None:
     st.rerun()
 
 
-def _booth_station_bar() -> str:
-    """Full can pick role; taggers from ?station= stay locked (+ optional focus picker)."""
-    from booth_stations import (
-        STATION_HELP,
-        STATION_LABELS,
-        focus_summary,
-        is_tagger_station,
-        normalize_station,
-        resolve_booth_station,
-        resolve_tag_focuses,
+def _render_booth_role_gate() -> None:
+    """First screen after unlock: Main (full app) or Tagger (pick focuses)."""
+    from booth_stations import apply_bookmark_role, role_chosen
+
+    # Bookmarks skip the chooser
+    if apply_bookmark_role(st.session_state, st.query_params) and role_chosen(st.session_state):
+        return
+
+    if role_chosen(st.session_state) and not st.session_state.get("booth_role_force_pick"):
+        return
+
+    st.session_state.pop("booth_role_force_pick", None)
+
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stMainBlockContainer"] { max-width: 520px; margin: 0 auto; }
+        div[data-testid="stButton"] > button {
+            min-height: 4.5rem !important;
+            font-size: 1.35rem !important;
+            border-radius: 12px !important;
+            font-weight: 600 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
+    st.markdown("## Who is this device?")
+    st.caption("Main sees the full booth. Taggers only see what they pick next.")
 
-    station = resolve_booth_station(st.session_state, st.query_params)
-    focuses = resolve_tag_focuses(st.session_state, st.query_params, station)
-
-    if is_tagger_station(station) and st.session_state.get("booth_station_locked"):
-        st.markdown(f"**{STATION_LABELS.get(station, station)}**")
-        st.caption(f"Tagging: {focus_summary(focuses)}")
-        return station
-
-    opts = ["full", "tag", "call", "defense"]
-    cur = normalize_station(st.session_state.get("booth_station"))
-    if cur not in opts:
-        cur = "full"
-    idx = opts.index(cur)
-    pick = st.radio(
-        "Booth station",
-        opts,
-        index=idx,
-        horizontal=True,
-        format_func=lambda k: STATION_LABELS.get(k, k),
-        key="booth_station_radio",
-        help=STATION_HELP,
-    )
-    station = normalize_station(pick)
-    st.session_state.booth_station = station
-    try:
-        if station == "full":
-            if "station" in st.query_params:
-                del st.query_params["station"]
-            if "focus" in st.query_params:
-                del st.query_params["focus"]
-        else:
-            st.query_params["station"] = station
-    except Exception:
-        pass
-    return station
-
-
-def _render_tag_focus_picker() -> list[str]:
-    """Multiselect for extra taggers: what fields this device owns."""
-    from booth_stations import (
-        ALL_FOCUSES,
-        FOCUS_LABELS,
-        focus_summary,
-        normalize_focuses,
-    )
-
-    st.subheader("What are you tagging?")
-    st.caption(
-        "Master (Full) sees everything. Pick only your job — others can take the rest."
-    )
-    cur = normalize_focuses(st.session_state.get("tag_focuses"))
-    picked = st.multiselect(
-        "Focuses",
-        options=list(ALL_FOCUSES),
-        default=cur,
-        format_func=lambda k: FOCUS_LABELS.get(k, k),
-        key="tag_focus_picker",
-        label_visibility="collapsed",
-    )
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("Save focuses", type="primary", use_container_width=True, key="tag_focus_save"):
-            st.session_state.tag_focuses = list(picked)
+        if st.button("Main", type="primary", use_container_width=True, key="role_main"):
+            st.session_state.booth_role = "main"
+            st.session_state.booth_station = "full"
+            st.session_state.booth_station_locked = False
             try:
-                st.query_params["station"] = "tag"
-                if picked:
-                    st.query_params["focus"] = ",".join(picked)
-                elif "focus" in st.query_params:
+                if "station" in st.query_params:
+                    del st.query_params["station"]
+                if "focus" in st.query_params:
                     del st.query_params["focus"]
             except Exception:
                 pass
             st.rerun()
     with c2:
-        if st.button("Clear selection", use_container_width=True, key="tag_focus_clear"):
+        if st.button("Tagger", use_container_width=True, key="role_tagger"):
+            st.session_state.booth_role = "tagger"
+            st.session_state.booth_station = "tag"
+            st.session_state.booth_station_locked = True
             st.session_state.tag_focuses = []
+            st.session_state.tag_focus_force_edit = True
+            try:
+                st.query_params["station"] = "tag"
+            except Exception:
+                pass
             st.rerun()
-    if picked:
-        st.info(f"Will tag: **{focus_summary(picked)}** — tap Save focuses.")
-    return cur
+    st.stop()
+
+
+def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
+    """Big chip picker: what this tagger device owns."""
+    from booth_stations import (
+        ALL_FOCUSES,
+        FOCUS_HELP,
+        FOCUS_LABELS,
+        focus_summary,
+        normalize_focuses,
+    )
+
+    st.markdown("## What are you tagging?")
+    st.caption("Pick one or more. You only see those fields.")
+
+    if "tag_focus_draft" not in st.session_state:
+        st.session_state.tag_focus_draft = list(
+            normalize_focuses(st.session_state.get("tag_focuses"))
+        )
+
+    draft: list[str] = list(st.session_state.tag_focus_draft)
+    cols = st.columns(2)
+    for i, key in enumerate(ALL_FOCUSES):
+        with cols[i % 2]:
+            on = key in draft
+            label = FOCUS_LABELS.get(key, key)
+            help_t = FOCUS_HELP.get(key, "")
+            btn_label = f"{'✓ ' if on else ''}{label}"
+            if st.button(
+                btn_label,
+                key=f"tag_focus_chip_{key}",
+                use_container_width=True,
+                type="primary" if on else "secondary",
+                help=help_t,
+            ):
+                if on:
+                    draft = [x for x in draft if x != key]
+                else:
+                    draft = draft + [key]
+                st.session_state.tag_focus_draft = draft
+                st.rerun()
+            if help_t:
+                st.caption(help_t)
+
+    st.markdown(f"**Selected:** {focus_summary(draft)}")
+
+    if st.button(
+        "Continue",
+        type="primary",
+        use_container_width=True,
+        key="tag_focus_continue",
+        disabled=not draft,
+    ):
+        st.session_state.tag_focuses = list(draft)
+        st.session_state.tag_focus_force_edit = False
+        st.session_state.pop("tag_focus_draft", None)
+        try:
+            st.query_params["station"] = "tag"
+            st.query_params["focus"] = ",".join(draft)
+        except Exception:
+            pass
+        st.rerun()
+
+    if require_save and not draft:
+        st.info("Tap at least one job, then Continue.")
+
+    return normalize_focuses(st.session_state.get("tag_focuses"))
+
+
+def _booth_switch_role_control() -> None:
+    """Small escape hatch to re-open Main / Tagger chooser."""
+    if st.sidebar.button("Switch Main / Tagger", key="booth_switch_role"):
+        for k in (
+            "booth_role",
+            "booth_station",
+            "booth_station_locked",
+            "tag_focuses",
+            "tag_focus_draft",
+            "tag_focus_force_edit",
+            "booth_role_force_pick",
+        ):
+            st.session_state.pop(k, None)
+        st.session_state.booth_role_force_pick = True
+        try:
+            if "station" in st.query_params:
+                del st.query_params["station"]
+            if "focus" in st.query_params:
+                del st.query_params["focus"]
+        except Exception:
+            pass
+        st.rerun()
 
 
 def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
@@ -6487,44 +6544,43 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         has_film_focus,
         has_snaps_focus,
         is_tagger_station,
+        resolve_booth_station,
         resolve_tag_focuses,
     )
     from mesh_engine import load_live_log, load_season_opponents
 
-    booth_station = _booth_station_bar()
-    tagger = is_tagger_station(booth_station)
+    booth_station = resolve_booth_station(st.session_state, st.query_params)
+    tagger = str(st.session_state.get("booth_role") or "").lower() == "tagger" or (
+        is_tagger_station(booth_station) and st.session_state.get("booth_station_locked")
+    )
     focuses = resolve_tag_focuses(st.session_state, st.query_params, booth_station)
 
-    # Taggers with no focus yet (or forced edit) → choose
-    if tagger and st.session_state.get("booth_station_locked"):
-        need_pick = (
-            booth_station == "tag"
-            and (
-                not focuses
-                or st.session_state.pop("tag_focus_force_edit", False)
-            )
-        )
-        if need_pick:
-            st.markdown('<p class="live-title">Tagger setup</p>', unsafe_allow_html=True)
-            _render_tag_focus_picker()
-            return
-        if booth_station == "tag" and focuses:
-            if st.button("Change what I’m tagging", key="tag_refocus"):
-                st.session_state.tag_focus_force_edit = True
-                st.rerun()
+    # Taggers must pick focuses before the simplified UI
+    if tagger and (
+        not focuses or st.session_state.get("tag_focus_force_edit")
+    ):
+        _render_tag_focus_picker()
+        st.stop()
+        return
 
-    if tagger and has_film_focus(focuses) and not has_snaps_focus(focuses):
-        st.markdown(
-            f'<p class="live-title">Tag · {focus_summary(focuses)}</p>',
-            unsafe_allow_html=True,
-        )
-    elif tagger and has_snaps_focus(focuses) and not has_film_focus(focuses):
-        st.markdown('<p class="live-title">Call — Log</p>', unsafe_allow_html=True)
-    elif tagger:
-        st.markdown(
-            f'<p class="live-title">Tag · {focus_summary(focuses)}</p>',
-            unsafe_allow_html=True,
-        )
+    if tagger:
+        st.caption(f"Tagger · {focus_summary(focuses)}")
+        if st.button("Change what I’m tagging", key="tag_refocus"):
+            st.session_state.tag_focus_force_edit = True
+            st.session_state.tag_focus_draft = list(focuses)
+            st.rerun()
+        if has_film_focus(focuses) and not has_snaps_focus(focuses):
+            st.markdown(
+                f'<p class="live-title">{focus_summary(focuses)}</p>',
+                unsafe_allow_html=True,
+            )
+        elif has_snaps_focus(focuses) and not has_film_focus(focuses):
+            st.markdown('<p class="live-title">Snap log</p>', unsafe_allow_html=True)
+        else:
+            st.markdown(
+                f'<p class="live-title">{focus_summary(focuses)}</p>',
+                unsafe_allow_html=True,
+            )
     else:
         st.markdown('<p class="live-title">Live Track</p>', unsafe_allow_html=True)
 
@@ -13417,17 +13473,27 @@ def main() -> None:
     inject_styles()
     _require_booth_pin()
 
-    from booth_stations import STATION_LABELS, is_tagger_station, resolve_booth_station
-
-    booth_station = resolve_booth_station(st.session_state, st.query_params)
-    tagger = is_tagger_station(booth_station) and bool(
-        st.session_state.get("booth_station_locked")
+    from booth_stations import (
+        focus_summary,
+        is_tagger_station,
+        resolve_booth_station,
+        resolve_tag_focuses,
     )
 
+    # First question: Main or Tagger (bookmarks skip this)
+    _render_booth_role_gate()
+
+    booth_station = resolve_booth_station(st.session_state, st.query_params)
+    tagger = str(st.session_state.get("booth_role") or "").lower() == "tagger" or (
+        is_tagger_station(booth_station) and bool(st.session_state.get("booth_station_locked"))
+    )
+    focuses = resolve_tag_focuses(st.session_state, st.query_params, booth_station)
+
+    _booth_switch_role_control()
+
     if tagger:
-        # Extra taggers: Live Track only — no Game Review / Database / etc.
-        st.sidebar.markdown(f"**{STATION_LABELS.get(booth_station, booth_station)}**")
-        st.sidebar.caption("Tagging station · other pages hidden")
+        st.sidebar.markdown("**Tagger**")
+        st.sidebar.caption(focus_summary(focuses) if focuses else "Pick what you tag")
         page = "Live Track"
     else:
         page = st.sidebar.radio(
@@ -13444,10 +13510,9 @@ def main() -> None:
             import os
 
             public = str(os.environ.get("BOOTH_PUBLIC_URL") or "").strip()
-            st.sidebar.caption("Shared booth mode · PIN unlocked")
+            st.sidebar.caption("Main · full booth")
             if public:
                 st.sidebar.caption(f"Link: {public}")
-            st.sidebar.caption("You: plain link (Full). Extras: ?station=tag (pick focuses)")
 
     offense_df = load_plays("Offense")
     defense_df = load_plays("Defense")
