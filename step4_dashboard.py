@@ -6722,6 +6722,105 @@ def _render_shared_snap_bar(
     return view_did_i, view_pn
 
 
+def _tagger_focus_to_col(fid: str) -> str:
+    from booth_stations import FOCUS_BLITZ, FOCUS_COVERAGE, FOCUS_FRONT, FOCUS_MOTION
+
+    return {
+        FOCUS_FRONT: "def_front",
+        FOCUS_COVERAGE: "coverage",
+        FOCUS_BLITZ: "blitz",
+        FOCUS_MOTION: "motion",
+    }.get(fid, fid)
+
+
+def _tagger_field_filled(row: dict, fid: str) -> bool:
+    from booth_stations import FOCUS_BLITZ
+
+    col = _tagger_focus_to_col(fid)
+    val = str(row.get(col) or "").strip()
+    if fid == FOCUS_BLITZ:
+        return val.lower() in {"yes", "no"}
+    return bool(val)
+
+
+def _tagger_pack_complete(row: dict, focuses: list[str]) -> bool:
+    needed = [f for f in focuses if f != "snaps"]
+    if not needed:
+        return False
+    return all(_tagger_field_filled(row, f) for f in needed)
+
+
+def _tagger_advance_after_save(play_n: int, key_prefix: str = "tag") -> None:
+    """Move tagger view to the next play after their pack is done."""
+    st.session_state[f"{key_prefix}_follow"] = False
+    st.session_state[f"{key_prefix}_view_play"] = int(play_n) + 1
+    st.session_state["tagger_flash"] = f"Saved · next → Play #{int(play_n) + 1}"
+
+
+def _tagger_instant_save(
+    *,
+    opponent: str,
+    half: int,
+    drive_id: int,
+    play_n: int,
+    focuses: list[str],
+    field_updates: dict,
+    key_prefix: str = "tag",
+) -> None:
+    """Save field(s), remember sticky last, advance when pack is complete."""
+    from booth_stations import FOCUS_BLITZ, FOCUS_COVERAGE, FOCUS_FRONT, FOCUS_MOTION
+    from booth_snaps import find_snap_index
+    from mesh_engine import load_live_log
+
+    clean = {}
+    for k, v in field_updates.items():
+        if v is None:
+            continue
+        if isinstance(v, str) and not str(v).strip() and k != "blitz":
+            continue
+        clean[k] = v
+    if not clean:
+        return
+
+    ok, _, msg = _booth_upsert_snap(
+        drive_id=int(drive_id),
+        play_n=int(play_n),
+        updates=clean,
+        opponent=opponent,
+        half=half,
+    )
+    if not ok:
+        st.session_state["tagger_flash"] = msg or "Save failed"
+        st.rerun()
+        return
+
+    # Sticky last values
+    col_to_focus = {
+        "def_front": FOCUS_FRONT,
+        "coverage": FOCUS_COVERAGE,
+        "blitz": FOCUS_BLITZ,
+        "motion": FOCUS_MOTION,
+    }
+    for col, val in clean.items():
+        fid = col_to_focus.get(col)
+        if fid:
+            st.session_state[f"tag_last_{fid}"] = val
+
+    logs = load_live_log()
+    idx = find_snap_index(logs, int(drive_id), int(play_n))
+    row = {}
+    if idx is not None and logs is not None and not logs.empty:
+        row = logs.reset_index(drop=True).loc[idx].to_dict()
+    # Merge just-saved into row for completion check
+    row.update(clean)
+
+    if _tagger_pack_complete(row, focuses):
+        _tagger_advance_after_save(play_n, key_prefix=key_prefix)
+    else:
+        st.session_state["tagger_flash"] = "Saved"
+    st.rerun()
+
+
 def _render_current_snap_tagger(
     opponent: str,
     offense_df: pd.DataFrame,
@@ -6730,7 +6829,7 @@ def _render_current_snap_tagger(
     drive_id: int | None,
     play_n: int,
 ) -> None:
-    """Tagger editor: PRE-snap fields then POST-snap fields on this Drive/Play."""
+    """Tagger editor: tap chip = save; Same as last; auto-advance when pack done."""
     from booth_stations import (
         FOCUS_BLITZ,
         FOCUS_COVERAGE,
@@ -6762,31 +6861,67 @@ def _render_current_snap_tagger(
     title = " · ".join(FOCUS_LABELS.get(f, f) for f in focuses) or focus_summary(focuses)
     st.markdown(f'<p class="live-title">{title}</p>', unsafe_allow_html=True)
 
-    updates: dict = {}
+    flash = st.session_state.pop("tagger_flash", None)
+    if flash:
+        st.caption(str(flash))
+
     ensure_default_film_tags()
     full = logs if logs is not None and not logs.empty else pd.DataFrame()
 
-    def _chip_pick(label: str, options: list[str], key: str, current: str = "") -> str:
-        st.caption(label)
-        if key not in st.session_state:
-            st.session_state[key] = current if current in options else (options[0] if options else "")
-        if current and current in options and st.session_state.get(key) not in options:
-            st.session_state[key] = current
-        cols = st.columns(min(3, max(len(options), 1)))
-        for i, opt in enumerate(options):
+    # Same as last — apply sticky values for this pack
+    last_bits = []
+    last_updates: dict = {}
+    for fid in focuses:
+        if fid == FOCUS_SNAPS:
+            continue
+        raw = st.session_state.get(f"tag_last_{fid}")
+        if raw is None or (isinstance(raw, str) and not str(raw).strip()):
+            continue
+        last_bits.append(f"{FOCUS_LABELS.get(fid, fid)} {raw}")
+        last_updates[_tagger_focus_to_col(fid)] = raw
+
+    if last_updates:
+        if st.button(
+            "Same as last · " + " · ".join(last_bits),
+            type="primary",
+            use_container_width=True,
+            key=f"tg_same_last_{drive_id}_{play_n}",
+        ):
+            _tagger_instant_save(
+                opponent=opponent,
+                half=half,
+                drive_id=int(drive_id),
+                play_n=int(play_n),
+                focuses=focuses,
+                field_updates=last_updates,
+            )
+
+    def _chip_save(label: str, options: list[str], col: str, current: str = "") -> None:
+        st.caption(f"{label} · tap to save")
+        # Prefer booth defaults first for speed
+        opts = list(options)[:8]
+        cols = st.columns(min(2, max(len(opts), 1)))
+        for i, opt in enumerate(opts):
             with cols[i % len(cols)]:
-                active = str(st.session_state.get(key, "")) == opt
+                active = str(current or "").strip().lower() == str(opt).strip().lower()
                 if st.button(
                     opt,
-                    key=f"{key}_chip_{i}",
+                    key=f"tg_chip_{col}_{drive_id}_{play_n}_{i}",
                     use_container_width=True,
                     type="primary" if active else "secondary",
                 ):
-                    st.session_state[key] = opt
-                    st.rerun()
-        return str(st.session_state.get(key, ""))
+                    _tagger_instant_save(
+                        opponent=opponent,
+                        half=half,
+                        drive_id=int(drive_id),
+                        play_n=int(play_n),
+                        focuses=focuses,
+                        field_updates={col: opt},
+                    )
 
     def _render_field(fid: str) -> None:
+        cur_col = _tagger_focus_to_col(fid)
+        current = str(row.get(cur_col) or "")
         if fid == FOCUS_FRONT:
             front_opts = _merge_film_tag_options(
                 _tag_options(
@@ -6795,12 +6930,13 @@ def _render_current_snap_tagger(
                 full["def_front"] if "def_front" in full.columns else pd.Series(dtype=str),
                 kind="def_front",
             )
-            updates["def_front"] = _chip_pick(
-                "Front",
-                front_opts[:12] or ["Even", "Odd"],
-                f"tg_front_{drive_id}_{play_n}",
-                str(row.get("def_front") or ""),
-            )
+            # Defaults first
+            preferred = ["Even", "Odd", "Bear"]
+            ordered = list(preferred)
+            for p in front_opts:
+                if p not in ordered:
+                    ordered.append(p)
+            _chip_save("Front", ordered[:8] or preferred, "def_front", current)
         elif fid == FOCUS_COVERAGE:
             cov_opts = _merge_film_tag_options(
                 _tag_options(
@@ -6809,17 +6945,15 @@ def _render_current_snap_tagger(
                 full["coverage"] if "coverage" in full.columns else pd.Series(dtype=str),
                 kind="coverage",
             )
-            updates["coverage"] = _chip_pick(
-                "Coverage",
-                cov_opts[:12] or ["Cover 2", "Cover 3", "Cover 4"],
-                f"tg_cov_{drive_id}_{play_n}",
-                str(row.get("coverage") or ""),
-            )
+            preferred = ["Cover 2", "Cover 3", "Cover 4", "Man", "Cover 1", "Cover 6"]
+            ordered = list(preferred)
+            for p in cov_opts:
+                if p not in ordered:
+                    ordered.append(p)
+            _chip_save("Coverage", ordered[:8], "coverage", current)
         elif fid == FOCUS_BLITZ:
-            st.caption("Blitz")
-            cur_b = str(row.get("blitz") or "No").strip().title()
-            if cur_b not in {"Yes", "No"}:
-                cur_b = "No"
+            st.caption("Blitz · tap to save")
+            cur_b = current.strip().title() if current else ""
             b1, b2 = st.columns(2)
             with b1:
                 if st.button(
@@ -6828,8 +6962,14 @@ def _render_current_snap_tagger(
                     use_container_width=True,
                     type="primary" if cur_b == "No" else "secondary",
                 ):
-                    st.session_state[f"tg_blitz_val_{drive_id}_{play_n}"] = "No"
-                    st.rerun()
+                    _tagger_instant_save(
+                        opponent=opponent,
+                        half=half,
+                        drive_id=int(drive_id),
+                        play_n=int(play_n),
+                        focuses=focuses,
+                        field_updates={"blitz": "No"},
+                    )
             with b2:
                 if st.button(
                     "Yes",
@@ -6837,9 +6977,14 @@ def _render_current_snap_tagger(
                     use_container_width=True,
                     type="primary" if cur_b == "Yes" else "secondary",
                 ):
-                    st.session_state[f"tg_blitz_val_{drive_id}_{play_n}"] = "Yes"
-                    st.rerun()
-            updates["blitz"] = st.session_state.get(f"tg_blitz_val_{drive_id}_{play_n}", cur_b)
+                    _tagger_instant_save(
+                        opponent=opponent,
+                        half=half,
+                        drive_id=int(drive_id),
+                        play_n=int(play_n),
+                        focuses=focuses,
+                        field_updates={"blitz": "Yes"},
+                    )
         elif fid == FOCUS_MOTION:
             motion_opts = _merge_tag_options(
                 _tag_options(
@@ -6851,12 +6996,12 @@ def _render_current_snap_tagger(
             for m in _hudl_motion_options():
                 if m not in motion_opts:
                     motion_opts.append(m)
-            updates["motion"] = _chip_pick(
-                "Motion",
-                motion_opts[:12] or ["None"],
-                f"tg_motion_{drive_id}_{play_n}",
-                str(row.get("motion") or ""),
-            )
+            preferred = ["None", "Orbit", "Jet", "Across"]
+            ordered = list(preferred)
+            for p in motion_opts:
+                if p not in ordered:
+                    ordered.append(p)
+            _chip_save("Motion", ordered[:8], "motion", current)
 
     if pre:
         st.markdown("##### Pre-snap")
@@ -6868,44 +7013,30 @@ def _render_current_snap_tagger(
             _render_field(fid)
 
     if has_snaps_focus(focuses) and FOCUS_SNAPS in focuses:
-        updates["formation"] = st.text_input(
+        st.caption("Snap fields still use Save (Main usually logs these).")
+        form = st.text_input(
             "Formation",
             value=str(row.get("formation") or ""),
             key=f"snap_form_{drive_id}_{play_n}",
         )
-        updates["play_call"] = st.text_input(
+        play = st.text_input(
             "Play",
             value=str(row.get("play_call") or ""),
             key=f"snap_play_{drive_id}_{play_n}",
         )
-        updates["film_pending"] = "Yes"
-
-    if st.button("SAVE", type="primary", use_container_width=True, key=f"snap_save_{drive_id}_{play_n}"):
-        clean = {}
-        for k, v in updates.items():
-            if k == "blitz":
-                clean[k] = v
-            elif v is None:
-                continue
-            elif isinstance(v, str) and not v.strip():
-                continue
-            else:
-                clean[k] = v
-        if not clean:
-            st.warning("Pick a value first.")
-        else:
-            ok, _, msg = _booth_upsert_snap(
-                drive_id=int(drive_id),
-                play_n=int(play_n),
-                updates=clean,
+        if st.button("Save snap fields", type="primary", use_container_width=True, key=f"snap_save_{drive_id}_{play_n}"):
+            _tagger_instant_save(
                 opponent=opponent,
                 half=half,
+                drive_id=int(drive_id),
+                play_n=int(play_n),
+                focuses=focuses,
+                field_updates={
+                    "formation": form,
+                    "play_call": play,
+                    "film_pending": "Yes",
+                },
             )
-            if ok:
-                st.success("Saved")
-                st.rerun()
-            else:
-                st.error(msg or "Could not save.")
 
 
 def _booth_switch_role_control() -> None:
@@ -7106,8 +7237,9 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
                 max-width: 480px !important;
             }
             div[data-testid="stButton"] > button {
-                min-height: 3rem !important;
-                font-size: 1.1rem !important;
+                min-height: 3.4rem !important;
+                font-size: 1.2rem !important;
+                font-weight: 700 !important;
             }
             </style>
             """,
