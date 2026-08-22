@@ -38,14 +38,12 @@ Optional bookmarks still work (`?station=tag&focus=front`, etc.).
 Railway / Fly.io: deploy the same `Dockerfile`, mount a volume on `/app/data`,
 set `FOOTBALL_EPA_SHARED=1`, use `$PORT`.
 
-## iPad bookmarks
+## iPad bookmarks / Home invites
 
-- **You (everything):** `https://YOUR-HOST/`
-- Tagger (pick job): `https://YOUR-HOST/?station=tag`
-- Front: `https://YOUR-HOST/?station=tag&focus=front`
-- Coverage: `https://YOUR-HOST/?station=tag&focus=coverage`
-- Blitz: `https://YOUR-HOST/?station=tag&focus=blitz`
-- Snaps: `https://YOUR-HOST/?station=tag&focus=snaps`
+On **Main → Home**, set your Streamlit URL once, then copy:
+
+- General tagger: `https://YOUR-HOST/?station=tag`
+- Front / Coverage / Blitz / Snaps: `…/?station=tag&focus=front` (etc.)
 
 Unlock once with the booth PIN (shared mode).
 

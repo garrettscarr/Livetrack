@@ -6537,6 +6537,128 @@ def _booth_switch_role_control() -> None:
         st.rerun()
 
 
+def _resolve_booth_base_url() -> str:
+    """Best-known public URL for sharing tagger invites."""
+    import os
+
+    from booth_stations import normalize_base_url
+    from team_config import booth_public_url
+
+    for candidate in (
+        st.session_state.get("booth_base_url"),
+        os.environ.get("BOOTH_PUBLIC_URL"),
+        booth_public_url(),
+    ):
+        base = normalize_base_url(str(candidate or ""))
+        if base:
+            return base
+    try:
+        headers = getattr(st, "context", None) and st.context.headers
+        if headers:
+            host = headers.get("Host") or headers.get("host") or ""
+            proto = headers.get("X-Forwarded-Proto") or headers.get("x-forwarded-proto") or "https"
+            if host and "localhost" not in str(host).lower():
+                return normalize_base_url(f"{proto}://{host}")
+    except Exception:
+        pass
+    return ""
+
+
+def _render_home_page() -> None:
+    """Main booth home: tonight status + tagger invite links."""
+    from booth_stations import (
+        ALL_FOCUSES,
+        FOCUS_HELP,
+        FOCUS_LABELS,
+        main_invite_url,
+        tagger_invite_url,
+    )
+    from team_config import booth_pin, load_team_config, save_booth_public_url
+
+    cfg = load_team_config()
+    team = str(cfg.get("team_name") or "Home")
+    pin = booth_pin() or "—"
+
+    st.markdown(
+        f'<p class="live-title">{team} · Booth</p>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Main device · share invite links with extra taggers")
+
+    # Opponent / half snapshot
+    try:
+        from mesh_engine import load_game_state, load_season_opponents
+
+        gstate = load_game_state()
+        opp = str(
+            st.session_state.get("lt_page_opponent")
+            or gstate.get("opponent")
+            or ""
+        ).strip()
+        if not opp:
+            opps = load_season_opponents()
+            opp = opps[0] if opps else "—"
+        half = st.session_state.get("lt_half") or gstate.get("half") or 1
+    except Exception:
+        opp, half = "—", 1
+
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Opponent", opp)
+    m2.metric("Half", str(half))
+    m3.metric("Booth PIN", pin)
+
+    if st.button("Open Live Track →", type="primary", key="home_goto_live"):
+        st.session_state.lt_nav_page = "Live Track"
+        st.rerun()
+
+    st.markdown("---")
+    st.markdown("### Invite taggers")
+    st.caption(
+        "Send a link below. They enter the PIN, then land on a simplified tagging screen."
+    )
+
+    base = _resolve_booth_base_url()
+    with st.expander("Set booth website URL", expanded=not bool(base)):
+        st.caption(
+            "Paste your Streamlit Cloud link once (e.g. https://your-app.streamlit.app). "
+            "Saved for invite links on this Home page."
+        )
+        url_in = st.text_input(
+            "Booth URL",
+            value=base,
+            key="home_booth_url_input",
+            placeholder="https://your-app.streamlit.app",
+            label_visibility="collapsed",
+        )
+        if st.button("Save URL", key="home_save_booth_url"):
+            cleaned = save_booth_public_url(url_in)
+            st.session_state.booth_base_url = cleaned
+            st.success("Saved." if cleaned else "Cleared.")
+            st.rerun()
+
+    base = _resolve_booth_base_url()
+    if not base:
+        st.warning("Set the booth website URL above so invite links work.")
+        return
+
+    general = tagger_invite_url(base)
+    st.markdown("**General tagger invite** (they choose Front / Coverage / Blitz / Snaps)")
+    st.code(general, language=None)
+    st.caption("Text or AirDrop this link. They unlock with the booth PIN, then pick what to tag.")
+
+    st.markdown("**Job-specific invites** (skip the picker)")
+    for key in ALL_FOCUSES:
+        link = tagger_invite_url(base, [key])
+        label = FOCUS_LABELS.get(key, key)
+        help_t = FOCUS_HELP.get(key, "")
+        st.markdown(f"**{label}** — {help_t}")
+        st.code(link, language=None)
+
+    with st.expander("Main device link"):
+        st.code(main_invite_url(base) or base, language=None)
+        st.caption("Opens as Main (full booth) after PIN.")
+
+
 def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     """Live Track: offense play log + lineup (booth-simple)."""
     from booth_stations import (
@@ -13496,15 +13618,24 @@ def main() -> None:
         st.sidebar.caption(focus_summary(focuses) if focuses else "Pick what you tag")
         page = "Live Track"
     else:
+        pages = [
+            "Home",
+            "Live Track",
+            "Game Review",
+            "Database",
+            "Game Plan",
+            "Opponent Scout",
+        ]
+        # Deep-link from Home → Live Track
+        pending = st.session_state.pop("lt_nav_page", None)
+        if pending in pages:
+            st.session_state.main_page_radio = pending
+        if "main_page_radio" not in st.session_state:
+            st.session_state.main_page_radio = "Home"
         page = st.sidebar.radio(
             "Page",
-            [
-                "Live Track",
-                "Game Review",
-                "Database",
-                "Game Plan",
-                "Opponent Scout",
-            ],
+            pages,
+            key="main_page_radio",
         )
         if _shared_mode_enabled():
             import os
@@ -13517,9 +13648,13 @@ def main() -> None:
     offense_df = load_plays("Offense")
     defense_df = load_plays("Defense")
 
-    # First-run: no EPA yet (except Database setup page)
-    if offense_df.empty and defense_df.empty and page != "Database":
+    # First-run: no EPA yet (except Database setup / Home invite setup)
+    if offense_df.empty and defense_df.empty and page not in {"Database", "Home"}:
         _render_first_run_wizard()
+        return
+
+    if page == "Home":
+        _render_home_page()
         return
 
     if page == "Live Track":

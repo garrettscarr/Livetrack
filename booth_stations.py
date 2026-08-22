@@ -239,3 +239,30 @@ def focus_summary(focuses: list[str] | None) -> str:
 
 def role_chosen(session_state) -> bool:
     return str(session_state.get("booth_role") or "").lower() in {"main", "tagger"}
+
+
+def normalize_base_url(url: str | None) -> str:
+    base = str(url or "").strip().rstrip("/")
+    if not base:
+        return ""
+    if not base.startswith(("http://", "https://")):
+        base = "https://" + base
+    return base.rstrip("/")
+
+
+def tagger_invite_url(base_url: str, focuses: list[str] | None = None) -> str:
+    """Build a bookmark that opens as Tagger (optional pre-selected focuses)."""
+    base = normalize_base_url(base_url)
+    if not base:
+        return ""
+    foc = normalize_focuses(focuses)
+    if foc:
+        return f"{base}/?station=tag&focus={','.join(foc)}"
+    return f"{base}/?station=tag"
+
+
+def main_invite_url(base_url: str) -> str:
+    base = normalize_base_url(base_url)
+    if not base:
+        return ""
+    return f"{base}/?station=main"

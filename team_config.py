@@ -70,6 +70,30 @@ def booth_pin() -> str:
     return str(load_team_config().get("booth_pin") or "").strip()
 
 
+def booth_public_url() -> str:
+    """Public booth URL for tagger invites (Streamlit Cloud / hosted)."""
+    return str(load_team_config().get("booth_public_url") or "").strip().rstrip("/")
+
+
+def save_booth_public_url(url: str) -> str:
+    """Persist invite base URL into team_config.json."""
+    cleaned = str(url or "").strip().rstrip("/")
+    data: dict = {}
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8")) or {}
+        except Exception:
+            data = {}
+    if cleaned:
+        data["booth_public_url"] = cleaned
+    else:
+        data.pop("booth_public_url", None)
+    CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    reload_team_config()
+    return cleaned
+
+
 def play_word_aliases() -> dict[str, str]:
     raw = load_team_config().get("play_word_aliases") or {}
     return {str(k).lower(): str(v) for k, v in raw.items()}
