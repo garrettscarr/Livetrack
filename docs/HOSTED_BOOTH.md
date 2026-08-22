@@ -5,11 +5,13 @@ devices have cellular. Updates deploy to that same URL.
 
 ## What this gives you
 
-| Device | Station | Job |
-|--------|---------|-----|
-| Laptop | Call (`?station=call`) | Phrase / Fast Log snaps |
-| iPad 1 | Defense (`?station=defense`) | Fill Film (front / cover / blitz) |
-| iPad 2 (optional) | Full or Defense | Extra film help or lineup |
+| Device | Link | Sees |
+|--------|------|------|
+| **You (coach)** | `https://YOUR-APP.streamlit.app` | **Full** — log, lineup, film, drives, all pages |
+| Call tagger | `…/?station=call` | Snap log only (no film / other pages) |
+| Defense tagger | `…/?station=defense` | Fill Film only (front / cover / blitz) |
+
+Tagger bookmarks stay locked — they can’t flip into Full from the UI.
 
 All sessions hit the **same server** and the same `data/live_log.csv`.
 
@@ -37,9 +39,9 @@ set `FOOTBALL_EPA_SHARED=1`, use `$PORT`.
 
 ## iPad bookmarks
 
-- Call: `https://YOUR-HOST/?station=call`
-- Defense: `https://YOUR-HOST/?station=defense`
-- Full UI: `https://YOUR-HOST/`
+- **You (everything):** `https://YOUR-HOST/`
+- Call tagger: `https://YOUR-HOST/?station=call`
+- Defense tagger: `https://YOUR-HOST/?station=defense`
 
 Unlock once with the booth PIN (shared mode).
 

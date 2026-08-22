@@ -6355,15 +6355,27 @@ def _render_start_new_game_panel(season_opps: list[str]) -> None:
 
 
 def _booth_station_bar() -> str:
-    """Multi-device role: Full / Call / Defense. Honors ?station= for iPad bookmarks."""
-    from booth_stations import STATION_HELP, STATION_LABELS, normalize_station, station_from_query
+    """Full can pick role; Call/Defense from ?station= stay locked to tagging only."""
+    from booth_stations import (
+        STATION_HELP,
+        STATION_LABELS,
+        is_tagger_station,
+        normalize_station,
+        resolve_booth_station,
+    )
 
-    qp = station_from_query(st.query_params)
-    if qp and "booth_station_set" not in st.session_state:
-        st.session_state.booth_station = qp
-        st.session_state.booth_station_set = True
-    if "booth_station" not in st.session_state:
-        st.session_state.booth_station = qp or "full"
+    station = resolve_booth_station(st.session_state, st.query_params)
+
+    if is_tagger_station(station) and st.session_state.get("booth_station_locked"):
+        st.markdown(f"**{STATION_LABELS.get(station, station)}**")
+        if station == "call":
+            st.caption("Snap logger only — you won’t see film, lineup, or other pages.")
+        else:
+            st.caption(
+                "Film tags only (front / coverage / blitz). "
+                "Auto-refreshes when snaps are logged."
+            )
+        return station
 
     opts = list(STATION_LABELS.keys())
     cur = normalize_station(st.session_state.get("booth_station"))
@@ -6380,26 +6392,31 @@ def _booth_station_bar() -> str:
     station = normalize_station(pick)
     st.session_state.booth_station = station
     try:
-        st.query_params["station"] = station
+        if station == "full":
+            # Keep main coach URL clean
+            if "station" in st.query_params:
+                del st.query_params["station"]
+        else:
+            st.query_params["station"] = station
     except Exception:
         pass
-
-    if station == "call":
-        st.caption("Call station — log snaps. Defense iPad uses Fill Film on the same link.")
-    elif station == "defense":
-        st.caption(
-            "Defense station — tag pending snaps (front / cover / blitz). "
-            "Auto-refreshes when the Call laptop logs."
-        )
     return station
 
 
 def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     """Live Track: offense play log + lineup (booth-simple)."""
+    from booth_stations import is_tagger_station
     from mesh_engine import load_live_log, load_season_opponents
 
-    st.markdown('<p class="live-title">Live Track</p>', unsafe_allow_html=True)
     booth_station = _booth_station_bar()
+    tagger = is_tagger_station(booth_station)
+
+    if booth_station == "defense":
+        st.markdown('<p class="live-title">Fill Film</p>', unsafe_allow_html=True)
+    elif booth_station == "call":
+        st.markdown('<p class="live-title">Call — Log</p>', unsafe_allow_html=True)
+    else:
+        st.markdown('<p class="live-title">Live Track</p>', unsafe_allow_html=True)
 
     season_opps = load_season_opponents()
 
@@ -6423,11 +6440,15 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     default_opp = (season_opps[0] if season_opps else "Unknown")
     opponent = st.session_state.get("lt_page_opponent", default_opp)
 
-    # Auto-advance half from game phase (once) via pending — never fight the radio
+    # Follow active game on tagger devices (coach sets opponent on Full / Call)
     try:
         from mesh_engine import load_game_state
 
         gstate = load_game_state()
+        g_opp = str(gstate.get("opponent") or "").strip()
+        if tagger and g_opp:
+            st.session_state.lt_page_opponent = g_opp
+            opponent = g_opp
         if (
             gstate.get("opponent")
             and str(gstate.get("opponent")).strip().lower() == str(opponent).strip().lower()
@@ -6440,40 +6461,92 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     except Exception:
         pass
 
-    top = st.columns([2.4, 1, 1.2])
-    with top[0]:
-        opp_choices = list(season_opps) if season_opps else []
-        cur = str(st.session_state.get("lt_page_opponent") or "").strip()
-        if cur and cur not in opp_choices:
-            opp_choices = [cur] + opp_choices
-        if not opp_choices:
-            opp_choices = ["Unknown"]
-        opponent = st.selectbox(
-            "Tonight's opponent",
-            opp_choices,
-            key="lt_page_opponent",
-            label_visibility="collapsed",
-        )
-    with top[1]:
-        st.radio("Half", [1, 2], horizontal=True, key="lt_half", label_visibility="collapsed")
-    with top[2]:
-        # Migrate older session key values
-        if st.session_state.get("lt_main_sheet") == "Play log":
-            st.session_state.lt_main_sheet = "Log"
-        sheet_opts = ["Log", "Lineup"]
-        if booth_station == "defense":
-            sheet_opts = ["Log"]  # Defense stays on film tagging
-            st.session_state.lt_main_sheet = "Log"
-        sheet = st.radio(
-            "Sheet",
-            sheet_opts,
-            horizontal=True,
-            key="lt_main_sheet",
-            label_visibility="collapsed",
-        )
+    # --- Defense: film tags only ---
+    if booth_station == "defense":
+        live_logs = load_live_log()
+        st.session_state.lt_unit = "Offense"
+        st.caption(f"vs {opponent} · half {st.session_state.get('lt_half', 1)}")
+        if st.session_state.get("lt_tablet"):
+            st.markdown(
+                """
+                <style>
+                [data-testid="stMainBlockContainer"] { padding-top: 0.5rem !important; }
+                .block-container { max-width: 920px; }
+                div[data-testid="stButton"] > button { min-height: 2.35rem !important; }
+                </style>
+                """,
+                unsafe_allow_html=True,
+            )
+        from datetime import timedelta
 
-    with st.expander("Start new game", expanded=False):
-        _render_start_new_game_panel(season_opps)
+        @st.fragment(run_every=timedelta(seconds=5))
+        def _defense_fill_film_loop() -> None:
+            fresh = load_live_log()
+            n = count_film_pending(fresh, opponent)
+            if n:
+                st.info(f"**{n}** snap(s) waiting for front / coverage / blitz")
+            else:
+                st.caption("Caught up — waiting for snaps…")
+            _live_track_fill_film(opponent, offense_df, fresh)
+
+        _defense_fill_film_loop()
+        return
+
+    # --- Call / Full chrome ---
+    if booth_station == "call":
+        st.caption(f"vs {opponent}")
+        top = st.columns([2.6, 1])
+        with top[0]:
+            opp_choices = list(season_opps) if season_opps else []
+            cur = str(st.session_state.get("lt_page_opponent") or "").strip()
+            if cur and cur not in opp_choices:
+                opp_choices = [cur] + opp_choices
+            if not opp_choices:
+                opp_choices = ["Unknown"]
+            opponent = st.selectbox(
+                "Tonight's opponent",
+                opp_choices,
+                key="lt_page_opponent",
+                label_visibility="collapsed",
+            )
+        with top[1]:
+            st.radio("Half", [1, 2], horizontal=True, key="lt_half", label_visibility="collapsed")
+        sheet = "Log"
+        st.session_state.lt_main_sheet = "Log"
+    else:
+        top = st.columns([2.4, 1, 1.2])
+        with top[0]:
+            opp_choices = list(season_opps) if season_opps else []
+            cur = str(st.session_state.get("lt_page_opponent") or "").strip()
+            if cur and cur not in opp_choices:
+                opp_choices = [cur] + opp_choices
+            if not opp_choices:
+                opp_choices = ["Unknown"]
+            opponent = st.selectbox(
+                "Tonight's opponent",
+                opp_choices,
+                key="lt_page_opponent",
+                label_visibility="collapsed",
+            )
+        with top[1]:
+            st.radio("Half", [1, 2], horizontal=True, key="lt_half", label_visibility="collapsed")
+        with top[2]:
+            if st.session_state.get("lt_main_sheet") == "Play log":
+                st.session_state.lt_main_sheet = "Log"
+            sheet = st.radio(
+                "Sheet",
+                ["Log", "Lineup"],
+                horizontal=True,
+                key="lt_main_sheet",
+                label_visibility="collapsed",
+            )
+
+    if booth_station == "full":
+        with st.expander("Start new game", expanded=False):
+            _render_start_new_game_panel(season_opps)
+    elif booth_station == "call":
+        with st.expander("Start new game", expanded=False):
+            _render_start_new_game_panel(season_opps)
 
     live_logs = load_live_log()
     st.session_state.lt_unit = "Offense"
@@ -6522,7 +6595,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             unsafe_allow_html=True,
         )
 
-    # One compact drive row
+    # Drive row — Call + Full (not Defense)
     dstate = load_drive_state()
     active_did = current_drive_id(opponent)
     can_undo = bool(dstate.get("undo_stack"))
@@ -6532,10 +6605,16 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     if d2.button("Start", type="primary", use_container_width=True, key="lt_start_drive", disabled=active_did is not None):
         st.success(f"Drive #{start_drive(opponent)} started.")
         st.rerun()
-    if d3.button("End + Film", use_container_width=True, key="lt_end_fill", disabled=active_did is None):
+    if d3.button(
+        "End" if booth_station == "call" else "End + Film",
+        use_container_width=True,
+        key="lt_end_fill",
+        disabled=active_did is None,
+    ):
         ended = end_drive()
-        st.session_state.lt_play_sheet = "Fill Film"
-        st.session_state.ff_drive_filter = str(ended) if ended is not None else "all"
+        if booth_station == "full":
+            st.session_state.lt_play_sheet = "Fill Film"
+            st.session_state.ff_drive_filter = str(ended) if ended is not None else "all"
         st.rerun()
     if d4.button("Undo", use_container_width=True, key="lt_undo_drive", disabled=not can_undo):
         entry = undo_drive_action()
@@ -6546,16 +6625,14 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     pending_n = count_film_pending(live_logs, opponent)
     _apply_pending_live_situation()
 
-    if sheet == "Lineup":
+    if sheet == "Lineup" and booth_station == "full":
         _live_track_field_screen(opponent, live_logs)
         return
 
-    # Log vs Fill Film — station roles lock the mode for multi-device booths
+    # Log vs Fill Film — only Full can switch; Call stays on Log
     if "lt_play_sheet" not in st.session_state:
         st.session_state.lt_play_sheet = "Log"
-    if booth_station == "defense":
-        st.session_state.lt_play_sheet = "Fill Film"
-    elif booth_station == "call":
+    if booth_station == "call":
         st.session_state.lt_play_sheet = "Log"
 
     mode_opts = ["Log"]
@@ -6563,8 +6640,6 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         pending_n or st.session_state.get("lt_play_sheet") == "Fill Film"
     ):
         mode_opts.append(f"Film ({pending_n})" if pending_n else "Film")
-    if booth_station == "defense":
-        mode_opts = [f"Film ({pending_n})" if pending_n else "Film"]
 
     label_to_mode = {"Log": "Log"}
     for o in mode_opts:
@@ -6585,32 +6660,15 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             label_visibility="collapsed",
         )
         st.session_state.lt_play_sheet = label_to_mode.get(chosen, "Log")
-    elif booth_station == "defense":
-        st.session_state.lt_play_sheet = "Fill Film"
     else:
         st.session_state.lt_play_sheet = "Log"
 
-    if st.session_state.get("lt_play_sheet") == "Fill Film":
-        if booth_station == "defense":
-            from datetime import timedelta
-
-            @st.fragment(run_every=timedelta(seconds=5))
-            def _defense_fill_film_loop() -> None:
-                fresh = load_live_log()
-                n = count_film_pending(fresh, opponent)
-                if n:
-                    st.info(f"**{n}** snap(s) waiting for front / coverage / blitz")
-                else:
-                    st.caption("Caught up — waiting for the Call station to log…")
-                _live_track_fill_film(opponent, offense_df, fresh)
-
-            _defense_fill_film_loop()
-        else:
-            _live_track_fill_film(opponent, offense_df, live_logs)
+    if st.session_state.get("lt_play_sheet") == "Fill Film" and booth_station == "full":
+        _live_track_fill_film(opponent, offense_df, live_logs)
     else:
         _live_track_log_screen(opponent, offense_df, defense_df, live_logs, quick=True)
 
-    if booth_station != "defense":
+    if booth_station == "full":
         with st.expander("Halftime / end 1st half", expanded=False):
             _end_first_half_action(opponent, live_logs, key_prefix="lt")
         with st.expander("Drive repair (resume / reassign)", expanded=False):
@@ -6621,6 +6679,9 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
                 resume_drive(int(resume_pick), opponent)
                 st.success(f"Back on drive #{int(resume_pick)}.")
                 st.rerun()
+    elif booth_station == "call":
+        with st.expander("Halftime / end 1st half", expanded=False):
+            _end_first_half_action(opponent, live_logs, key_prefix="lt")
 
 
 
@@ -13122,24 +13183,37 @@ def main() -> None:
     inject_styles()
     _require_booth_pin()
 
-    page = st.sidebar.radio(
-        "Page",
-        [
-            "Live Track",
-            "Game Review",
-            "Database",
-            "Game Plan",
-            "Opponent Scout",
-        ],
-    )
-    if _shared_mode_enabled():
-        import os
+    from booth_stations import STATION_LABELS, is_tagger_station, resolve_booth_station
 
-        public = str(os.environ.get("BOOTH_PUBLIC_URL") or "").strip()
-        st.sidebar.caption("Shared booth mode · PIN unlocked")
-        if public:
-            st.sidebar.caption(f"Link: {public}")
-        st.sidebar.caption("iPad: add ?station=call or ?station=defense")
+    booth_station = resolve_booth_station(st.session_state, st.query_params)
+    tagger = is_tagger_station(booth_station) and bool(
+        st.session_state.get("booth_station_locked")
+    )
+
+    if tagger:
+        # Extra taggers: Live Track only — no Game Review / Database / etc.
+        st.sidebar.markdown(f"**{STATION_LABELS.get(booth_station, booth_station)}**")
+        st.sidebar.caption("Tagging station · other pages hidden")
+        page = "Live Track"
+    else:
+        page = st.sidebar.radio(
+            "Page",
+            [
+                "Live Track",
+                "Game Review",
+                "Database",
+                "Game Plan",
+                "Opponent Scout",
+            ],
+        )
+        if _shared_mode_enabled():
+            import os
+
+            public = str(os.environ.get("BOOTH_PUBLIC_URL") or "").strip()
+            st.sidebar.caption("Shared booth mode · PIN unlocked")
+            if public:
+                st.sidebar.caption(f"Link: {public}")
+            st.sidebar.caption("You: plain link (Full). Taggers: ?station=call or ?station=defense")
 
     offense_df = load_plays("Offense")
     defense_df = load_plays("Defense")
@@ -13150,14 +13224,16 @@ def main() -> None:
         return
 
     if page == "Live Track":
-        st.title("Football EPA")
+        if not tagger:
+            st.title("Football EPA")
         if offense_df.empty:
             st.error("No offense EPA data found. Run `python refresh_all.py` first.")
             return
-        st.sidebar.markdown("---")
-        st.sidebar.markdown(f"**{len(offense_df):,}** offense plays")
-        if "game_id" in offense_df.columns:
-            st.sidebar.markdown(f"**{offense_df['game_id'].nunique()}** games")
+        if not tagger:
+            st.sidebar.markdown("---")
+            st.sidebar.markdown(f"**{len(offense_df):,}** offense plays")
+            if "game_id" in offense_df.columns:
+                st.sidebar.markdown(f"**{offense_df['game_id'].nunique()}** games")
         live_track_page(offense_df, defense_df)
         return
 
