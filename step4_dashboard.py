@@ -6607,6 +6607,24 @@ def _render_home_page() -> None:
     m2.metric("Half", str(half))
     m3.metric("Booth PIN", pin)
 
+    # Main-only DB setup (taggers never see this page)
+    try:
+        off = load_plays("Offense")
+        deff = load_plays("Defense")
+    except Exception:
+        off, deff = None, None
+    if not _epa_db_ready(off, deff):
+        st.warning(
+            "Season database not loaded yet — upload it here once. "
+            "Taggers will wait until you finish."
+        )
+        with st.expander("Upload database (Main only)", expanded=True):
+            _render_first_run_wizard()
+        st.markdown("---")
+    else:
+        n = len(off) if off is not None and not off.empty else 0
+        st.success(f"Database ready · **{n:,}** offense plays · taggers can join")
+
     if st.button("Open Live Track →", type="primary", key="home_goto_live"):
         st.session_state.lt_nav_page = "Live Track"
         st.rerun()
@@ -13488,14 +13506,38 @@ def _require_booth_pin() -> bool:
     return False
 
 
+def _render_tagger_waiting_for_main() -> None:
+    """Taggers never upload the DB — Main does it once on the shared server."""
+    st.markdown('<p class="live-title">Booth not ready yet</p>', unsafe_allow_html=True)
+    st.info(
+        "The **Main** device still needs to upload the season database once. "
+        "You don’t need to upload anything on this phone."
+    )
+    st.caption(
+        "On Main: Home (or Setup) → upload `football.db` → Save. "
+        "Then tap Check again here."
+    )
+    if st.button("Check again", type="primary", key="tagger_wait_refresh"):
+        st.cache_data.clear()
+        st.rerun()
+
+
+def _epa_db_ready(offense_df, defense_df) -> bool:
+    return not (
+        (offense_df is None or getattr(offense_df, "empty", True))
+        and (defense_df is None or getattr(defense_df, "empty", True))
+    )
+
+
 def _render_first_run_wizard() -> None:
-    """CP5 first-run / empty-data onboarding (works on Streamlit Cloud via uploads)."""
+    """CP5 first-run / empty-data onboarding (Main only — works on Streamlit Cloud via uploads)."""
     st.title("Football EPA — Setup")
     st.markdown(
         """
-The cloud app needs your season database (or a Hudl export) before **Live Track** opens.
+**Main device only** — upload the season database once.  
+Taggers never do this; they join with the invite link after Main is ready.
 
-**Fastest (recommended for Streamlit Cloud)**  
+**Fastest (Streamlit Cloud)**  
 Upload your local `data/football.db` below.
 
 **Or** upload Hudl `season.xlsx` / `season_25-26.xlsx` and refresh.
@@ -13647,9 +13689,15 @@ def main() -> None:
 
     offense_df = load_plays("Offense")
     defense_df = load_plays("Defense")
+    db_ready = _epa_db_ready(offense_df, defense_df)
 
-    # First-run: no EPA yet (except Database setup / Home invite setup)
-    if offense_df.empty and defense_df.empty and page not in {"Database", "Home"}:
+    # Taggers never upload — wait for Main's shared database
+    if tagger and not db_ready:
+        _render_tagger_waiting_for_main()
+        return
+
+    # First-run setup is Main-only (Home / Database also allow setup)
+    if (not tagger) and (not db_ready) and page not in {"Database", "Home"}:
         _render_first_run_wizard()
         return
 
@@ -13661,7 +13709,10 @@ def main() -> None:
         if not tagger:
             st.title("Football EPA")
         if offense_df.empty:
-            st.error("No offense EPA data found. Run `python refresh_all.py` first.")
+            if tagger:
+                _render_tagger_waiting_for_main()
+            else:
+                st.error("No offense EPA data found. Upload the database on **Home**.")
             return
         if not tagger:
             st.sidebar.markdown("---")
