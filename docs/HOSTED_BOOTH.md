@@ -13,6 +13,14 @@ devices have cellular. Updates deploy to that same URL.
 
 All sessions hit the **same server** and the same `data/live_log.csv`.
 
+## Streamlit Community Cloud
+
+1. Connect `garrettscarr/Livetrack` → main → `step4_dashboard.py`.
+2. After deploy, the first-run **Setup** page lets you **upload `data/football.db`**
+   from your Mac (fastest) or a Hudl `season.xlsx` + **Refresh database**.
+3. Shared booth mode turns on automatically (`STREAMLIT_RUNTIME_ENV=cloud`).
+4. Re-upload `football.db` after a full Cloud redeploy (disk is ephemeral).
+
 ## Deploy (Render example)
 
 1. Push this repo to GitHub.

@@ -13016,31 +13016,105 @@ def _require_booth_pin() -> bool:
 
 
 def _render_first_run_wizard() -> None:
-    """CP5 first-run / empty-data onboarding."""
+    """CP5 first-run / empty-data onboarding (works on Streamlit Cloud via uploads)."""
     st.title("Football EPA — Setup")
     st.markdown(
         """
-Drop Hudl exports into `data/hudl_exports/`, then refresh the database.
+The cloud app needs your season database (or a Hudl export) before **Live Track** opens.
 
-**Required**
-- `season.xlsx` — current season film
+**Fastest (recommended for Streamlit Cloud)**  
+Upload your local `data/football.db` below.
 
-**Recommended**
-- `{Opponent} D.xlsx` / `{Opponent} O.xlsx` — scout cuts (e.g. Farmersville)
-- `data/opponents.csv` — game_id → opponent names
-
-**Then run** (Terminal / Command Prompt in this folder):
-```
-python refresh_all.py
-```
-Or use **Database → Setup** after restarting the app.
+**Or** upload Hudl `season.xlsx` / `season_25-26.xlsx` and refresh.
 """
     )
-    season = PROJECT_DIR / "data" / "hudl_exports" / "season.xlsx"
-    st.write("season.xlsx:", "✅ found" if season.exists() else "❌ missing")
-    if st.button("I added files — try loading again", type="primary"):
+
+    db_path = PROJECT_DIR / "data" / "football.db"
+    exports = PROJECT_DIR / "data" / "hudl_exports"
+    exports.mkdir(parents=True, exist_ok=True)
+    season = exports / "season.xlsx"
+
+    st.subheader("1 · Upload database (fast)")
+    st.caption(
+        "On your Mac this file is usually at: "
+        "`…/football-epa/data/football.db`"
+    )
+    db_up = st.file_uploader(
+        "football.db",
+        type=["db", "sqlite", "sqlite3"],
+        key="setup_upload_db",
+        help="Finder → football-epa → data → football.db",
+    )
+    if db_up is not None and st.button("Save database", type="primary", key="setup_save_db"):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        db_path.write_bytes(db_up.getvalue())
+        st.success(f"Saved {db_path.name} ({len(db_up.getvalue()):,} bytes).")
         st.cache_data.clear()
         st.rerun()
+
+    st.subheader("2 · Or upload Hudl season film")
+    xlsx_up = st.file_uploader(
+        "season.xlsx / season_YY-YY.xlsx",
+        type=["xlsx"],
+        key="setup_upload_xlsx",
+        accept_multiple_files=True,
+    )
+    if xlsx_up:
+        for f in xlsx_up:
+            name = str(f.name or "season.xlsx")
+            dest = exports / name
+            dest.write_bytes(f.getvalue())
+            st.write(f"Saved `{dest.name}`")
+        if not season.exists():
+            candidates = sorted(
+                (
+                    p
+                    for p in exports.glob("season*.xlsx")
+                    if not p.name.startswith("~$")
+                ),
+                key=lambda p: p.stat().st_mtime,
+            )
+            if candidates:
+                season.write_bytes(candidates[-1].read_bytes())
+                st.caption(f"Also copied → season.xlsx from {candidates[-1].name}")
+
+    st.write("season.xlsx:", "✅ found" if season.exists() else "❌ missing")
+    st.write("football.db:", "✅ found" if db_path.exists() else "❌ missing")
+    st.caption(
+        "Note: Streamlit Cloud storage is temporary — re-upload after a full redeploy, "
+        "or keep a local copy of football.db."
+    )
+
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Refresh database from Hudl", key="setup_refresh"):
+            if not season.exists() and not list(exports.glob("season*.xlsx")):
+                st.error("Upload a season.xlsx (or season_*.xlsx) first.")
+            else:
+                try:
+                    from refresh_all import run_refresh
+
+                    if not season.exists():
+                        alts = sorted(
+                            p
+                            for p in exports.glob("season*.xlsx")
+                            if not p.name.startswith("~$")
+                        )
+                        if alts:
+                            season.write_bytes(alts[-1].read_bytes())
+                    with st.spinner("Running refresh_all (may take a minute)…"):
+                        run_refresh()
+                    st.success("Refresh complete.")
+                    st.cache_data.clear()
+                    st.rerun()
+                except SystemExit as exc:
+                    st.error(f"Refresh stopped: {exc}")
+                except Exception as exc:
+                    st.error(f"Refresh failed: {exc}")
+    with c2:
+        if st.button("I added files — try loading again", type="primary", key="setup_reload"):
+            st.cache_data.clear()
+            st.rerun()
 
 
 def main() -> None:
