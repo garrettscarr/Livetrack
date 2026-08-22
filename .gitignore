@@ -12,6 +12,7 @@ data/live_log.csv
 data/live_log.csv.lock
 data/game_state.json
 data/drive_state.json
+data/booth_snap.json
 data/lineup_state.json
 data/football.db
 data/*.lock

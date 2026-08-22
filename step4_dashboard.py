@@ -2596,6 +2596,7 @@ LIVE_LOG_COLUMNS = [
     "note",
     "film_pending",
     "drive_id",
+    "play_n",
 ]
 
 DRIVE_STATE_FILE = PROJECT_DIR / "data" / "drive_state.json"
@@ -2986,6 +2987,13 @@ def start_drive(opponent: str) -> int:
         }
     )
     save_drive_state(state)
+    try:
+        from booth_snaps import reset_booth_snap_for_drive
+
+        half = int(st.session_state.get("lt_half") or 1)
+        reset_booth_snap_for_drive(opponent, did, half=half, play_n=1)
+    except Exception:
+        pass
     return did
 
 
@@ -3017,6 +3025,21 @@ def resume_drive(drive_id: int, opponent: str | None = None) -> int:
     except (TypeError, ValueError):
         state["next_id"] = did + 1
     save_drive_state(state)
+    try:
+        from booth_snaps import max_play_n_for_drive, reset_booth_snap_for_drive
+        from mesh_engine import load_live_log
+
+        logs = load_live_log()
+        max_n = max_play_n_for_drive(logs, did)
+        half = int(st.session_state.get("lt_half") or 1)
+        reset_booth_snap_for_drive(
+            opponent or str(state.get("opponent") or ""),
+            did,
+            half=half,
+            play_n=(max_n + 1) if max_n else 1,
+        )
+    except Exception:
+        pass
     return did
 
 
@@ -6513,6 +6536,283 @@ def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
     return normalize_focuses(st.session_state.get("tag_focuses"))
 
 
+def _booth_upsert_snap(
+    *,
+    drive_id: int,
+    play_n: int,
+    updates: dict,
+    opponent: str,
+    half: int = 1,
+) -> tuple[bool, int | None, str]:
+    from booth_snaps import upsert_live_snap
+    from mesh_engine import load_live_log
+
+    return upsert_live_snap(
+        drive_id=drive_id,
+        play_n=play_n,
+        updates=updates,
+        opponent=opponent,
+        half=half,
+        append_fn=append_live_log,
+        update_at_fn=update_live_log_at,
+        load_fn=load_live_log,
+    )
+
+
+def _render_shared_snap_bar(
+    opponent: str,
+    *,
+    can_control: bool = True,
+    key_prefix: str = "snap",
+) -> tuple[int | None, int]:
+    """
+    Shared Drive # · Play # bar.
+    can_control=True (Main): can jump shared pointer / next.
+    Taggers: follow live by default; Jump is local view only unless they hit Set shared.
+    """
+    from booth_snaps import (
+        load_booth_snap,
+        set_booth_snap_play,
+        snap_label,
+        sync_booth_snap_to_drive,
+    )
+    from mesh_engine import load_live_log
+
+    did = current_drive_id(opponent)
+    half = int(st.session_state.get("lt_half") or 1)
+    logs = load_live_log()
+    if did is not None:
+        shared = sync_booth_snap_to_drive(opponent, int(did), half=half, live_logs=logs)
+    else:
+        shared = load_booth_snap()
+        did = shared.get("drive_id")
+
+    shared_pn = int(shared.get("play_n") or 1)
+    follow = st.session_state.get(f"{key_prefix}_follow", True)
+    if follow or f"{key_prefix}_view_drive" not in st.session_state:
+        st.session_state[f"{key_prefix}_view_drive"] = did
+        st.session_state[f"{key_prefix}_view_play"] = shared_pn
+
+    view_did = st.session_state.get(f"{key_prefix}_view_drive")
+    view_pn = int(st.session_state.get(f"{key_prefix}_view_play") or shared_pn)
+
+    st.markdown(
+        f'<div class="ql-drive{" open" if did else ""}">{snap_label(view_did, view_pn)}</div>',
+        unsafe_allow_html=True,
+    )
+    live_lbl = snap_label(did, shared_pn) if did else "No drive — Start on Main"
+    st.caption(f"Live pointer: {live_lbl}" + (" · following" if follow else " · jumped"))
+
+    c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1.2, 1.4])
+    with c1:
+        if st.button("◀ Prev", use_container_width=True, key=f"{key_prefix}_prev", disabled=view_pn <= 1):
+            st.session_state[f"{key_prefix}_follow"] = False
+            st.session_state[f"{key_prefix}_view_play"] = max(1, view_pn - 1)
+            st.rerun()
+    with c2:
+        if st.button("Next ▶", use_container_width=True, key=f"{key_prefix}_next"):
+            st.session_state[f"{key_prefix}_follow"] = False
+            st.session_state[f"{key_prefix}_view_play"] = view_pn + 1
+            st.rerun()
+    with c3:
+        if st.button("Follow live", use_container_width=True, key=f"{key_prefix}_follow_btn"):
+            st.session_state[f"{key_prefix}_follow"] = True
+            st.session_state[f"{key_prefix}_view_drive"] = did
+            st.session_state[f"{key_prefix}_view_play"] = shared_pn
+            st.rerun()
+    with c4:
+        jump_n = st.number_input(
+            "Play #",
+            min_value=1,
+            value=int(view_pn),
+            step=1,
+            key=f"{key_prefix}_jump_n",
+            label_visibility="collapsed",
+        )
+    with c5:
+        if st.button("Go to play", use_container_width=True, key=f"{key_prefix}_jump_go"):
+            st.session_state[f"{key_prefix}_follow"] = False
+            st.session_state[f"{key_prefix}_view_play"] = int(jump_n)
+            if did is not None:
+                st.session_state[f"{key_prefix}_view_drive"] = int(did)
+            st.rerun()
+
+    if can_control and did is not None:
+        if st.button(
+            "Set shared pointer here (all devices)",
+            key=f"{key_prefix}_set_shared",
+            help="Moves Drive/Play for every tagger following live.",
+        ):
+            set_booth_snap_play(
+                int(did),
+                int(st.session_state.get(f"{key_prefix}_view_play") or shared_pn),
+                opponent=opponent,
+                half=half,
+            )
+            st.session_state[f"{key_prefix}_follow"] = True
+            st.rerun()
+
+    view_did = st.session_state.get(f"{key_prefix}_view_drive")
+    view_pn = int(st.session_state.get(f"{key_prefix}_view_play") or 1)
+    try:
+        view_did_i = int(view_did) if view_did is not None else None
+    except (TypeError, ValueError):
+        view_did_i = None
+    return view_did_i, view_pn
+
+
+def _render_current_snap_tagger(
+    opponent: str,
+    offense_df: pd.DataFrame,
+    focuses: list[str],
+    *,
+    drive_id: int | None,
+    play_n: int,
+) -> None:
+    """Simplified editor: tag only focused fields on this Drive/Play."""
+    from booth_stations import (
+        FOCUS_BLITZ,
+        FOCUS_COVERAGE,
+        FOCUS_FRONT,
+        FOCUS_SNAPS,
+        focus_summary,
+        has_film_focus,
+        has_snaps_focus,
+    )
+    from booth_snaps import find_snap_index
+    from mesh_engine import load_live_log
+
+    if drive_id is None:
+        st.warning("No drive open — Main must tap **Start** drive first.")
+        return
+
+    half = int(st.session_state.get("lt_half") or 1)
+    logs = load_live_log()
+    idx = find_snap_index(logs, int(drive_id), int(play_n))
+    row = {}
+    if idx is not None and logs is not None and not logs.empty:
+        row = logs.reset_index(drop=True).loc[idx].to_dict()
+
+    st.markdown(f"**Tagging** Drive #{drive_id} · Play #{play_n} · {focus_summary(focuses)}")
+    if row.get("formation") or row.get("play_call"):
+        st.caption(
+            f"Call so far: {row.get('formation') or '—'} · {row.get('play_call') or '—'} · "
+            f"{row.get('result') or ''} {row.get('yards_gained') or ''}"
+        )
+    bits = []
+    if str(row.get("def_front") or "").strip():
+        bits.append(f"Front {row.get('def_front')}")
+    if str(row.get("coverage") or "").strip():
+        bits.append(f"Cov {row.get('coverage')}")
+    if str(row.get("blitz") or "").strip().lower() in {"yes", "no"}:
+        bits.append(f"Blitz {row.get('blitz')}")
+    if bits:
+        st.caption("Film so far: " + " · ".join(bits))
+
+    updates: dict = {}
+    ensure_default_film_tags()
+
+    if has_film_focus(focuses):
+        full = logs if logs is not None and not logs.empty else pd.DataFrame()
+        front_opts = _merge_film_tag_options(
+            _tag_options(
+                offense_df["def_front"] if "def_front" in offense_df.columns else pd.Series(dtype=str),
+            ),
+            full["def_front"] if "def_front" in full.columns else pd.Series(dtype=str),
+            kind="def_front",
+        )
+        cov_opts = _merge_film_tag_options(
+            _tag_options(
+                offense_df["coverage"] if "coverage" in offense_df.columns else pd.Series(dtype=str),
+            ),
+            full["coverage"] if "coverage" in full.columns else pd.Series(dtype=str),
+            kind="coverage",
+        )
+        show_f = FOCUS_FRONT in focuses
+        show_c = FOCUS_COVERAGE in focuses
+        show_b = FOCUS_BLITZ in focuses
+        cols = st.columns(max(1, sum([show_f, show_c, show_b])))
+        ci = 0
+        if show_f:
+            with cols[ci]:
+                # seed select from existing
+                cur_f = str(row.get("def_front") or "")
+                if cur_f and f"ff_cur_front_{drive_id}_{play_n}" not in st.session_state:
+                    st.session_state[f"ff_front_cur_{drive_id}_{play_n}"] = cur_f
+                updates["def_front"] = _select_or_type(
+                    "Front", front_opts, f"ff_front_cur_{drive_id}_{play_n}"
+                )
+            ci += 1
+        if show_c:
+            with cols[ci]:
+                updates["coverage"] = _select_or_type(
+                    "Coverage", cov_opts, f"ff_cov_cur_{drive_id}_{play_n}"
+                )
+            ci += 1
+        if show_b:
+            with cols[ci]:
+                cur_b = str(row.get("blitz") or "No").strip().title()
+                if cur_b not in {"Yes", "No"}:
+                    cur_b = "No"
+                updates["blitz"] = st.radio(
+                    "Blitz",
+                    ["No", "Yes"],
+                    horizontal=True,
+                    key=f"ff_blitz_cur_{drive_id}_{play_n}",
+                    index=1 if cur_b == "Yes" else 0,
+                )
+
+    if has_snaps_focus(focuses) and FOCUS_SNAPS in focuses:
+        st.markdown("#### Snap (call)")
+        updates["formation"] = st.text_input(
+            "Formation",
+            value=str(row.get("formation") or ""),
+            key=f"snap_form_{drive_id}_{play_n}",
+        )
+        updates["play_call"] = st.text_input(
+            "Play",
+            value=str(row.get("play_call") or ""),
+            key=f"snap_play_{drive_id}_{play_n}",
+        )
+        updates["result"] = st.selectbox(
+            "Result",
+            ["Gain", "No gain", "Incomplete", "TD", "Turnover", "Penalty", "Sack / TFL", "Other"],
+            key=f"snap_res_{drive_id}_{play_n}",
+        )
+        updates["yards_gained"] = st.number_input(
+            "Yards",
+            value=int(row.get("yards_gained") or 0),
+            step=1,
+            key=f"snap_yds_{drive_id}_{play_n}",
+        )
+        updates["film_pending"] = "Yes"
+
+    if st.button("Save on this play", type="primary", use_container_width=True, key=f"snap_save_{drive_id}_{play_n}"):
+        # Drop empty strings so merge won't wipe siblings — except blitz Yes/No
+        clean = {}
+        for k, v in updates.items():
+            if k == "blitz":
+                clean[k] = v
+            elif v is None:
+                continue
+            elif isinstance(v, str) and not v.strip():
+                continue
+            else:
+                clean[k] = v
+        ok, _, msg = _booth_upsert_snap(
+            drive_id=int(drive_id),
+            play_n=int(play_n),
+            updates=clean,
+            opponent=opponent,
+            half=half,
+        )
+        if ok:
+            st.success(f"Saved · {msg}")
+            st.rerun()
+        else:
+            st.error(msg or "Could not save.")
+
+
 def _booth_switch_role_control() -> None:
     """Small escape hatch to re-open Main / Tagger chooser."""
     if st.sidebar.button("Switch Main / Tagger", key="booth_switch_role"):
@@ -6767,8 +7067,8 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     except Exception:
         pass
 
-    # --- Film-only tagger (no snap log) ---
-    if tagger and has_film_focus(focuses) and not has_snaps_focus(focuses):
+    # --- Film-only / snap tagger: shared Drive·Play + current snap editor ---
+    if tagger and (has_film_focus(focuses) or has_snaps_focus(focuses)):
         live_logs = load_live_log()
         st.session_state.lt_unit = "Offense"
         st.caption(f"vs {opponent} · half {st.session_state.get('lt_half', 1)}")
@@ -6785,20 +7085,26 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             )
         from datetime import timedelta
 
-        @st.fragment(run_every=timedelta(seconds=5))
-        def _defense_fill_film_loop() -> None:
-            fresh = load_live_log()
-            n = count_film_pending(fresh, opponent, focuses=focuses)
-            if n:
-                st.info(f"**{n}** snap(s) waiting for {focus_summary(focuses)}")
-            else:
-                st.caption("Caught up — waiting for snaps…")
-            _live_track_fill_film(opponent, offense_df, fresh, focuses=focuses)
+        @st.fragment(run_every=timedelta(seconds=4))
+        def _tagger_snap_loop() -> None:
+            view_did, view_pn = _render_shared_snap_bar(
+                opponent, can_control=False, key_prefix="tag"
+            )
+            _render_current_snap_tagger(
+                opponent,
+                offense_df,
+                focuses,
+                drive_id=view_did,
+                play_n=view_pn,
+            )
+            with st.expander("Catch-up queue (older pending)", expanded=False):
+                fresh = load_live_log()
+                _live_track_fill_film(opponent, offense_df, fresh, focuses=focuses)
 
-        _defense_fill_film_loop()
+        _tagger_snap_loop()
         return
 
-    # --- Call / Full / mixed tagger chrome ---
+    # --- Call / Full chrome ---
     snaps_mode = (not tagger) or has_snaps_focus(focuses)
     if not snaps_mode:
         st.warning("No focuses selected.")
@@ -6930,6 +7236,10 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         if entry:
             st.success(f"Undid {entry.get('action')}.")
         st.rerun()
+
+    # Shared Drive · Play pointer (Main advances on LOG; taggers follow)
+    if booth_station == "full" and active_did is not None:
+        _render_shared_snap_bar(opponent, can_control=True, key_prefix="main")
 
     pending_n = count_film_pending(live_logs, opponent)
     _apply_pending_live_situation()
@@ -8969,6 +9279,33 @@ def _commit_live_play(
         return warnings
 
     drive_id = _ensure_drive_for_log(opponent)
+    half_i = int(half)
+    try:
+        from booth_snaps import (
+            advance_booth_snap,
+            find_snap_index,
+            merge_snap_values,
+            sync_booth_snap_to_drive,
+        )
+        from mesh_engine import load_live_log
+
+        logs_now = load_live_log()
+        snap = sync_booth_snap_to_drive(
+            opponent, drive_id, half=half_i, live_logs=logs_now
+        )
+        play_n = int(snap.get("play_n") or 1)
+    except Exception:
+        play_n = 1
+        try:
+            from mesh_engine import load_live_log
+
+            logs_now = load_live_log()
+        except Exception:
+            logs_now = None
+        find_snap_index = None  # type: ignore
+        merge_snap_values = None  # type: ignore
+        advance_booth_snap = None  # type: ignore
+
     if unit == "Offense":
         mesh_call = play_call or "(none)"
     else:
@@ -9013,43 +9350,104 @@ def _commit_live_play(
         phrase=str(phrase or ""),
         slots=slots_now,
     )
-    append_live_log(
-        {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "opponent": opponent,
-            "half": half,
-            "unit": unit,
-            "down": int(down),
-            "distance": dist_bucket,
-            "distance_yards": int(distance_yards),
-            "field_zone": field_zone,
-            "ball_yard": int(ball),
-            "situation": situation_label(
-                int(down), dist_bucket, field_zone, ball_yard=ball
-            ),
-            "formation": formation,
-            "formation_variant": formation_variant,
-            "play_call": play_call,
-            "play_type": ptype,
-            "run_tag": run_tag,
-            "pass_tag": pass_tag,
-            "motion": motion,
-            "def_front": def_front,
-            "coverage": coverage,
-            "blitz": blitz if blitz else "",
-            "call": mesh_call,
-            "result": result,
-            "yards_gained": int(yards_gained),
-            "players_on": format_players_on(on_now),
-            "lineup": format_lineup_slots(slots_now),
-            "ball_player": bp,
-            "touch_role": role,
-            "pass_player": pp,
-            "note": note,
-            "film_pending": "Yes" if film_pending else "No",
-            "drive_id": drive_id,
-        }
-    )
+    new_row = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "opponent": opponent,
+        "half": half_i,
+        "unit": unit,
+        "down": int(down),
+        "distance": dist_bucket,
+        "distance_yards": int(distance_yards),
+        "field_zone": field_zone,
+        "ball_yard": int(ball),
+        "situation": situation_label(
+            int(down), dist_bucket, field_zone, ball_yard=ball
+        ),
+        "formation": formation,
+        "formation_variant": formation_variant,
+        "play_call": play_call,
+        "play_type": ptype,
+        "run_tag": run_tag,
+        "pass_tag": pass_tag,
+        "motion": motion,
+        "def_front": def_front,
+        "coverage": coverage,
+        "blitz": blitz if blitz else "",
+        "call": mesh_call,
+        "result": result,
+        "yards_gained": int(yards_gained),
+        "players_on": format_players_on(on_now),
+        "lineup": format_lineup_slots(slots_now),
+        "ball_player": bp,
+        "touch_role": role,
+        "pass_player": pp,
+        "note": note,
+        "film_pending": "Yes" if film_pending else "No",
+        "drive_id": drive_id,
+        "play_n": play_n,
+    }
+
+    # Merge onto parallel tagger stub if this drive+play already exists
+    idx = None
+    if find_snap_index is not None and logs_now is not None:
+        try:
+            idx = find_snap_index(logs_now, drive_id, play_n)
+        except Exception:
+            idx = None
+    if (
+        idx is not None
+        and logs_now is not None
+        and not logs_now.empty
+        and merge_snap_values is not None
+    ):
+        existing = logs_now.reset_index(drop=True).loc[idx].to_dict()
+        # Keep film tags already filled; Main fills call/result
+        merged = merge_snap_values(existing, new_row)
+        # Main just logged — refresh timestamp / call fields from Main
+        for k in (
+            "timestamp",
+            "formation",
+            "formation_variant",
+            "play_call",
+            "play_type",
+            "run_tag",
+            "pass_tag",
+            "result",
+            "yards_gained",
+            "down",
+            "distance",
+            "distance_yards",
+            "field_zone",
+            "ball_yard",
+            "situation",
+            "ball_player",
+            "touch_role",
+            "pass_player",
+            "players_on",
+            "lineup",
+            "call",
+            "play_n",
+        ):
+            if k in new_row:
+                merged[k] = new_row[k]
+        # Preserve non-empty film from stub
+        for k in ("def_front", "coverage", "blitz", "motion"):
+            if str(existing.get(k) or "").strip() and not str(new_row.get(k) or "").strip():
+                merged[k] = existing.get(k)
+        front = str(merged.get("def_front") or "").strip()
+        cov = str(merged.get("coverage") or "").strip()
+        bz = str(merged.get("blitz") or "").strip().lower()
+        if front and cov and bz in {"yes", "no"}:
+            merged["film_pending"] = "No"
+        update_live_log_at(int(idx), merged)
+    else:
+        append_live_log(new_row)
+
+    if advance_booth_snap is not None:
+        try:
+            advance_booth_snap(drive_id)
+        except Exception:
+            pass
     learn_live_tag("formation", formation)
     if formation_variant:
         learn_live_tag("formation_variant", formation_variant)
@@ -9585,6 +9983,7 @@ def _render_live_log_tail(opponent: str, live_logs: pd.DataFrame | None) -> None
         for c in [
             "timestamp",
             "drive_id",
+            "play_n",
             "half",
             "down",
             "distance_yards",

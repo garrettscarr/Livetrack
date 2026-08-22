@@ -47,12 +47,17 @@ On **Main → Home**, set your Streamlit URL once, then copy:
 
 Unlock once with the booth PIN (shared mode).
 
-## Game-night flow
+## Shared Drive · Play (parallel tagging)
 
-1. Laptop opens Call → Start new game / Log as usual (skip defense if rushed).
-2. iPad opens Defense → pending snaps appear under Fill Film (auto-refreshes).
-3. End drive on laptop → Film mode still works on the iPad.
-4. Halftime from laptop (Full or Call).
+Main owns the live pointer. After each LOG, Play # advances.
+
+| Role | Behavior |
+|------|----------|
+| **Main** | Start drive → Play #1. LOG → merge onto that play → advance |
+| **Tagger** | Follows Drive·Play (auto-refresh). Saves Front/Coverage/Blitz/Snaps onto that ID |
+| Jump | Taggers can Prev/Next/Go to catch up without moving everyone |
+
+Taggers do **not** wait for Main to create the row — they upsert a stub; Main merges later.
 
 ## Persistence warning
 
