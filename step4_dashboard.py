@@ -12970,9 +12970,22 @@ def database_page(offense_df: pd.DataFrame) -> None:
 
 
 def _shared_mode_enabled() -> bool:
+    """Booth PIN + multi-device mode (LAN shared flag or Streamlit Community Cloud)."""
     import os
 
-    return os.environ.get("FOOTBALL_EPA_SHARED", "").strip() in {"1", "true", "TRUE", "yes"}
+    flag = os.environ.get("FOOTBALL_EPA_SHARED", "").strip().lower()
+    if flag in {"1", "true", "yes"}:
+        return True
+    # Streamlit Community Cloud
+    if os.environ.get("STREAMLIT_RUNTIME_ENV", "").strip().lower() == "cloud":
+        return True
+    try:
+        secret = st.secrets.get("FOOTBALL_EPA_SHARED", "")
+        if str(secret).strip().lower() in {"1", "true", "yes"}:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _require_booth_pin() -> bool:
