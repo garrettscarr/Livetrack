@@ -6470,69 +6470,92 @@ def _render_booth_role_gate() -> None:
 
 
 def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
-    """Big chip picker: what this tagger device owns."""
+    """One-tap job pick — one field per tagger (recommended booth split)."""
     from booth_stations import (
-        ALL_FOCUSES,
         FOCUS_HELP,
         FOCUS_LABELS,
+        TAGGER_JOBS,
+        TAGGER_SPLIT_HELP,
         focus_summary,
         normalize_focuses,
     )
 
-    st.markdown("## What are you tagging?")
-    st.caption("Pick one or more. You only see those fields.")
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stMainBlockContainer"] { max-width: 480px; margin: 0 auto; }
+        div[data-testid="stButton"] > button {
+            min-height: 4rem !important;
+            font-size: 1.4rem !important;
+            border-radius: 12px !important;
+            font-weight: 700 !important;
+        }
+        [data-testid="stSidebar"] { display: none !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.markdown("## Your job")
+    st.caption(TAGGER_SPLIT_HELP)
 
-    if "tag_focus_draft" not in st.session_state:
-        st.session_state.tag_focus_draft = list(
-            normalize_focuses(st.session_state.get("tag_focuses"))
-        )
+    for key in TAGGER_JOBS:
+        label = FOCUS_LABELS.get(key, key)
+        help_t = FOCUS_HELP.get(key, "")
+        if st.button(
+            label,
+            key=f"tag_job_{key}",
+            use_container_width=True,
+            type="primary",
+            help=help_t,
+        ):
+            st.session_state.tag_focuses = [key]
+            st.session_state.tag_focus_force_edit = False
+            st.session_state.pop("tag_focus_draft", None)
+            try:
+                st.query_params["station"] = "tag"
+                st.query_params["focus"] = key
+            except Exception:
+                pass
+            st.rerun()
+        if help_t:
+            st.caption(help_t)
 
-    draft: list[str] = list(st.session_state.tag_focus_draft)
-    cols = st.columns(2)
-    for i, key in enumerate(ALL_FOCUSES):
-        with cols[i % 2]:
+    with st.expander("Advanced: more than one job on this phone", expanded=False):
+        st.caption("Only if you’re short phones — one job per person is better.")
+        cur = normalize_focuses(st.session_state.get("tag_focuses"))
+        if "tag_focus_draft" not in st.session_state:
+            st.session_state.tag_focus_draft = list(cur)
+        draft: list[str] = list(st.session_state.tag_focus_draft)
+        for key in TAGGER_JOBS:
             on = key in draft
-            label = FOCUS_LABELS.get(key, key)
-            help_t = FOCUS_HELP.get(key, "")
-            btn_label = f"{'✓ ' if on else ''}{label}"
             if st.button(
-                btn_label,
-                key=f"tag_focus_chip_{key}",
+                f"{'✓ ' if on else ''}{FOCUS_LABELS.get(key, key)}",
+                key=f"tag_job_multi_{key}",
                 use_container_width=True,
                 type="primary" if on else "secondary",
-                help=help_t,
             ):
-                if on:
-                    draft = [x for x in draft if x != key]
-                else:
-                    draft = draft + [key]
+                draft = [x for x in draft if x != key] if on else draft + [key]
                 st.session_state.tag_focus_draft = draft
                 st.rerun()
-            if help_t:
-                st.caption(help_t)
+        if st.button(
+            "Continue with selected",
+            type="primary",
+            use_container_width=True,
+            key="tag_focus_continue",
+            disabled=not draft,
+        ):
+            st.session_state.tag_focuses = list(draft)
+            st.session_state.tag_focus_force_edit = False
+            st.session_state.pop("tag_focus_draft", None)
+            try:
+                st.query_params["station"] = "tag"
+                st.query_params["focus"] = ",".join(draft)
+            except Exception:
+                pass
+            st.rerun()
 
-    st.markdown(f"**Selected:** {focus_summary(draft)}")
-
-    if st.button(
-        "Continue",
-        type="primary",
-        use_container_width=True,
-        key="tag_focus_continue",
-        disabled=not draft,
-    ):
-        st.session_state.tag_focuses = list(draft)
-        st.session_state.tag_focus_force_edit = False
-        st.session_state.pop("tag_focus_draft", None)
-        try:
-            st.query_params["station"] = "tag"
-            st.query_params["focus"] = ",".join(draft)
-        except Exception:
-            pass
-        st.rerun()
-
-    if require_save and not draft:
-        st.info("Tap at least one job, then Continue.")
-
+    if require_save:
+        st.caption("Tap one job above.")
     return normalize_focuses(st.session_state.get("tag_focuses"))
 
 
@@ -6564,11 +6587,11 @@ def _render_shared_snap_bar(
     *,
     can_control: bool = True,
     key_prefix: str = "snap",
+    minimal: bool = False,
 ) -> tuple[int | None, int]:
     """
     Shared Drive # · Play # bar.
-    can_control=True (Main): can jump shared pointer / next.
-    Taggers: follow live by default; Jump is local view only unless they hit Set shared.
+    minimal=True (taggers): follow live only + optional catch-up.
     """
     from booth_snaps import (
         load_booth_snap,
@@ -6600,57 +6623,97 @@ def _render_shared_snap_bar(
         f'<div class="ql-drive{" open" if did else ""}">{snap_label(view_did, view_pn)}</div>',
         unsafe_allow_html=True,
     )
-    live_lbl = snap_label(did, shared_pn) if did else "No drive — Start on Main"
-    st.caption(f"Live pointer: {live_lbl}" + (" · following" if follow else " · jumped"))
 
-    c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1.2, 1.4])
-    with c1:
-        if st.button("◀ Prev", use_container_width=True, key=f"{key_prefix}_prev", disabled=view_pn <= 1):
-            st.session_state[f"{key_prefix}_follow"] = False
-            st.session_state[f"{key_prefix}_view_play"] = max(1, view_pn - 1)
-            st.rerun()
-    with c2:
-        if st.button("Next ▶", use_container_width=True, key=f"{key_prefix}_next"):
-            st.session_state[f"{key_prefix}_follow"] = False
-            st.session_state[f"{key_prefix}_view_play"] = view_pn + 1
-            st.rerun()
-    with c3:
-        if st.button("Follow live", use_container_width=True, key=f"{key_prefix}_follow_btn"):
-            st.session_state[f"{key_prefix}_follow"] = True
-            st.session_state[f"{key_prefix}_view_drive"] = did
-            st.session_state[f"{key_prefix}_view_play"] = shared_pn
-            st.rerun()
-    with c4:
-        jump_n = st.number_input(
-            "Play #",
-            min_value=1,
-            value=int(view_pn),
-            step=1,
-            key=f"{key_prefix}_jump_n",
-            label_visibility="collapsed",
-        )
-    with c5:
-        if st.button("Go to play", use_container_width=True, key=f"{key_prefix}_jump_go"):
-            st.session_state[f"{key_prefix}_follow"] = False
-            st.session_state[f"{key_prefix}_view_play"] = int(jump_n)
-            if did is not None:
-                st.session_state[f"{key_prefix}_view_drive"] = int(did)
-            st.rerun()
-
-    if can_control and did is not None:
-        if st.button(
-            "Set shared pointer here (all devices)",
-            key=f"{key_prefix}_set_shared",
-            help="Moves Drive/Play for every tagger following live.",
-        ):
-            set_booth_snap_play(
-                int(did),
-                int(st.session_state.get(f"{key_prefix}_view_play") or shared_pn),
-                opponent=opponent,
-                half=half,
+    if minimal:
+        if did is None:
+            st.caption("Waiting for Main to start a drive…")
+        elif follow:
+            st.caption("Following live · updates when Main logs")
+        else:
+            st.caption("Catch-up mode")
+            if st.button("Back to live", type="primary", use_container_width=True, key=f"{key_prefix}_follow_btn"):
+                st.session_state[f"{key_prefix}_follow"] = True
+                st.session_state[f"{key_prefix}_view_drive"] = did
+                st.session_state[f"{key_prefix}_view_play"] = shared_pn
+                st.rerun()
+        with st.expander("Behind? Jump to a play", expanded=not follow):
+            j1, j2, j3 = st.columns([1, 1, 1])
+            with j1:
+                if st.button("◀", use_container_width=True, key=f"{key_prefix}_prev", disabled=view_pn <= 1):
+                    st.session_state[f"{key_prefix}_follow"] = False
+                    st.session_state[f"{key_prefix}_view_play"] = max(1, view_pn - 1)
+                    st.rerun()
+            with j2:
+                if st.button("▶", use_container_width=True, key=f"{key_prefix}_next"):
+                    st.session_state[f"{key_prefix}_follow"] = False
+                    st.session_state[f"{key_prefix}_view_play"] = view_pn + 1
+                    st.rerun()
+            with j3:
+                jump_n = st.number_input(
+                    "Play",
+                    min_value=1,
+                    value=int(view_pn),
+                    step=1,
+                    key=f"{key_prefix}_jump_n",
+                    label_visibility="collapsed",
+                )
+                if st.button("Go", use_container_width=True, key=f"{key_prefix}_jump_go"):
+                    st.session_state[f"{key_prefix}_follow"] = False
+                    st.session_state[f"{key_prefix}_view_play"] = int(jump_n)
+                    if did is not None:
+                        st.session_state[f"{key_prefix}_view_drive"] = int(did)
+                    st.rerun()
+    else:
+        live_lbl = snap_label(did, shared_pn) if did else "No drive — Start on Main"
+        st.caption(f"Live pointer: {live_lbl}" + (" · following" if follow else " · jumped"))
+        c1, c2, c3, c4, c5 = st.columns([1, 1, 1, 1.2, 1.4])
+        with c1:
+            if st.button("◀ Prev", use_container_width=True, key=f"{key_prefix}_prev", disabled=view_pn <= 1):
+                st.session_state[f"{key_prefix}_follow"] = False
+                st.session_state[f"{key_prefix}_view_play"] = max(1, view_pn - 1)
+                st.rerun()
+        with c2:
+            if st.button("Next ▶", use_container_width=True, key=f"{key_prefix}_next"):
+                st.session_state[f"{key_prefix}_follow"] = False
+                st.session_state[f"{key_prefix}_view_play"] = view_pn + 1
+                st.rerun()
+        with c3:
+            if st.button("Follow live", use_container_width=True, key=f"{key_prefix}_follow_btn"):
+                st.session_state[f"{key_prefix}_follow"] = True
+                st.session_state[f"{key_prefix}_view_drive"] = did
+                st.session_state[f"{key_prefix}_view_play"] = shared_pn
+                st.rerun()
+        with c4:
+            jump_n = st.number_input(
+                "Play #",
+                min_value=1,
+                value=int(view_pn),
+                step=1,
+                key=f"{key_prefix}_jump_n",
+                label_visibility="collapsed",
             )
-            st.session_state[f"{key_prefix}_follow"] = True
-            st.rerun()
+        with c5:
+            if st.button("Go to play", use_container_width=True, key=f"{key_prefix}_jump_go"):
+                st.session_state[f"{key_prefix}_follow"] = False
+                st.session_state[f"{key_prefix}_view_play"] = int(jump_n)
+                if did is not None:
+                    st.session_state[f"{key_prefix}_view_drive"] = int(did)
+                st.rerun()
+
+        if can_control and did is not None:
+            if st.button(
+                "Set shared pointer here (all devices)",
+                key=f"{key_prefix}_set_shared",
+                help="Moves Drive/Play for every tagger following live.",
+            ):
+                set_booth_snap_play(
+                    int(did),
+                    int(st.session_state.get(f"{key_prefix}_view_play") or shared_pn),
+                    opponent=opponent,
+                    half=half,
+                )
+                st.session_state[f"{key_prefix}_follow"] = True
+                st.rerun()
 
     view_did = st.session_state.get(f"{key_prefix}_view_drive")
     view_pn = int(st.session_state.get(f"{key_prefix}_view_play") or 1)
@@ -6669,21 +6732,21 @@ def _render_current_snap_tagger(
     drive_id: int | None,
     play_n: int,
 ) -> None:
-    """Simplified editor: tag only focused fields on this Drive/Play."""
+    """Tagger-only editor: one job, current Drive/Play, big taps."""
     from booth_stations import (
         FOCUS_BLITZ,
         FOCUS_COVERAGE,
         FOCUS_FRONT,
+        FOCUS_LABELS,
         FOCUS_SNAPS,
         focus_summary,
-        has_film_focus,
         has_snaps_focus,
     )
     from booth_snaps import find_snap_index
     from mesh_engine import load_live_log
 
     if drive_id is None:
-        st.warning("No drive open — Main must tap **Start** drive first.")
+        st.info("Waiting for Main to start the drive…")
         return
 
     half = int(st.session_state.get("lt_half") or 1)
@@ -6693,27 +6756,36 @@ def _render_current_snap_tagger(
     if idx is not None and logs is not None and not logs.empty:
         row = logs.reset_index(drop=True).loc[idx].to_dict()
 
-    st.markdown(f"**Tagging** Drive #{drive_id} · Play #{play_n} · {focus_summary(focuses)}")
-    if row.get("formation") or row.get("play_call"):
-        st.caption(
-            f"Call so far: {row.get('formation') or '—'} · {row.get('play_call') or '—'} · "
-            f"{row.get('result') or ''} {row.get('yards_gained') or ''}"
-        )
-    bits = []
-    if str(row.get("def_front") or "").strip():
-        bits.append(f"Front {row.get('def_front')}")
-    if str(row.get("coverage") or "").strip():
-        bits.append(f"Cov {row.get('coverage')}")
-    if str(row.get("blitz") or "").strip().lower() in {"yes", "no"}:
-        bits.append(f"Blitz {row.get('blitz')}")
-    if bits:
-        st.caption("Film so far: " + " · ".join(bits))
+    job = focuses[0] if len(focuses) == 1 else None
+    job_label = FOCUS_LABELS.get(job or "", focus_summary(focuses) if focuses else "Tag")
+    st.markdown(f'<p class="live-title">{job_label}</p>', unsafe_allow_html=True)
 
     updates: dict = {}
     ensure_default_film_tags()
+    full = logs if logs is not None and not logs.empty else pd.DataFrame()
 
-    if has_film_focus(focuses):
-        full = logs if logs is not None and not logs.empty else pd.DataFrame()
+    def _chip_pick(label: str, options: list[str], key: str, current: str = "") -> str:
+        st.caption(label)
+        if key not in st.session_state:
+            st.session_state[key] = current if current in options else (options[0] if options else "")
+        # Keep current if still valid
+        if current and current in options and st.session_state.get(key) not in options:
+            st.session_state[key] = current
+        cols = st.columns(min(3, max(len(options), 1)))
+        for i, opt in enumerate(options):
+            with cols[i % len(cols)]:
+                active = str(st.session_state.get(key, "")) == opt
+                if st.button(
+                    opt,
+                    key=f"{key}_chip_{i}",
+                    use_container_width=True,
+                    type="primary" if active else "secondary",
+                ):
+                    st.session_state[key] = opt
+                    st.rerun()
+        return str(st.session_state.get(key, ""))
+
+    if FOCUS_FRONT in focuses:
         front_opts = _merge_film_tag_options(
             _tag_options(
                 offense_df["def_front"] if "def_front" in offense_df.columns else pd.Series(dtype=str),
@@ -6721,6 +6793,13 @@ def _render_current_snap_tagger(
             full["def_front"] if "def_front" in full.columns else pd.Series(dtype=str),
             kind="def_front",
         )
+        updates["def_front"] = _chip_pick(
+            "Front",
+            front_opts[:12] or ["Even", "Odd"],
+            f"tg_front_{drive_id}_{play_n}",
+            str(row.get("def_front") or ""),
+        )
+    if FOCUS_COVERAGE in focuses:
         cov_opts = _merge_film_tag_options(
             _tag_options(
                 offense_df["coverage"] if "coverage" in offense_df.columns else pd.Series(dtype=str),
@@ -6728,42 +6807,39 @@ def _render_current_snap_tagger(
             full["coverage"] if "coverage" in full.columns else pd.Series(dtype=str),
             kind="coverage",
         )
-        show_f = FOCUS_FRONT in focuses
-        show_c = FOCUS_COVERAGE in focuses
-        show_b = FOCUS_BLITZ in focuses
-        cols = st.columns(max(1, sum([show_f, show_c, show_b])))
-        ci = 0
-        if show_f:
-            with cols[ci]:
-                # seed select from existing
-                cur_f = str(row.get("def_front") or "")
-                if cur_f and f"ff_cur_front_{drive_id}_{play_n}" not in st.session_state:
-                    st.session_state[f"ff_front_cur_{drive_id}_{play_n}"] = cur_f
-                updates["def_front"] = _select_or_type(
-                    "Front", front_opts, f"ff_front_cur_{drive_id}_{play_n}"
-                )
-            ci += 1
-        if show_c:
-            with cols[ci]:
-                updates["coverage"] = _select_or_type(
-                    "Coverage", cov_opts, f"ff_cov_cur_{drive_id}_{play_n}"
-                )
-            ci += 1
-        if show_b:
-            with cols[ci]:
-                cur_b = str(row.get("blitz") or "No").strip().title()
-                if cur_b not in {"Yes", "No"}:
-                    cur_b = "No"
-                updates["blitz"] = st.radio(
-                    "Blitz",
-                    ["No", "Yes"],
-                    horizontal=True,
-                    key=f"ff_blitz_cur_{drive_id}_{play_n}",
-                    index=1 if cur_b == "Yes" else 0,
-                )
+        updates["coverage"] = _chip_pick(
+            "Coverage",
+            cov_opts[:12] or ["Cover 2", "Cover 3", "Cover 4"],
+            f"tg_cov_{drive_id}_{play_n}",
+            str(row.get("coverage") or ""),
+        )
+    if FOCUS_BLITZ in focuses:
+        st.caption("Blitz")
+        cur_b = str(row.get("blitz") or "No").strip().title()
+        if cur_b not in {"Yes", "No"}:
+            cur_b = "No"
+        b1, b2 = st.columns(2)
+        with b1:
+            if st.button(
+                "No",
+                key=f"tg_blitz_no_{drive_id}_{play_n}",
+                use_container_width=True,
+                type="primary" if cur_b == "No" else "secondary",
+            ):
+                st.session_state[f"tg_blitz_val_{drive_id}_{play_n}"] = "No"
+                st.rerun()
+        with b2:
+            if st.button(
+                "Yes",
+                key=f"tg_blitz_yes_{drive_id}_{play_n}",
+                use_container_width=True,
+                type="primary" if cur_b == "Yes" else "secondary",
+            ):
+                st.session_state[f"tg_blitz_val_{drive_id}_{play_n}"] = "Yes"
+                st.rerun()
+        updates["blitz"] = st.session_state.get(f"tg_blitz_val_{drive_id}_{play_n}", cur_b)
 
     if has_snaps_focus(focuses) and FOCUS_SNAPS in focuses:
-        st.markdown("#### Snap (call)")
         updates["formation"] = st.text_input(
             "Formation",
             value=str(row.get("formation") or ""),
@@ -6774,21 +6850,9 @@ def _render_current_snap_tagger(
             value=str(row.get("play_call") or ""),
             key=f"snap_play_{drive_id}_{play_n}",
         )
-        updates["result"] = st.selectbox(
-            "Result",
-            ["Gain", "No gain", "Incomplete", "TD", "Turnover", "Penalty", "Sack / TFL", "Other"],
-            key=f"snap_res_{drive_id}_{play_n}",
-        )
-        updates["yards_gained"] = st.number_input(
-            "Yards",
-            value=int(row.get("yards_gained") or 0),
-            step=1,
-            key=f"snap_yds_{drive_id}_{play_n}",
-        )
         updates["film_pending"] = "Yes"
 
-    if st.button("Save on this play", type="primary", use_container_width=True, key=f"snap_save_{drive_id}_{play_n}"):
-        # Drop empty strings so merge won't wipe siblings — except blitz Yes/No
+    if st.button("SAVE", type="primary", use_container_width=True, key=f"snap_save_{drive_id}_{play_n}"):
         clean = {}
         for k, v in updates.items():
             if k == "blitz":
@@ -6799,18 +6863,21 @@ def _render_current_snap_tagger(
                 continue
             else:
                 clean[k] = v
-        ok, _, msg = _booth_upsert_snap(
-            drive_id=int(drive_id),
-            play_n=int(play_n),
-            updates=clean,
-            opponent=opponent,
-            half=half,
-        )
-        if ok:
-            st.success(f"Saved · {msg}")
-            st.rerun()
+        if not clean:
+            st.warning("Pick a value first.")
         else:
-            st.error(msg or "Could not save.")
+            ok, _, msg = _booth_upsert_snap(
+                drive_id=int(drive_id),
+                play_n=int(play_n),
+                updates=clean,
+                opponent=opponent,
+                half=half,
+            )
+            if ok:
+                st.success("Saved")
+                st.rerun()
+            else:
+                st.error(msg or "Could not save.")
 
 
 def _booth_switch_role_control() -> None:
@@ -6867,9 +6934,10 @@ def _resolve_booth_base_url() -> str:
 def _render_home_page() -> None:
     """Main booth home: tonight status + tagger invite links."""
     from booth_stations import (
-        ALL_FOCUSES,
         FOCUS_HELP,
         FOCUS_LABELS,
+        TAGGER_JOBS,
+        TAGGER_SPLIT_HELP,
         main_invite_url,
         tagger_invite_url,
     )
@@ -6931,9 +6999,7 @@ def _render_home_page() -> None:
 
     st.markdown("---")
     st.markdown("### Invite taggers")
-    st.caption(
-        "Send a link below. They enter the PIN, then land on a simplified tagging screen."
-    )
+    st.caption(TAGGER_SPLIT_HELP)
 
     base = _resolve_booth_base_url()
     with st.expander("Set booth website URL", expanded=not bool(base)):
@@ -6959,18 +7025,16 @@ def _render_home_page() -> None:
         st.warning("Set the booth website URL above so invite links work.")
         return
 
-    general = tagger_invite_url(base)
-    st.markdown("**General tagger invite** (they choose Front / Coverage / Blitz / Snaps)")
-    st.code(general, language=None)
-    st.caption("Text or AirDrop this link. They unlock with the booth PIN, then pick what to tag.")
-
-    st.markdown("**Job-specific invites** (skip the picker)")
-    for key in ALL_FOCUSES:
+    st.markdown("**Send one link per phone**")
+    for key in TAGGER_JOBS:
         link = tagger_invite_url(base, [key])
         label = FOCUS_LABELS.get(key, key)
         help_t = FOCUS_HELP.get(key, "")
         st.markdown(f"**{label}** — {help_t}")
         st.code(link, language=None)
+
+    with st.expander("Let them pick the job (one link)"):
+        st.code(tagger_invite_url(base), language=None)
 
     with st.expander("Main device link"):
         st.code(main_invite_url(base) or base, language=None)
@@ -6995,6 +7059,27 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     )
     focuses = resolve_tag_focuses(st.session_state, st.query_params, booth_station)
 
+    if tagger:
+        # Stripped chrome — tagging only
+        st.markdown(
+            """
+            <style>
+            [data-testid="stSidebar"] { display: none !important; }
+            [data-testid="stHeader"] { background: transparent !important; }
+            #MainMenu, footer { visibility: hidden !important; }
+            div[data-testid="stMainBlockContainer"] {
+                padding-top: 0.4rem !important;
+                max-width: 480px !important;
+            }
+            div[data-testid="stButton"] > button {
+                min-height: 3rem !important;
+                font-size: 1.1rem !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+
     # Taggers must pick focuses before the simplified UI
     if tagger and (
         not focuses or st.session_state.get("tag_focus_force_edit")
@@ -7004,23 +7089,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         return
 
     if tagger:
-        st.caption(f"Tagger · {focus_summary(focuses)}")
-        if st.button("Change what I’m tagging", key="tag_refocus"):
-            st.session_state.tag_focus_force_edit = True
-            st.session_state.tag_focus_draft = list(focuses)
-            st.rerun()
-        if has_film_focus(focuses) and not has_snaps_focus(focuses):
-            st.markdown(
-                f'<p class="live-title">{focus_summary(focuses)}</p>',
-                unsafe_allow_html=True,
-            )
-        elif has_snaps_focus(focuses) and not has_film_focus(focuses):
-            st.markdown('<p class="live-title">Snap log</p>', unsafe_allow_html=True)
-        else:
-            st.markdown(
-                f'<p class="live-title">{focus_summary(focuses)}</p>',
-                unsafe_allow_html=True,
-            )
+        pass  # title comes from current-snap editor
     else:
         st.markdown('<p class="live-title">Live Track</p>', unsafe_allow_html=True)
 
@@ -7067,28 +7136,15 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     except Exception:
         pass
 
-    # --- Film-only / snap tagger: shared Drive·Play + current snap editor ---
+    # --- Tagger: Drive·Play + one job only ---
     if tagger and (has_film_focus(focuses) or has_snaps_focus(focuses)):
-        live_logs = load_live_log()
         st.session_state.lt_unit = "Offense"
-        st.caption(f"vs {opponent} · half {st.session_state.get('lt_half', 1)}")
-        if st.session_state.get("lt_tablet"):
-            st.markdown(
-                """
-                <style>
-                [data-testid="stMainBlockContainer"] { padding-top: 0.5rem !important; }
-                .block-container { max-width: 920px; }
-                div[data-testid="stButton"] > button { min-height: 2.35rem !important; }
-                </style>
-                """,
-                unsafe_allow_html=True,
-            )
         from datetime import timedelta
 
-        @st.fragment(run_every=timedelta(seconds=4))
+        @st.fragment(run_every=timedelta(seconds=3))
         def _tagger_snap_loop() -> None:
             view_did, view_pn = _render_shared_snap_bar(
-                opponent, can_control=False, key_prefix="tag"
+                opponent, can_control=False, key_prefix="tag", minimal=True
             )
             _render_current_snap_tagger(
                 opponent,
@@ -7097,9 +7153,9 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
                 drive_id=view_did,
                 play_n=view_pn,
             )
-            with st.expander("Catch-up queue (older pending)", expanded=False):
-                fresh = load_live_log()
-                _live_track_fill_film(opponent, offense_df, fresh, focuses=focuses)
+            if st.button("Change job", key="tag_refocus_bottom"):
+                st.session_state.tag_focus_force_edit = True
+                st.rerun()
 
         _tagger_snap_loop()
         return
@@ -14052,11 +14108,11 @@ def main() -> None:
     )
     focuses = resolve_tag_focuses(st.session_state, st.query_params, booth_station)
 
-    _booth_switch_role_control()
+    if not tagger:
+        _booth_switch_role_control()
 
     if tagger:
-        st.sidebar.markdown("**Tagger**")
-        st.sidebar.caption(focus_summary(focuses) if focuses else "Pick what you tag")
+        # Sidebar hidden via CSS on Live Track — no page nav
         page = "Live Track"
     else:
         pages = [

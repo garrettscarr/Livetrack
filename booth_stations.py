@@ -37,11 +37,19 @@ FOCUS_LABELS: dict[str, str] = {
 }
 
 FOCUS_HELP: dict[str, str] = {
-    FOCUS_SNAPS: "Formation, play, result",
-    FOCUS_FRONT: "Defensive front",
-    FOCUS_COVERAGE: "Coverage shell",
-    FOCUS_BLITZ: "Yes / No blitz",
+    FOCUS_SNAPS: "Formation, play, result (usually Main)",
+    FOCUS_FRONT: "Even / Odd / …",
+    FOCUS_COVERAGE: "Cover 2 / 3 / 4 / …",
+    FOCUS_BLITZ: "Yes or No",
 }
+
+# Extra taggers: one job each (simplest booth split)
+TAGGER_JOBS: tuple[str, ...] = (FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ)
+
+TAGGER_SPLIT_HELP = (
+    "Best split: one phone per job — Front · Coverage · Blitz. "
+    "Main logs the snaps."
+)
 
 FILM_FOCUSES: frozenset[str] = frozenset(
     {FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ}
