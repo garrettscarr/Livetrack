@@ -82,11 +82,11 @@ UNITS = {
     },
 }
 
-CHART_TEMPLATE = "plotly_dark"
+CHART_TEMPLATE = "plotly_white"
 # Low value = red, high value = green (used when POSITIVE is good for the selected unit)
-GREEN_SCALE = [[0.0, "#7f1d1d"], [0.5, "#374151"], [1.0, "#15803d"]]
+GREEN_SCALE = [[0.0, "#7f1d1d"], [0.5, "#9ca3af"], [1.0, "#15803d"]]
 # Defense luck only: low/negative luck = green (held them below expectation)
-DEFENSE_LUCK_SCALE = [[0.0, "#15803d"], [0.5, "#374151"], [1.0, "#7f1d1d"]]
+DEFENSE_LUCK_SCALE = [[0.0, "#15803d"], [0.5, "#9ca3af"], [1.0, "#7f1d1d"]]
 
 
 def epa_color_scale(unit_cfg: dict) -> list:
@@ -107,23 +107,23 @@ def show_defense_legend() -> None:
         "**Red / negative EPA = bad** (gain, TD). We flip opponent EPA so higher is always better for your unit."
     )
 CHART_LAYOUT = {
-    "paper_bgcolor": "#0c140f",
-    "plot_bgcolor": "#050805",
-    "font": {"color": "#F8FAF8", "size": 13},
-    "title": {"font": {"color": "#F8FAF8", "size": 16}},
+    "paper_bgcolor": "#FFFFFF",
+    "plot_bgcolor": "#F8FAF9",
+    "font": {"color": "#14201a", "size": 13},
+    "title": {"font": {"color": "#14201a", "size": 16}},
     "xaxis": {
-        "gridcolor": "#1e3328",
-        "linecolor": "#2a4538",
-        "tickfont": {"color": "#E8F0EA"},
-        "title_font": {"color": "#E8F0EA"},
+        "gridcolor": "#E2E8E4",
+        "linecolor": "#C5D0CA",
+        "tickfont": {"color": "#3d4f45"},
+        "title_font": {"color": "#3d4f45"},
     },
     "yaxis": {
-        "gridcolor": "#1e3328",
-        "linecolor": "#2a4538",
-        "tickfont": {"color": "#E8F0EA"},
-        "title_font": {"color": "#E8F0EA"},
+        "gridcolor": "#E2E8E4",
+        "linecolor": "#C5D0CA",
+        "tickfont": {"color": "#3d4f45"},
+        "title_font": {"color": "#3d4f45"},
     },
-    "legend": {"font": {"color": "#F8FAF8"}},
+    "legend": {"font": {"color": "#14201a"}},
 }
 
 
@@ -157,55 +157,55 @@ def inject_styles() -> None:
         """
         <style>
         .stApp, [data-testid="stAppViewContainer"], [data-testid="stHeader"] {
-            background-color: #050805;
-            color: #F8FAF8;
+            background-color: #FFFFFF;
+            color: #14201a;
         }
         [data-testid="stSidebar"] {
-            background-color: #0c140f;
-            border-right: 1px solid #14201a;
+            background-color: #F4F7F5;
+            border-right: 1px solid #D8E2DC;
         }
         [data-testid="stSidebar"] * {
-            color: #E8F0EA !important;
+            color: #1e3328 !important;
         }
         .block-container {
             padding-top: 0.75rem;
-            color: #F8FAF8;
+            color: #14201a;
         }
         h1, h2, h3, h4, p, label, span, .stMarkdown {
-            color: #F8FAF8 !important;
+            color: #14201a !important;
         }
         div[data-testid="stMetric"] {
-            background: #0c140f;
-            border: 1px solid #1e3328;
+            background: #F4F7F5;
+            border: 1px solid #D8E2DC;
             border-radius: 10px;
             padding: 0.5rem 0.75rem;
         }
         div[data-testid="stMetric"] label {
-            color: #A8B5AB !important;
+            color: #5c6b62 !important;
         }
         div[data-testid="stMetric"] [data-testid="stMetricValue"] {
-            color: #ffffff !important;
+            color: #14201a !important;
             font-size: 1.6rem !important;
             font-weight: 700 !important;
         }
         div[data-testid="stMetric"] [data-testid="stMetricDelta"] {
-            color: #D5E0D8 !important;
+            color: #3d4f45 !important;
         }
         [data-testid="stDataFrame"] {
-            background: #0c140f;
-            border: 1px solid #1e3328;
+            background: #F4F7F5;
+            border: 1px solid #D8E2DC;
             border-radius: 8px;
         }
         [data-testid="stDataFrame"] div {
-            color: #F8FAF8 !important;
+            color: #14201a !important;
         }
         .stTabs [data-baseweb="tab-list"] {
-            background-color: #0c140f;
+            background-color: #F4F7F5;
             border-radius: 8px;
             padding: 4px;
         }
         .stTabs [data-baseweb="tab"] {
-            color: #A8B5AB !important;
+            color: #5c6b62 !important;
         }
         .stTabs [aria-selected="true"] {
             background-color: #1B4332 !important;
@@ -213,14 +213,14 @@ def inject_styles() -> None:
         }
         div[data-baseweb="select"] > div,
         div[data-baseweb="input"] {
-            background-color: #0c140f !important;
-            color: #F8FAF8 !important;
-            border-color: #1e3328 !important;
+            background-color: #F4F7F5 !important;
+            color: #14201a !important;
+            border-color: #D0DAD4 !important;
         }
         .stAlert {
-            background-color: #0c140f;
-            color: #E8F0EA;
-            border: 1px solid #1e3328;
+            background-color: #F4F7F5;
+            color: #1e3328;
+            border: 1px solid #D8E2DC;
         }
         /* Live Assistant */
         .live-title {
@@ -231,19 +231,19 @@ def inject_styles() -> None:
         }
         .live-situation {
             font-size: 1.05rem !important;
-            color: #74C69D !important;
+            color: #1B4332 !important;
             font-weight: 700 !important;
             margin: 0.2rem 0 0.35rem 0 !important;
         }
         .gc-spot {
-            background: #0a120e;
-            border: 1px solid #1e3328;
+            background: #F4F7F5;
+            border: 1px solid #D8E2DC;
             border-radius: 10px;
             padding: 0.55rem 0.4rem;
             text-align: center;
             font-weight: 900;
             font-size: 1.05rem;
-            color: #F4A261 !important;
+            color: #C2410C !important;
             margin-top: 1.35rem;
         }
         .gc-plays {
@@ -258,33 +258,33 @@ def inject_styles() -> None:
             padding: 0.28rem 0.7rem;
             font-size: 0.88rem;
             font-weight: 800;
-            border: 1px solid #1e3328;
-            background: #0c140f;
-            color: #E8F0EA !important;
+            border: 1px solid #D8E2DC;
+            background: #F4F7F5;
+            color: #1e3328 !important;
         }
         .gc-play.up {
             border-color: #52B788;
-            background: #0d2818;
-            color: #B7F7C8 !important;
+            background: #E8F5E9;
+            color: #1B4332 !important;
         }
         .gc-play.down {
             border-color: #E76F51;
-            background: #2a120c;
-            color: #FF8A65 !important;
+            background: #FDECEA;
+            color: #B91C1C !important;
         }
         .gc-ballto {
-            background: #0a120e;
+            background: #F4F7F5;
             border: 1px solid #F4A261;
             border-radius: 8px;
             padding: 0.35rem 0.65rem;
             margin: 0.25rem 0 0.35rem 0;
-            color: #E8F0EA !important;
+            color: #1e3328 !important;
             font-size: 0.92rem;
         }
-        .gc-ballto b { color: #F4A261 !important; }
+        .gc-ballto b { color: #C2410C !important; }
         .live-card {
-            background: #0c140f;
-            border: 1px solid #1e3328;
+            background: #F4F7F5;
+            border: 1px solid #D8E2DC;
             border-radius: 12px;
             padding: 0.9rem 1rem;
             margin-bottom: 0.6rem;
@@ -297,17 +297,17 @@ def inject_styles() -> None:
         .live-call {
             font-size: 1.35rem;
             font-weight: 700;
-            color: #ffffff;
+            color: #14201a;
         }
         .live-meta {
             font-size: 1rem;
-            color: #A8B5AB;
+            color: #5c6b62;
         }
-        .live-good { color: #74C69D !important; font-weight: 700; }
-        .live-bad { color: #f87171 !important; font-weight: 700; }
+        .live-good { color: #1B4332 !important; font-weight: 700; }
+        .live-bad { color: #dc2626 !important; font-weight: 700; }
         .live-spot {
-            background: #0c140f;
-            border: 1px solid #1e3328;
+            background: #F4F7F5;
+            border: 1px solid #D8E2DC;
             border-radius: 12px;
             padding: 0.85rem 1rem;
             margin-bottom: 0.75rem;
@@ -316,22 +316,22 @@ def inject_styles() -> None:
             font-size: 0.85rem;
             text-transform: uppercase;
             letter-spacing: 0.04em;
-            color: #8A9A8E;
+            color: #5c6b62;
             margin-bottom: 0.35rem;
         }
         .live-spot-value {
             font-size: 1.2rem;
             font-weight: 700;
-            color: #ffffff;
+            color: #14201a;
             line-height: 1.35;
         }
         .live-spot-meta {
             font-size: 0.95rem;
-            color: #A8B5AB;
+            color: #5c6b62;
             margin-top: 0.25rem;
         }
         .live-spot-accent {
-            border-color: #74C69D;
+            border-color: #1B4332;
         }
         /* Madden-style depth chart (compact) */
         .dc-field {
@@ -383,7 +383,7 @@ def inject_styles() -> None:
             color: #f8fafc;
             font-weight: 800;
             font-size: 0.88rem;
-            background: #14201a;
+            background: #FFFFFF;
             border: 1px solid #74C69D;
             border-radius: 6px;
             padding: 0.2rem 0.25rem;
@@ -407,7 +407,7 @@ def inject_styles() -> None:
         }
         .dc-chip {
             display: inline-block;
-            background: #0a120e;
+            background: #F4F7F5;
             border: 1px solid #8A9A8E;
             color: #f8fafc;
             border-radius: 999px;
@@ -417,9 +417,9 @@ def inject_styles() -> None:
             font-size: 0.85rem;
         }
         .dc-chip-on {
-            border-color: #74C69D;
+            border-color: #1B4332;
             box-shadow: 0 0 8px rgba(116,198,157,0.35);
-            background: #14201a;
+            background: #FFFFFF;
         }
         .dc-chip-pos {
             color: #B7E4C7;
@@ -471,37 +471,37 @@ def inject_styles() -> None:
         }
         /* Quick Log — pace banners */
         .ql-banner {
-            background: #1B4332;
+            background: #E8F5E9;
             border: 1px solid #2D6A4F;
             border-radius: 12px;
             padding: 0.65rem 0.85rem;
             margin: 0.35rem 0 0.75rem 0;
-            color: #F8FAF8 !important;
+            color: #14201a !important;
             font-weight: 600;
         }
         .ql-banner.warn {
-            background: #3b2f14;
+            background: #FFF8E7;
             border-color: #f59e0b;
-            color: #E8F5E9 !important;
+            color: #3d4f45 !important;
         }
         .ql-drive {
-            background: #0a120e;
-            border: 1px solid #1e3328;
+            background: #F4F7F5;
+            border: 1px solid #D8E2DC;
             border-radius: 8px;
             padding: 0.3rem 0.55rem;
             margin: 0.1rem 0 0.25rem 0;
-            color: #D5E0D8 !important;
+            color: #3d4f45 !important;
             font-weight: 700;
             font-size: 0.92rem;
         }
         .ql-drive.open { border-color: #40916C; }
         .ql-sticky {
-            background: #14201a;
+            background: #FFFFFF;
             border: 1px solid #74C69D;
             border-radius: 8px;
             padding: 0.3rem 0.55rem;
             margin: 0.2rem 0 0.35rem 0;
-            color: #E8F5E9 !important;
+            color: #3d4f45 !important;
             font-weight: 800;
             font-size: 1rem;
         }
@@ -531,14 +531,14 @@ def inject_styles() -> None:
                 font-size: 1rem !important;
             }
         }
-        /* Halftime report — dark cards, high contrast */
+        /* Halftime report — light cards, high contrast */
         .ht-wrap { margin: 0.25rem 0 1rem 0; }
         .ht-title {
             font-size: 1.4rem;
             font-weight: 900;
             letter-spacing: 0.04em;
             margin: 0 0 0.75rem 0;
-            color: #F8FAF8 !important;
+            color: #14201a !important;
         }
         .ht-strip {
             display: grid;
@@ -547,9 +547,9 @@ def inject_styles() -> None:
             margin-bottom: 1rem;
         }
         .ht-stat {
-            background: #0a120e;
-            color: #F8FAF8 !important;
-            border: 1px solid #1e3328;
+            background: #F4F7F5;
+            color: #14201a !important;
+            border: 1px solid #D8E2DC;
             border-radius: 12px;
             padding: 0.75rem 0.85rem;
             text-align: center;
@@ -558,13 +558,13 @@ def inject_styles() -> None:
             font-size: 1.7rem;
             font-weight: 900;
             line-height: 1.1;
-            color: #74C69D !important;
+            color: #1B4332 !important;
         }
         .ht-stat .l {
             font-size: 0.75rem;
             text-transform: uppercase;
             letter-spacing: 0.06em;
-            color: #A8B5AB !important;
+            color: #5c6b62 !important;
             margin-top: 0.2rem;
         }
         .ht-sec {
@@ -572,12 +572,12 @@ def inject_styles() -> None:
             font-weight: 800;
             text-transform: uppercase;
             letter-spacing: 0.08em;
-            color: #74C69D !important;
+            color: #1B4332 !important;
             margin: 0.65rem 0 0.35rem 0;
         }
         .ht-blurb {
             font-size: 0.95rem;
-            color: #D5E0D8 !important;
+            color: #3d4f45 !important;
             margin: 0 0 0.6rem 0;
             line-height: 1.35;
         }
@@ -591,30 +591,30 @@ def inject_styles() -> None:
             display: inline-flex;
             align-items: center;
             gap: 0.35rem;
-            background: #14201a;
-            border: 1px solid #2a4538;
+            background: #FFFFFF;
+            border: 1px solid #D0DAD4;
             border-radius: 999px;
             padding: 0.25rem 0.65rem;
             font-size: 0.85rem;
             font-weight: 700;
-            color: #F8FAF8 !important;
+            color: #14201a !important;
         }
-        .ht-chip.up { border-color: #2D6A4F; color: #95D5B2 !important; }
-        .ht-chip.down { border-color: #ef4444; color: #fca5a5 !important; }
-        .ht-chip .n { color: #8A9A8E !important; font-weight: 600; font-size: 0.78rem; }
+        .ht-chip.up { border-color: #2D6A4F; color: #1B4332 !important; }
+        .ht-chip.down { border-color: #ef4444; color: #b91c1c !important; }
+        .ht-chip .n { color: #5c6b62 !important; font-weight: 600; font-size: 0.78rem; }
         .ht-col-title {
             font-size: 1rem;
             font-weight: 800;
             margin-bottom: 0.45rem;
-            color: #E8F0EA !important;
+            color: #1e3328 !important;
         }
         .ht-card {
             border-radius: 10px;
             padding: 0.6rem 0.75rem;
             margin-bottom: 0.45rem;
-            border: 1px solid #2a4538;
-            background: #14201a;
-            color: #F8FAF8 !important;
+            border: 1px solid #D0DAD4;
+            background: #FFFFFF;
+            color: #14201a !important;
         }
         .ht-card .tag {
             display: inline-block;
@@ -630,22 +630,22 @@ def inject_styles() -> None:
         .ht-card .call {
             font-weight: 800;
             font-size: 1.05rem;
-            color: #F8FAF8 !important;
+            color: #14201a !important;
         }
         .ht-card .meta {
             font-size: 0.88rem;
-            color: #A8B5AB !important;
+            color: #5c6b62 !important;
             margin-top: 0.2rem;
         }
-        .ht-kill { background: #3f1d1d; border-color: #ef4444; }
+        .ht-kill { background: #FDECEA; border-color: #ef4444; }
         .ht-kill .tag { background: #dc2626; color: #fff !important; }
-        .ht-lean { background: #1B4332; border-color: #2D6A4F; }
-        .ht-lean .tag { background: #1B4332; color: #fff !important; }
-        .ht-test { background: #3b2f14; border-color: #f59e0b; }
+        .ht-lean { background: #E8F5E9; border-color: #2D6A4F; }
+        .ht-lean .tag { background: #E8F5E9; color: #fff !important; }
+        .ht-test { background: #FFF8E7; border-color: #f59e0b; }
         .ht-test .tag { background: #d97706; color: #fff !important; }
-        .ht-hot { background: #14201a; border-color: #2D6A4F; }
-        .ht-hot .tag { background: #1B4332; color: #fff !important; }
-        .ht-cold { background: #1e3328; border-color: #8A9A8E; }
+        .ht-hot { background: #FFFFFF; border-color: #2D6A4F; }
+        .ht-hot .tag { background: #E8F5E9; color: #fff !important; }
+        .ht-cold { background: #F4F7F5; border-color: #5c6b62; }
         .ht-cold .tag { background: #6b7280; color: #fff !important; }
         .ht-pin {
             display: flex;
@@ -654,12 +654,12 @@ def inject_styles() -> None:
             gap: 0.5rem;
             padding: 0.5rem 0.7rem;
             border-radius: 10px;
-            background: #14201a;
-            border: 1px solid #2a4538;
+            background: #FFFFFF;
+            border: 1px solid #D0DAD4;
             margin-bottom: 0.4rem;
-            color: #F8FAF8 !important;
+            color: #14201a !important;
         }
-        .ht-pin .name { font-weight: 700; font-size: 0.98rem; color: #F8FAF8 !important; }
+        .ht-pin .name { font-weight: 700; font-size: 0.98rem; color: #14201a !important; }
         .ht-badge {
             font-size: 0.72rem;
             font-weight: 900;
@@ -669,7 +669,7 @@ def inject_styles() -> None:
             white-space: nowrap;
             color: #ffffff !important;
         }
-        .ht-badge-confirmed { background: #1B4332; color: #fff !important; }
+        .ht-badge-confirmed { background: #E8F5E9; color: #fff !important; }
         .ht-badge-kill { background: #dc2626; color: #fff !important; }
         .ht-badge-unproven { background: #6b7280; color: #fff !important; }
         .ht-player {
@@ -677,32 +677,32 @@ def inject_styles() -> None:
             justify-content: space-between;
             align-items: baseline;
             padding: 0.4rem 0.55rem;
-            border-bottom: 1px solid #1e3328;
+            border-bottom: 1px solid #E2E8E4;
             font-size: 0.98rem;
-            color: #E8F0EA !important;
-            background: #14201a;
+            color: #1e3328 !important;
+            background: #FFFFFF;
         }
-        .ht-player small { color: #8A9A8E !important; }
-        .ht-player .pm-up { color: #74C69D !important; font-weight: 800; }
-        .ht-player .pm-down { color: #f87171 !important; font-weight: 800; }
+        .ht-player small { color: #5c6b62 !important; }
+        .ht-player .pm-up { color: #1B4332 !important; font-weight: 800; }
+        .ht-player .pm-down { color: #dc2626 !important; font-weight: 800; }
         /* Keep expanders / plotly readable (no white-on-white) */
         [data-testid="stExpander"] {
-            background-color: #0c140f !important;
-            border: 1px solid #1e3328 !important;
+            background-color: #F4F7F5 !important;
+            border: 1px solid #D8E2DC !important;
             border-radius: 10px;
         }
         [data-testid="stExpander"] summary,
         [data-testid="stExpander"] p,
         [data-testid="stExpander"] span,
         [data-testid="stExpander"] label {
-            color: #F8FAF8 !important;
+            color: #14201a !important;
         }
         .stPlotlyChart, .js-plotly-plot, .plot-container {
-            background-color: #0c140f !important;
+            background-color: #F4F7F5 !important;
         }
         div[data-testid="stCaptionContainer"] p,
         div[data-testid="stCaptionContainer"] span {
-            color: #A8B5AB !important;
+            color: #5c6b62 !important;
         }
 
         /* School primary buttons */
@@ -710,12 +710,13 @@ def inject_styles() -> None:
         button[data-testid="baseButton-primary"] {
             background-color: #1B4332 !important;
             border-color: #2D6A4F !important;
-            color: #F8FAF8 !important;
+            color: #FFFFFF !important;
         }
         div[data-testid="stButton"] > button[kind="primary"]:hover,
         button[data-testid="baseButton-primary"]:hover {
             background-color: #2D6A4F !important;
             border-color: #40916C !important;
+            color: #FFFFFF !important;
         }
         /* Compact Database roster */
         [data-testid="stDataFrame"] td,
@@ -730,8 +731,8 @@ def inject_styles() -> None:
             padding: 0.35rem 0.5rem !important;
         }
         div[data-testid="stForm"] {
-            border: 1px solid #1e3328 !important;
-            background: #0c140f !important;
+            border: 1px solid #D8E2DC !important;
+            background: #F4F7F5 !important;
             padding: 0.55rem 0.75rem !important;
             border-radius: 10px;
         }
@@ -781,9 +782,9 @@ def prior_season_plays(df: pd.DataFrame) -> pd.DataFrame:
     return df[~_is_current_season_mask(df["season"])].copy()
 
 
-def load_plays(unit: str) -> pd.DataFrame:
-    if not DB_FILE.exists():
-        return pd.DataFrame()
+@st.cache_data(show_spinner=False)
+def _load_plays_cached(unit: str, mtime: float, size: int) -> pd.DataFrame:
+    """Cached season table; mtime/size bust cache when football.db changes."""
     table = UNITS[unit]["table"]
     with sqlite3.connect(DB_FILE) as conn:
         try:
@@ -809,7 +810,6 @@ def load_plays(unit: str) -> pd.DataFrame:
 
         invert = bool(UNITS[unit].get("invert_xp"))
         df = add_success_flags(df, invert=invert)
-    # Runtime guard: never trust prior-year formations even if DB flags are stale
     if "season" in df.columns:
         prior = ~_is_current_season_mask(df["season"])
         if "form_tagged" in df.columns:
@@ -817,6 +817,16 @@ def load_plays(unit: str) -> pd.DataFrame:
         if "tags_ok" in df.columns:
             df.loc[prior, "tags_ok"] = 0
     return df
+
+
+def load_plays(unit: str) -> pd.DataFrame:
+    if not DB_FILE.exists():
+        return pd.DataFrame()
+    try:
+        st_info = DB_FILE.stat()
+        return _load_plays_cached(unit, st_info.st_mtime, st_info.st_size).copy()
+    except Exception:
+        return pd.DataFrame()
 
 
 def avg_epa_table(
@@ -976,8 +986,10 @@ def _gamecast_recent_plays(
     opponent: str,
     *,
     limit: int = 8,
+    drive_id: int | None = None,
+    half: int | None = None,
 ) -> list[dict]:
-    """Recent offense snaps with start/end spot + estimated EPA for GameCast."""
+    """Offense snaps with start/end spot + estimated EPA for GameCast / drive map."""
     from mesh_engine import (
         _estimate_live_play_epa,
         _load_ep_table_from_season,
@@ -986,17 +998,23 @@ def _gamecast_recent_plays(
 
     if live_logs is None or getattr(live_logs, "empty", True):
         return []
-    logs = filter_live_logs(live_logs, opponent=opponent)
+    logs = filter_live_logs(live_logs, opponent=opponent, half=half)
     if logs.empty:
         return []
     if "unit" in logs.columns:
         logs = logs[logs["unit"].astype(str).str.lower() == "offense"]
     if logs.empty:
         return []
+    if drive_id is not None and "drive_id" in logs.columns:
+        did = int(drive_id)
+        logs = logs[pd.to_numeric(logs["drive_id"], errors="coerce") == did]
+        if logs.empty:
+            return []
     ep_table = _load_ep_table_from_season()
-    tail = logs.tail(int(limit))
+    if drive_id is None and limit:
+        logs = logs.tail(int(limit))
     rows: list[dict] = []
-    for _, r in tail.iterrows():
+    for _, r in logs.iterrows():
         try:
             start = int(r.get("ball_yard"))
         except (TypeError, ValueError):
@@ -1010,6 +1028,14 @@ def _gamecast_recent_plays(
         epa = float(_estimate_live_play_epa(r, ep_table))
         call = str(r.get("play_call") or r.get("call") or "—").strip() or "—"
         result = str(r.get("result") or "").strip()
+        play_n = r.get("play_n")
+        try:
+            pn = int(play_n) if play_n is not None and str(play_n).strip() != "" else None
+        except (TypeError, ValueError):
+            pn = None
+        label = f"{call} · {yds:+d} · EPA {epa:+.2f}"
+        if pn is not None:
+            label = f"#{pn} {label}"
         rows.append(
             {
                 "start": start,
@@ -1018,10 +1044,89 @@ def _gamecast_recent_plays(
                 "epa": round(epa, 2),
                 "call": call,
                 "result": result,
-                "label": f"{call} · {yds:+d} · EPA {epa:+.2f}",
+                "play_n": pn,
+                "label": label,
             }
         )
     return rows
+
+
+def _render_halftime_drive_map(
+    opponent: str,
+    live_logs: pd.DataFrame | None,
+    *,
+    key_prefix: str = "ht",
+) -> None:
+    """Read-only GameCast: pick a 1st-half drive and review field arrows."""
+    from mesh_engine import filter_live_logs
+
+    st.caption("Field map of each drive — review at halftime, not during live snaps.")
+    if live_logs is None or getattr(live_logs, "empty", True):
+        st.info("No live snaps yet.")
+        return
+
+    half1 = filter_live_logs(live_logs, opponent=opponent, half=1)
+    scope = half1 if not half1.empty else filter_live_logs(live_logs, opponent=opponent)
+    if scope.empty:
+        st.info("No snaps for this opponent yet.")
+        return
+
+    drive_ids = known_drive_ids(scope)
+    if not drive_ids and "drive_id" in scope.columns:
+        for v in scope["drive_id"].dropna().unique():
+            try:
+                drive_ids.append(int(v))
+            except (TypeError, ValueError):
+                pass
+        drive_ids = sorted(set(drive_ids))
+    if not drive_ids:
+        st.info("No drive #s on the log yet — Start drive on Live Track next game.")
+        return
+
+    pick = st.selectbox(
+        "Drive #",
+        drive_ids,
+        index=len(drive_ids) - 1,
+        key=f"{key_prefix}_gc_drive",
+        format_func=lambda d: f"Drive #{d}",
+    )
+    plays = _gamecast_recent_plays(
+        scope,
+        opponent,
+        drive_id=int(pick),
+        half=None,
+        limit=0,
+    )
+    if not plays:
+        st.caption(f"No offense snaps on drive #{pick}.")
+        return
+
+    ball = int(plays[-1].get("end") or plays[-1].get("start") or 45)
+    fig = _build_gamecast_figure(ball, plays, players=None, selected_player="")
+    st.plotly_chart(
+        fig,
+        width="stretch",
+        key=f"{key_prefix}_gc_chart_{pick}",
+        theme=None,
+        config={
+            "displayModeBar": False,
+            "scrollZoom": False,
+            "staticPlot": True,
+        },
+    )
+    rows = [
+        {
+            "#": p.get("play_n") or i + 1,
+            "Call": p.get("call") or "—",
+            "Result": p.get("result") or "—",
+            "Yds": p.get("yards"),
+            "EPA": p.get("epa"),
+            "From": format_ball_spot(int(p.get("start") or 45)),
+            "To": format_ball_spot(int(p.get("end") or 45)),
+        }
+        for i, p in enumerate(plays)
+    ]
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
 
 
 FORMATION_LAYOUTS_FILE = PROJECT_DIR / "data" / "formation_layouts.json"
@@ -3529,26 +3634,49 @@ def compose_formation_label(formation: str, variant: str = "") -> str:
 
 
 def append_live_log(row: dict) -> None:
-    """Append a play; rewrite file so new columns stay aligned."""
+    """Append a play. Fast-path: one CSV line when schema matches; else full rewrite."""
+    import csv
+
     from file_lock import file_lock
 
     LIVE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     with file_lock(LIVE_LOG_FILE):
-        frame = pd.DataFrame([row])
         if LIVE_LOG_FILE.exists() and LIVE_LOG_FILE.stat().st_size > 0:
+            try:
+                with LIVE_LOG_FILE.open("r", encoding="utf-8", newline="") as f:
+                    header = next(csv.reader(f), None)
+            except Exception as exc:
+                raise RuntimeError(
+                    f"Could not read {LIVE_LOG_FILE.name} — snap NOT logged "
+                    f"(protecting existing plays). Retry. ({exc})"
+                ) from exc
+            # True append when row adds no new columns (common path under tempo)
+            if header and not any(k not in header for k in row.keys()):
+                values = []
+                for col in header:
+                    v = row.get(col, "")
+                    if v is None:
+                        v = ""
+                    elif isinstance(v, float) and pd.isna(v):
+                        v = ""
+                    values.append(v)
+                with LIVE_LOG_FILE.open("a", encoding="utf-8", newline="") as f:
+                    csv.writer(f).writerow(values)
+                return
             try:
                 existing = pd.read_csv(LIVE_LOG_FILE)
             except Exception as exc:
-                # Never wipe a full night's log because of a bad/partial read
                 raise RuntimeError(
                     f"Could not read {LIVE_LOG_FILE.name} — snap NOT logged "
                     f"(protecting existing plays). Retry. ({exc})"
                 ) from exc
             existing = _ensure_live_log_text_dtypes(existing)
-            combined = pd.concat([existing, frame], ignore_index=True)
+            combined = pd.concat(
+                [existing, _ensure_live_log_text_dtypes(pd.DataFrame([row]))],
+                ignore_index=True,
+            )
         else:
-            combined = frame
-        combined = _ensure_live_log_text_dtypes(combined)
+            combined = _ensure_live_log_text_dtypes(pd.DataFrame([row]))
         ordered = [c for c in LIVE_LOG_COLUMNS if c in combined.columns]
         extras = [c for c in combined.columns if c not in ordered]
         _atomic_live_log_to_csv(combined[ordered + extras])
@@ -3916,17 +4044,16 @@ def _normalize_roster_player(p: dict) -> dict:
     return {"name": name, "positions": cleaned, "starter": starter}
 
 
-def load_roster() -> list[dict]:
-    """Current-season roster only (legacy flat files migrate on save)."""
-    current_season_id = _season_api().current_season_id
-
+@st.cache_data(show_spinner=False)
+def _load_roster_cached(mtime: float, size: int, season_id: str) -> list[dict]:
+    """Cached roster JSON; busts when file or active season changes."""
     if not ROSTER_FILE.exists():
         return []
     try:
         import json
 
         data = json.loads(ROSTER_FILE.read_text())
-        sid = current_season_id()
+        sid = season_id
         raw: list = []
         if isinstance(data, list):
             raw = data
@@ -3941,11 +4068,22 @@ def load_roster() -> list[dict]:
                 elif isinstance(bucket, list):
                     raw = bucket
                 else:
-                    # Active season not in seasons yet — use top-level mirror
                     raw = data.get("players", []) or []
             else:
                 raw = data.get("players", []) or []
         return [_normalize_roster_player(p) for p in raw if str(p.get("name", "")).strip()]
+    except Exception:
+        return []
+
+
+def load_roster() -> list[dict]:
+    """Current-season roster only (legacy flat files migrate on save)."""
+    current_season_id = _season_api().current_season_id
+    if not ROSTER_FILE.exists():
+        return []
+    try:
+        st_info = ROSTER_FILE.stat()
+        return list(_load_roster_cached(st_info.st_mtime, st_info.st_size, current_season_id()))
     except Exception:
         return []
 
@@ -5354,6 +5492,32 @@ def ensure_default_film_tags() -> None:
                 cur.append(d)
                 low.add(d.lower())
         sess[kind] = cur
+
+
+def _file_mtime_size(path: Path) -> tuple[float, int]:
+    try:
+        if path.exists():
+            info = path.stat()
+            return float(info.st_mtime), int(info.st_size)
+    except OSError:
+        pass
+    return 0.0, 0
+
+
+@st.cache_data(show_spinner=False)
+def _cached_season_tag_col(unit: str, col: str, mtime: float, size: int) -> list[str]:
+    """Unique season tags for one column — busts when football.db changes."""
+    if not DB_FILE.exists() or size <= 0:
+        return []
+    df = _load_plays_cached(unit, mtime, size)
+    if df is None or df.empty or col not in df.columns:
+        return []
+    return _tag_options(df[col])
+
+
+def _season_tag_opts(col: str, *, unit: str = "Offense") -> list[str]:
+    mtime, size = _file_mtime_size(DB_FILE)
+    return list(_cached_season_tag_col(unit, col, mtime, size))
 
 
 def _merge_film_tag_options(base: list[str], *extra: pd.Series, kind: str) -> list[str]:
@@ -7090,17 +7254,44 @@ def _resolve_booth_base_url() -> str:
     return ""
 
 
+def _import_booth_stations():
+    """Load local booth_stations.py (avoids stale/shadowed Cloud imports)."""
+    import importlib
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    # Prefer the file next to this dashboard (Streamlit Cloud /mount/src/…)
+    path = Path(__file__).resolve().parent / "booth_stations.py"
+    if path.is_file():
+        spec = importlib.util.spec_from_file_location("_booth_stations_app", path)
+        if spec and spec.loader:
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules["_booth_stations_app"] = mod
+            spec.loader.exec_module(mod)
+            return mod
+    return importlib.import_module("booth_stations")
+
+
 def _render_home_page() -> None:
     """Main booth home: tonight status + tagger invite links."""
-    from booth_stations import (
-        FOCUS_HELP,
-        FOCUS_LABELS,
-        TAGGER_PACK_THIRD,
-        TAGGER_PACKS,
-        TAGGER_SPLIT_HELP,
-        main_invite_url,
-        tagger_invite_url,
-    )
+    try:
+        bs = _import_booth_stations()
+        FOCUS_HELP = bs.FOCUS_HELP
+        FOCUS_LABELS = bs.FOCUS_LABELS
+        TAGGER_PACK_THIRD = bs.TAGGER_PACK_THIRD
+        TAGGER_PACKS = bs.TAGGER_PACKS
+        TAGGER_SPLIT_HELP = bs.TAGGER_SPLIT_HELP
+        main_invite_url = bs.main_invite_url
+        tagger_invite_url = bs.tagger_invite_url
+    except Exception as exc:
+        st.error(
+            "Could not load booth invite helpers. "
+            "Reboot the Streamlit Cloud app or redeploy from latest `main` "
+            "(needs current `booth_stations.py`)."
+        )
+        st.exception(exc)
+        return
     from team_config import booth_pin, load_team_config, save_booth_public_url
 
     cfg = load_team_config()
@@ -7335,55 +7526,76 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
 
     if tagger and has_snaps_focus(focuses):
         st.caption(f"vs {opponent}")
-        top = st.columns([2.6, 1])
-        with top[0]:
-            opp_choices = list(season_opps) if season_opps else []
-            cur = str(st.session_state.get("lt_page_opponent") or "").strip()
-            if cur and cur not in opp_choices:
-                opp_choices = [cur] + opp_choices
-            if not opp_choices:
-                opp_choices = ["Unknown"]
-            opponent = st.selectbox(
-                "Tonight's opponent",
-                opp_choices,
-                key="lt_page_opponent",
-                label_visibility="collapsed",
-            )
-        with top[1]:
-            st.radio("Half", [1, 2], horizontal=True, key="lt_half", label_visibility="collapsed")
+        # Keep opponent/half out of the hot path; seed keys for session
+        if "lt_page_opponent" not in st.session_state:
+            st.session_state.lt_page_opponent = opponent
+        if "lt_half" not in st.session_state:
+            st.session_state.lt_half = 1
         sheet = "Log"
         st.session_state.lt_main_sheet = "Log"
-    else:
-        top = st.columns([2.4, 1, 1.2])
-        with top[0]:
-            opp_choices = list(season_opps) if season_opps else []
-            cur = str(st.session_state.get("lt_page_opponent") or "").strip()
-            if cur and cur not in opp_choices:
-                opp_choices = [cur] + opp_choices
-            if not opp_choices:
-                opp_choices = ["Unknown"]
+        opp_choices = list(season_opps) if season_opps else []
+        cur = str(st.session_state.get("lt_page_opponent") or "").strip()
+        if cur and cur not in opp_choices:
+            opp_choices = [cur] + opp_choices
+        if not opp_choices:
+            opp_choices = ["Unknown"]
+        half_now = int(st.session_state.get("lt_half") or 1)
+        with st.expander(
+            f"Game setup · vs {cur or opponent} · H{half_now}",
+            expanded=False,
+        ):
             opponent = st.selectbox(
                 "Tonight's opponent",
                 opp_choices,
                 key="lt_page_opponent",
-                label_visibility="collapsed",
             )
-        with top[1]:
-            st.radio("Half", [1, 2], horizontal=True, key="lt_half", label_visibility="collapsed")
-        with top[2]:
-            if st.session_state.get("lt_main_sheet") == "Play log":
-                st.session_state.lt_main_sheet = "Log"
+            st.radio("Half", [1, 2], horizontal=True, key="lt_half")
+            if booth_station == "full" or has_snaps_focus(focuses):
+                st.markdown("---")
+                _render_start_new_game_panel(season_opps)
+        opponent = str(st.session_state.get("lt_page_opponent") or opponent)
+    else:
+        if "lt_page_opponent" not in st.session_state:
+            st.session_state.lt_page_opponent = default_opp
+        if "lt_half" not in st.session_state:
+            st.session_state.lt_half = 1
+        if st.session_state.get("lt_main_sheet") == "Play log":
+            st.session_state.lt_main_sheet = "Log"
+        if "lt_main_sheet" not in st.session_state:
+            st.session_state.lt_main_sheet = "Log"
+
+        opp_choices = list(season_opps) if season_opps else []
+        cur = str(st.session_state.get("lt_page_opponent") or "").strip()
+        if cur and cur not in opp_choices:
+            opp_choices = [cur] + opp_choices
+        if not opp_choices:
+            opp_choices = ["Unknown"]
+        half_now = int(st.session_state.get("lt_half") or 1)
+        sheet_now = str(st.session_state.get("lt_main_sheet") or "Log")
+        setup_open = sheet_now == "Lineup"
+        with st.expander(
+            f"Game setup · vs {cur or default_opp} · H{half_now}"
+            + (f" · {sheet_now}" if sheet_now != "Log" else ""),
+            expanded=setup_open,
+        ):
+            opponent = st.selectbox(
+                "Tonight's opponent",
+                opp_choices,
+                key="lt_page_opponent",
+            )
+            st.radio("Half", [1, 2], horizontal=True, key="lt_half")
             sheet = st.radio(
                 "Sheet",
                 ["Log", "Lineup"],
                 horizontal=True,
                 key="lt_main_sheet",
-                label_visibility="collapsed",
             )
-
-    if booth_station == "full" or (tagger and has_snaps_focus(focuses)):
-        with st.expander("Start new game", expanded=False):
-            _render_start_new_game_panel(season_opps)
+            if booth_station == "full":
+                st.markdown("---")
+                st.caption("Start new game")
+                _render_start_new_game_panel(season_opps)
+        opponent = str(st.session_state.get("lt_page_opponent") or opponent)
+        sheet = str(st.session_state.get("lt_main_sheet") or "Log")
 
     live_logs = load_live_log()
     st.session_state.lt_unit = "Offense"
@@ -7432,26 +7644,50 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             unsafe_allow_html=True,
         )
 
-    # Drive row — Call + Full (not film-only taggers)
+    # Drive + play in one bar (Start / End / Undo). Catch-up under expander.
     dstate = load_drive_state()
     active_did = current_drive_id(opponent)
     can_undo = bool(dstate.get("undo_stack"))
-    drive_lbl = f"Drive #{active_did}" if active_did is not None else "No drive"
-    d1, d2, d3, d4 = st.columns([1.4, 1, 1, 1])
-    d1.markdown(f'<div class="ql-drive{" open" if active_did else ""}">{drive_lbl}</div>', unsafe_allow_html=True)
-    if d2.button("Start", type="primary", use_container_width=True, key="lt_start_drive", disabled=active_did is not None):
+    play_n_lbl = ""
+    try:
+        from booth_snaps import load_booth_snap
+
+        snap = load_booth_snap()
+        if active_did is not None and snap.get("drive_id") == int(active_did):
+            play_n_lbl = f" · Play #{int(snap.get('play_n') or 1)}"
+    except Exception:
+        pass
+    drive_lbl = (
+        f"Drive #{active_did}{play_n_lbl}" if active_did is not None else "No drive · LOG starts one"
+    )
+    d1, d2, d3, d4 = st.columns([1.6, 1, 1, 1])
+    d1.markdown(
+        f'<div class="ql-drive{" open" if active_did else ""}">{drive_lbl}</div>',
+        unsafe_allow_html=True,
+    )
+    if d2.button(
+        "Start",
+        use_container_width=True,
+        key="lt_start_drive",
+        disabled=active_did is not None,
+        help="Optional — first LOG also starts a drive automatically.",
+    ):
         st.success(f"Drive #{start_drive(opponent)} started.")
         st.rerun()
     if d3.button(
-        "End" if tagger else "End + Film",
+        "End drive",
         use_container_width=True,
         key="lt_end_fill",
         disabled=active_did is None,
+        help="Ends the drive. Film stays with taggers — Main stays on Log.",
     ):
         ended = end_drive()
-        if booth_station == "full":
-            st.session_state.lt_play_sheet = "Fill Film"
-            st.session_state.ff_drive_filter = str(ended) if ended is not None else "all"
+        # Do not yank Main into Fill Film — taggers own film packs
+        if ended is not None:
+            st.session_state.ff_drive_filter = str(ended)
+            st.session_state["lt_end_drive_note"] = (
+                f"Drive #{ended} ended · taggers keep filming"
+            )
         st.rerun()
     if d4.button("Undo", use_container_width=True, key="lt_undo_drive", disabled=not can_undo):
         entry = undo_drive_action()
@@ -7459,9 +7695,14 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             st.success(f"Undid {entry.get('action')}.")
         st.rerun()
 
-    # Shared Drive · Play pointer (Main advances on LOG; taggers follow)
+    end_note = st.session_state.pop("lt_end_drive_note", None)
+    if end_note:
+        st.caption(end_note)
+
+    # Rare: jump / set shared pointer (taggers follow live by default)
     if booth_station == "full" and active_did is not None:
-        _render_shared_snap_bar(opponent, can_control=True, key_prefix="main")
+        with st.expander("Catch-up / set shared Play #", expanded=False):
+            _render_shared_snap_bar(opponent, can_control=True, key_prefix="main")
 
     pending_n = count_film_pending(live_logs, opponent)
     _apply_pending_live_situation()
@@ -7500,23 +7741,38 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         (k for k, v in label_to_mode.items() if v == cur_mode),
         mode_opts[0],
     )
+    # Film mode buried — keep Log hot path clean unless pending or already on Film
     if booth_station == "full" and len(mode_opts) > 1:
-        chosen = st.radio(
-            "Mode",
-            mode_opts,
-            index=mode_opts.index(default_label) if default_label in mode_opts else 0,
-            horizontal=True,
-            key="lt_play_sheet_label",
-            label_visibility="collapsed",
-        )
-        st.session_state.lt_play_sheet = label_to_mode.get(chosen, "Log")
+        if cur_mode == "Fill Film":
+            chosen = st.radio(
+                "Mode",
+                mode_opts,
+                index=mode_opts.index(default_label) if default_label in mode_opts else 0,
+                horizontal=True,
+                key="lt_play_sheet_label",
+                label_visibility="collapsed",
+            )
+            st.session_state.lt_play_sheet = label_to_mode.get(chosen, "Log")
+        else:
+            with st.expander(f"Film inbox ({pending_n})", expanded=False):
+                if st.button("Open Fill Film", key="lt_open_film", use_container_width=True):
+                    st.session_state.lt_play_sheet = "Fill Film"
+                    st.rerun()
+            st.session_state.lt_play_sheet = "Log"
     else:
         st.session_state.lt_play_sheet = "Log"
 
     if st.session_state.get("lt_play_sheet") == "Fill Film" and booth_station == "full":
         _live_track_fill_film(opponent, offense_df, live_logs, focuses=None)
     else:
-        _live_track_log_screen(opponent, offense_df, defense_df, live_logs, quick=True)
+
+        @st.fragment
+        def _main_log_fragment() -> None:
+            _live_track_log_screen(
+                opponent, offense_df, defense_df, live_logs, quick=True
+            )
+
+        _main_log_fragment()
 
     if booth_station == "full":
         with st.expander("Halftime / end 1st half", expanded=False):
@@ -10375,7 +10631,7 @@ def _ql_build_phrase_draft(phrase: str, parsed: dict, booth_favs: dict) -> dict:
     ball_player = str(parsed.get("ball_player") or "")
     touch_role = str(parsed.get("touch_role") or "")
     pass_player = str(parsed.get("pass_player") or "")
-    # GameCast player tap fills ball-to when the phrase didn't name anyone
+    # GameCast player tap (legacy) still fills ball-to if set; Log no longer shows the field
     if not ball_player:
         ball_player = str(st.session_state.get("lt_gc_ball_player") or "")
     if ball_player and not touch_role:
@@ -10455,12 +10711,22 @@ def _ql_build_phrase_draft(phrase: str, parsed: dict, booth_favs: dict) -> dict:
     }
 
 
+def _ql_rerun(*, full: bool = False) -> None:
+    """Prefer fragment-scoped rerun on Live Track Log (faster); fall back to full."""
+    if full:
+        st.rerun()
+        return
+    try:
+        st.rerun(scope="fragment")
+    except TypeError:
+        st.rerun()
+
+
 def _ql_draft_ready_for_fast_log(draft: dict) -> tuple[bool, str]:
     """
     Whether a phrase draft can skip the confirm card (one-tap LOG).
 
-    Requires a known call + spoken outcome. New / unmapped plays always
-    go through confirm so the name gets saved correctly.
+    Known call → Fast OK (thin outcome defaults applied). New plays always confirm.
     """
     if not isinstance(draft, dict):
         return False, "Nothing to log"
@@ -10472,11 +10738,18 @@ def _ql_draft_ready_for_fast_log(draft: dict) -> tuple[bool, str]:
     play_call = _ql_norm(draft.get("play_call") or "")
     if not (formation or run_tag or pass_tag or play_call):
         return False, "Need formation or play tags"
-    if not draft.get("has_outcome"):
-        return False, "Say the result / yards (e.g. gain of 8)"
-    if not str(draft.get("result") or "").strip():
-        return False, "Need a result"
     return True, ""
+
+
+def _ql_apply_fast_outcome_defaults(draft: dict) -> dict:
+    """Fill Gain / 0 when result/yards weren't spoken — keeps Fast one-tap."""
+    out = dict(draft)
+    if not str(out.get("result") or "").strip():
+        out["result"] = "Gain"
+    if out.get("yards") is None:
+        out["yards"] = 0
+    out["has_outcome"] = True
+    return out
 
 
 def _ql_commit_phrase_draft(
@@ -10598,6 +10871,10 @@ def _ql_commit_phrase_draft(
     _clear_phrase_confirm_widgets()
     st.session_state.ql_step = 0
     st.session_state.ql_clear_phrase_pending = True
+    # Sticky for "Same as last" on the next snap
+    last_phrase = str(draft.get("phrase") or "").strip()
+    if last_phrase:
+        st.session_state.ql_last_phrase = last_phrase
     for k in ("lt_gc_ball_player", "lt_gc_touch_role", "lt_gc_touch_slot"):
         st.session_state.pop(k, None)
     next_sit = st.session_state.get("lt_situation_pending") or {}
@@ -10641,111 +10918,65 @@ def _render_phrase_confirm_card(
     cov_opts = list(cov_opts or DEFAULT_FILM_COVERAGES)
 
     st.markdown("#### Confirm snap")
-    st.caption(f'Heard: *{draft.get("phrase") or "—"}*')
-    if draft.get("play_is_new"):
-        st.warning(
-            "New / unmapped play — confirm the name and type so it saves for next time."
+    heard = draft.get("phrase") or "—"
+    call_disp = (
+        _display_play_call(
+            str(draft.get("run_tag") or ""),
+            str(draft.get("pass_tag") or ""),
+            str(draft.get("play_call") or ""),
         )
+        or "—"
+    )
+    form_disp = " ".join(
+        x
+        for x in [
+            str(draft.get("formation") or "").strip(),
+            str(draft.get("variant") or "").strip(),
+        ]
+        if x and x.lower() not in {"base", "none", "(none)"}
+    ) or "—"
+    st.caption(
+        f"*{heard}*  ·  {form_disp}  ·  {call_disp}  ·  "
+        f"{draft.get('down')}&{draft.get('distance_yards')}  ·  "
+        f"{format_ball_spot(int(draft.get('ball_yard') or 45))}"
+    )
+    if draft.get("play_is_new"):
+        st.warning("New play — confirm name/type under Edit call details if needed.")
 
     on_names = list(get_on_field(include_ol=False).keys())
     roster = load_roster()
     roster_names = [str(p.get("name") or "").strip() for p in roster if p.get("name")]
     ball_opts = [""] + sorted(set(on_names + roster_names), key=str.upper)
 
-    c1, c2 = st.columns(2)
-    with c1:
-        formation = st.text_input(
-            "Formation", value=str(draft.get("formation") or ""), key=f"ql_cf_form_{gen}"
-        )
-        variant = st.text_input(
-            "Variant", value=str(draft.get("variant") or ""), key=f"ql_cf_var_{gen}"
-        )
-        try:
-            from formation_logic import formation_note as _form_note
-
-            _bn = _form_note(formation, variant)
-            if _bn:
-                st.caption(f"Breakdown: {_bn}")
-        except Exception:
-            pass
-        motion = st.text_input(
-            "Motion", value=str(draft.get("motion") or ""), key=f"ql_cf_mot_{gen}"
-        )
-        run_tag = st.text_input(
-            "Run tag",
-            value=str(draft.get("run_tag") or ""),
-            key=f"ql_cf_run_{gen}",
-            help="RPO run concept (e.g. Army). Leave blank for pass-only.",
-        )
-        pass_tag = st.text_input(
-            "Pass tag",
-            value=str(draft.get("pass_tag") or ""),
-            key=f"ql_cf_pass_{gen}",
-            help="RPO pass concept (e.g. Bear). Leave blank for run-only. New combos OK.",
-        )
-        ptypes = ["run", "pass", "special"]
-        # Dual tags = RPO concepts; type is how the snap ended (run or pass)
-        if _ql_norm(str(draft.get("run_tag") or "")) and _ql_norm(str(draft.get("pass_tag") or "")):
-            ptypes = ["run", "pass"]
-            suggested = resolve_logged_play_type(
-                run_tag=str(draft.get("run_tag") or ""),
-                pass_tag=str(draft.get("pass_tag") or ""),
-                play_type=str(draft.get("play_type") or ""),
-                result=str(draft.get("result") or ""),
-                phrase=str(draft.get("phrase") or ""),
-                outcome_lane=str(draft.get("outcome_lane") or ""),
-            )
-            cur_pt = suggested if suggested in ptypes else "pass"
-        else:
-            cur_pt = str(draft.get("play_type") or "run")
-            if cur_pt == "rpo":
-                cur_pt = "run"
-            if cur_pt not in ptypes:
-                ptypes = list(PLAY_TYPES)
-        play_type = st.selectbox(
-            "Play type",
-            ptypes,
-            index=ptypes.index(cur_pt) if cur_pt in ptypes else 0,
-            format_func=lambda t: PLAY_TYPE_LABELS.get(t, t),
-            key=f"ql_cf_ptype_{gen}",
-            help="For RPOs (run+pass tags), this is the actual snap: carry=Run, throw=Pass.",
-        )
-        st.caption(
-            "Display: "
-            + (
-                _display_play_call(
-                    str(draft.get("run_tag") or ""),
-                    str(draft.get("pass_tag") or ""),
-                    str(draft.get("play_call") or ""),
-                )
-                or "—"
-            )
-        )
-    with c2:
-        result_opts = [
-            "Gain",
-            "No gain",
-            "Incomplete",
-            "TD",
-            "Turnover",
-            "Penalty",
-            "Sack / TFL",
-            "Punt",
-            "Other",
-        ]
-        cur_res = str(draft.get("result") or "Gain")
+    # Thin strip: result / yards / ball — what Main fixes under tempo
+    result_opts = [
+        "Gain",
+        "No gain",
+        "Incomplete",
+        "TD",
+        "Turnover",
+        "Penalty",
+        "Sack / TFL",
+        "Punt",
+        "Other",
+    ]
+    cur_res = str(draft.get("result") or "Gain")
+    t1, t2, t3 = st.columns([1.2, 1, 1.4])
+    with t1:
         result = st.selectbox(
             "Result",
             result_opts,
             index=result_opts.index(cur_res) if cur_res in result_opts else 0,
             key=f"ql_cf_result_{gen}",
         )
+    with t2:
         yards = st.number_input(
             "Yards",
             value=int(draft.get("yards") or 0),
             step=1,
             key=f"ql_cf_yards_{gen}",
         )
+    with t3:
         bp_cur = str(draft.get("ball_player") or "")
         if bp_cur and bp_cur not in ball_opts:
             ball_opts = [""] + [bp_cur] + [n for n in ball_opts if n]
@@ -10756,52 +10987,108 @@ def _render_phrase_confirm_card(
             index=bp_idx,
             format_func=lambda n: n or "(none)",
             key=f"ql_cf_ball_{gen}",
-            help="Who got the ball — “luke carry for 10”, “complete to luke for 10”, or pick here.",
-        )
-        pp_cur = str(draft.get("pass_player") or "")
-        is_pass_snap = (
-            str(draft.get("outcome_lane") or "") == "pass"
-            or str(draft.get("play_type") or "") == "pass"
-            or str(draft.get("result") or "") == "Incomplete"
-            or str(draft.get("touch_role") or "") == "target"
-        )
-        if not pp_cur and is_pass_snap:
-            pp_cur = lineup_slot_player("QB")
-        if not is_pass_snap:
-            # Don't pre-select QB on runs — user can still pick if needed
-            pp_cur = str(draft.get("pass_player") or "")
-        if pp_cur and pp_cur not in ball_opts:
-            ball_opts_p = [""] + [pp_cur] + [n for n in ball_opts if n]
-        else:
-            ball_opts_p = list(ball_opts)
-        pp_idx = ball_opts_p.index(pp_cur) if pp_cur in ball_opts_p else 0
-        pass_player = st.selectbox(
-            "Passer",
-            ball_opts_p,
-            index=pp_idx,
-            format_func=lambda n: n or "(none / not a pass)",
-            key=f"ql_cf_passer_{gen}",
-            help="QB for counting stats — auto from lineup on pass snaps, or say “Garrett to Luke”.",
-        )
-        st.caption(
-            f"{draft.get('down')} & {draft.get('distance_yards')} · "
-            f"{format_ball_spot(int(draft.get('ball_yard') or 45))}"
         )
 
-    def_spoken = bool(
-        draft.get("def_front") or draft.get("coverage") or draft.get("blitz")
+    # Full call editor — only mount widgets when opened (Streamlit always runs expanders)
+    need_edit = bool(draft.get("play_is_new"))
+    edit_key = f"ql_cf_edit_open_{gen}"
+    if edit_key not in st.session_state:
+        st.session_state[edit_key] = need_edit
+    edit_open = st.checkbox(
+        "Edit call details",
+        key=edit_key,
+        help="Formation, tags, passer, defense — leave closed when the caption looks right.",
     )
-    with st.expander("Defense (optional — Fill Film later)", expanded=def_spoken):
+    if edit_open:
+        c1, c2 = st.columns(2)
+        with c1:
+            formation = st.text_input(
+                "Formation", value=str(draft.get("formation") or ""), key=f"ql_cf_form_{gen}"
+            )
+            variant = st.text_input(
+                "Variant", value=str(draft.get("variant") or ""), key=f"ql_cf_var_{gen}"
+            )
+            try:
+                from formation_logic import formation_note as _form_note
 
-        def _choice_opts(cur: str, options: list[str]) -> list[str]:
-            out = [""] + [o for o in options if o]
-            cur = str(cur or "")
-            if cur and cur not in out:
-                out = [""] + [cur] + [o for o in out if o and o != cur]
-            return out
+                _bn = _form_note(formation, variant)
+                if _bn:
+                    st.caption(f"Breakdown: {_bn}")
+            except Exception:
+                pass
+            motion = st.text_input(
+                "Motion", value=str(draft.get("motion") or ""), key=f"ql_cf_mot_{gen}"
+            )
+            run_tag = st.text_input(
+                "Run tag",
+                value=str(draft.get("run_tag") or ""),
+                key=f"ql_cf_run_{gen}",
+            )
+            pass_tag = st.text_input(
+                "Pass tag",
+                value=str(draft.get("pass_tag") or ""),
+                key=f"ql_cf_pass_{gen}",
+            )
+            ptypes = ["run", "pass", "special"]
+            if _ql_norm(str(draft.get("run_tag") or "")) and _ql_norm(
+                str(draft.get("pass_tag") or "")
+            ):
+                ptypes = ["run", "pass"]
+                suggested = resolve_logged_play_type(
+                    run_tag=str(draft.get("run_tag") or ""),
+                    pass_tag=str(draft.get("pass_tag") or ""),
+                    play_type=str(draft.get("play_type") or ""),
+                    result=str(draft.get("result") or ""),
+                    phrase=str(draft.get("phrase") or ""),
+                    outcome_lane=str(draft.get("outcome_lane") or ""),
+                )
+                cur_pt = suggested if suggested in ptypes else "pass"
+            else:
+                cur_pt = str(draft.get("play_type") or "run")
+                if cur_pt == "rpo":
+                    cur_pt = "run"
+                if cur_pt not in ptypes:
+                    ptypes = list(PLAY_TYPES)
+            play_type = st.selectbox(
+                "Play type",
+                ptypes,
+                index=ptypes.index(cur_pt) if cur_pt in ptypes else 0,
+                format_func=lambda t: PLAY_TYPE_LABELS.get(t, t),
+                key=f"ql_cf_ptype_{gen}",
+            )
+        with c2:
+            pp_cur = str(draft.get("pass_player") or "")
+            is_pass_snap = (
+                str(draft.get("outcome_lane") or "") == "pass"
+                or str(draft.get("play_type") or "") == "pass"
+                or str(draft.get("result") or "") == "Incomplete"
+                or str(draft.get("touch_role") or "") == "target"
+            )
+            if not pp_cur and is_pass_snap:
+                pp_cur = lineup_slot_player("QB")
+            if not is_pass_snap:
+                pp_cur = str(draft.get("pass_player") or "")
+            if pp_cur and pp_cur not in ball_opts:
+                ball_opts_p = [""] + [pp_cur] + [n for n in ball_opts if n]
+            else:
+                ball_opts_p = list(ball_opts)
+            pp_idx = ball_opts_p.index(pp_cur) if pp_cur in ball_opts_p else 0
+            pass_player = st.selectbox(
+                "Passer",
+                ball_opts_p,
+                index=pp_idx,
+                format_func=lambda n: n or "(none / not a pass)",
+                key=f"ql_cf_passer_{gen}",
+            )
+            st.caption("Defense optional — taggers usually own film")
 
-        d1, d2, d3 = st.columns(3)
-        with d1:
+            def _choice_opts(cur: str, options: list[str]) -> list[str]:
+                out = [""] + [o for o in options if o]
+                cur = str(cur or "")
+                if cur and cur not in out:
+                    out = [""] + [cur] + [o for o in out if o and o != cur]
+                return out
+
             front_key = f"ql_cf_front_{gen}"
             front_ui = _choice_opts(str(draft.get("def_front") or ""), front_opts)
             if front_key not in st.session_state:
@@ -10812,7 +11099,6 @@ def _render_phrase_confirm_card(
                 format_func=lambda v: v or "(skip)",
                 key=front_key,
             )
-        with d2:
             cov_key = f"ql_cf_cov_{gen}"
             cov_ui = _choice_opts(str(draft.get("coverage") or ""), cov_opts)
             if cov_key not in st.session_state:
@@ -10823,7 +11109,6 @@ def _render_phrase_confirm_card(
                 format_func=lambda v: v or "(skip)",
                 key=cov_key,
             )
-        with d3:
             blitz_key = f"ql_cf_blitz_{gen}"
             blitz_ui = ["", "No", "Yes"]
             cur_blitz = str(draft.get("blitz") or "")
@@ -10837,6 +11122,19 @@ def _render_phrase_confirm_card(
                 format_func=lambda v: v or "(skip)",
                 key=blitz_key,
             )
+    else:
+        formation = str(draft.get("formation") or "")
+        variant = str(draft.get("variant") or "")
+        motion = str(draft.get("motion") or "")
+        run_tag = str(draft.get("run_tag") or "")
+        pass_tag = str(draft.get("pass_tag") or "")
+        play_type = str(draft.get("play_type") or "run")
+        if play_type == "rpo":
+            play_type = "run"
+        pass_player = str(draft.get("pass_player") or "")
+        def_front = str(draft.get("def_front") or "")
+        coverage = str(draft.get("coverage") or "")
+        blitz = str(draft.get("blitz") or "")
 
     b1, b2, b3 = st.columns(3)
     if b1.button(
@@ -10862,17 +11160,17 @@ def _render_phrase_confirm_card(
             blitz=blitz,
         )
         if warns and any("Need a formation" in w for w in warns):
-            st.error("Need a formation or run/pass tag — fix above, then confirm.")
+            st.error("Need a formation or run/pass tag — open Edit call details.")
             return True
-        st.rerun()
+        _ql_rerun()
     if b2.button("Cancel", use_container_width=True, key=f"ql_cf_cancel_{gen}"):
         st.session_state.pop("ql_confirm_draft", None)
         _clear_phrase_confirm_widgets()
-        st.rerun()
+        _ql_rerun()
     if b3.button("Edit phrase", use_container_width=True, key=f"ql_cf_edit_{gen}"):
         st.session_state.pop("ql_confirm_draft", None)
         _clear_phrase_confirm_widgets()
-        st.rerun()
+        _ql_rerun()
     return True
 
 
@@ -10951,32 +11249,25 @@ def _render_quick_log_wizard(
         f' · to-go {cur_dist}</p>',
         unsafe_allow_html=True,
     )
-    with st.expander("GameCast · field", expanded=True):
-        cur_ball = _render_live_gamecast(
-            opponent=opponent,
-            live_logs=live_logs,
-            ball_yard=cur_ball,
-        )
-        cur_zone = ball_yard_to_zone(cur_ball)
-        st.session_state.lt_zone = cur_zone
+    # GameCast lives on the Halftime report (drive map) — keep Log free of Plotly
     if "ql_booth_tempo" not in st.session_state:
         st.session_state.ql_booth_tempo = "Fast"
-    tempo = st.radio(
-        "Booth tempo",
-        ["Fast", "Confirm"],
-        horizontal=True,
-        key="ql_booth_tempo",
-        help=(
-            "Fast: one-tap LOG when the phrase has a known call + result. "
-            "Confirm: always review the card before logging. Use Review anytime to edit."
-        ),
-    )
-    phrase = st.text_input(
-        "Say / type snap",
-        key="ql_call_phrase",
-        placeholder="Slot Dip Bash, completed to the opp 45",
-        label_visibility="collapsed",
-    )
+    with st.expander("Booth options", expanded=False):
+        tempo = st.radio(
+            "Tempo",
+            ["Fast", "Confirm"],
+            horizontal=True,
+            key="ql_booth_tempo",
+            help=(
+                "Fast: Enter / LOG commits when the call is known "
+                "(defaults Gain / 0 if yards not spoken). Confirm: always review first."
+            ),
+        )
+    tempo = str(st.session_state.get("ql_booth_tempo") or "Fast")
+
+    # Apply pending phrase fills before the form widget exists
+    if st.session_state.pop("ql_same_phrase_pending", False):
+        st.session_state.ql_call_phrase = str(st.session_state.get("ql_last_phrase") or "")
 
     def _open_phrase_confirm(draft: dict) -> None:
         st.session_state.ql_cf_gen = int(st.session_state.get("ql_cf_gen") or 0) + 1
@@ -10984,8 +11275,8 @@ def _render_quick_log_wizard(
         _clear_phrase_confirm_widgets()
         st.session_state.ql_confirm_draft = draft
 
-    def _build_phrase_draft_from_box() -> dict | None:
-        raw = str(phrase or "").strip()
+    def _build_phrase_draft_from_box(raw_phrase: str) -> dict | None:
+        raw = str(raw_phrase or "").strip()
         if not raw:
             st.session_state.lt_last_warnings = ["Type or dictate a snap first."]
             return None
@@ -11004,51 +11295,75 @@ def _render_quick_log_wizard(
                 ]
         return draft
 
-    if tempo == "Fast":
-        pc1, pc2, pc3 = st.columns([2.4, 1.4, 1])
-        log_clicked = pc1.button(
-            "LOG ▶", type="primary", key="ql_fast_log", use_container_width=True
+    last_bits = str(st.session_state.get("ql_last_phrase") or "").strip()
+    if last_bits:
+        if st.button(
+            f"Same as last · {last_bits[:48]}{'…' if len(last_bits) > 48 else ''}",
+            key="ql_same_as_last",
+            use_container_width=True,
+        ):
+            st.session_state.ql_same_phrase_pending = True
+            _ql_rerun()
+
+    # Enter submits LOG (form). Review / Clear are secondary submit buttons.
+    with st.form("ql_phrase_form", clear_on_submit=False):
+        phrase = st.text_input(
+            "Say / type snap",
+            key="ql_call_phrase",
+            placeholder="Slot Dip Bash, gain of 8  ·  Enter = LOG",
+            label_visibility="collapsed",
         )
-        review_clicked = pc2.button(
-            "Review", key="ql_log_phrase", use_container_width=True
-        )
-        clear_clicked = pc3.button("Clear", key="ql_clear_phrase", use_container_width=True)
-    else:
-        pc1, pc2 = st.columns([3, 1])
-        log_clicked = False
-        review_clicked = pc1.button(
-            "Review ▶", type="primary", key="ql_log_phrase", use_container_width=True
-        )
-        clear_clicked = pc2.button("Clear", key="ql_clear_phrase", use_container_width=True)
+        if tempo == "Fast":
+            pc1, pc2, pc3 = st.columns([2.4, 1.4, 1])
+            with pc1:
+                log_clicked = st.form_submit_button(
+                    "LOG ▶", type="primary", use_container_width=True
+                )
+            with pc2:
+                review_clicked = st.form_submit_button("Review", use_container_width=True)
+            with pc3:
+                clear_clicked = st.form_submit_button("Clear", use_container_width=True)
+        else:
+            log_clicked = False
+            pc1, pc2 = st.columns([3, 1])
+            with pc1:
+                review_clicked = st.form_submit_button(
+                    "Review ▶", type="primary", use_container_width=True
+                )
+            with pc2:
+                clear_clicked = st.form_submit_button("Clear", use_container_width=True)
 
     if log_clicked:
-        draft = _build_phrase_draft_from_box()
+        draft = _build_phrase_draft_from_box(phrase)
         if draft is None:
-            st.rerun()
+            _ql_rerun()
         ok, reason = _ql_draft_ready_for_fast_log(draft)
         if ok:
             _ql_commit_phrase_draft(
-                draft, opponent=opponent, half=int(half), unit=unit
+                _ql_apply_fast_outcome_defaults(draft),
+                opponent=opponent,
+                half=int(half),
+                unit=unit,
             )
-            st.rerun()
+            _ql_rerun()
         _open_phrase_confirm(draft)
         st.session_state.lt_last_warnings = [
             f"Opened review — {reason}." if reason else "Opened review."
         ]
-        st.rerun()
+        _ql_rerun()
 
     if review_clicked:
-        draft = _build_phrase_draft_from_box()
+        draft = _build_phrase_draft_from_box(phrase)
         if draft is None:
-            st.rerun()
+            _ql_rerun()
         _open_phrase_confirm(draft)
-        st.rerun()
+        _ql_rerun()
 
     if clear_clicked:
         st.session_state.ql_clear_phrase_pending = True
         st.session_state.pop("ql_confirm_draft", None)
         _clear_phrase_confirm_widgets()
-        st.rerun()
+        _ql_rerun()
 
     with st.expander("Tap steps (optional)", expanded=False):
         show_steps = st.checkbox(
@@ -11454,24 +11769,19 @@ def _live_track_log_screen(
     live_front = live_logs["def_front"] if live_logs is not None and "def_front" in getattr(live_logs, "columns", []) else pd.Series(dtype=str)
     live_cov = live_logs["coverage"] if live_logs is not None and "coverage" in getattr(live_logs, "columns", []) else pd.Series(dtype=str)
 
+    # Season uniques cached by DB mtime; live-log merge stays cheap
     form_opts = _merge_tag_options(
-        _tag_options(
-            offense_df["formation"] if "formation" in offense_df.columns else pd.Series(dtype=str),
-        ),
+        _season_tag_opts("formation"),
         live_form,
         kind="formation",
     )
     play_opts = _merge_tag_options(
-        _tag_options(
-            offense_df["play_call"] if "play_call" in offense_df.columns else pd.Series(dtype=str),
-        ),
+        _season_tag_opts("play_call"),
         live_play,
         kind="play_call",
     )
     motion_opts = _merge_tag_options(
-        _tag_options(
-            offense_df["motion"] if "motion" in offense_df.columns else pd.Series(dtype=str),
-        ),
+        _season_tag_opts("motion"),
         live_motion,
         kind="motion",
     )
@@ -11480,16 +11790,12 @@ def _live_track_log_screen(
             motion_opts.append(m)
     motion_opts.sort(key=str.upper)
     front_opts = _merge_film_tag_options(
-        _tag_options(
-            offense_df["def_front"] if "def_front" in offense_df.columns else pd.Series(dtype=str),
-        ),
+        _season_tag_opts("def_front"),
         live_front,
         kind="def_front",
     )
     cov_opts = _merge_film_tag_options(
-        _tag_options(
-            offense_df["coverage"] if "coverage" in offense_df.columns else pd.Series(dtype=str),
-        ),
+        _season_tag_opts("coverage"),
         live_cov,
         kind="coverage",
     )
@@ -11974,10 +12280,10 @@ def _ht_score_color(val) -> str:
 
 def _ht_plotly_layout(fig: go.Figure, height: int = 280) -> go.Figure:
     fig.update_layout(
-        template="plotly_dark",
+        template="plotly_white",
         paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(17,24,39,0.6)",
-        font=dict(color="#f3f4f6", size=13),
+        plot_bgcolor="#F8FAF9",
+        font=dict(color="#14201a", size=13),
         margin=dict(l=40, r=16, t=40, b=40),
         height=height,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
@@ -12811,8 +13117,8 @@ def _render_halftime_report_body(
                     unsafe_allow_html=True,
                 )
 
-    tab_plan, tab_looks, tab_form, tab_scen, tab_plyr, tab_print = st.tabs(
-        ["2nd half plan", "Their looks", "Our calls", "Situations", "Players", "Print"]
+    tab_plan, tab_looks, tab_form, tab_scen, tab_plyr, tab_drive, tab_print = st.tabs(
+        ["2nd half plan", "Their looks", "Our calls", "Situations", "Players", "Drive map", "Print"]
     )
 
     with tab_plan:
@@ -13179,6 +13485,13 @@ def _render_halftime_report_body(
                     use_container_width=True,
                 )
 
+    with tab_drive:
+        _render_halftime_drive_map(
+            str(opp or ""),
+            live_logs,
+            key_prefix=f"{key_prefix}_drive",
+        )
+
     with tab_print:
         st.caption("Printable one-pager — same data as the boards above.")
         st.download_button(
@@ -13195,16 +13508,13 @@ def _render_halftime_report_body(
 
 def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: str = "ht") -> None:
     """Primary control: close 1st half and generate the adjustment report."""
-    import importlib
-
-    import mesh_engine as me
-
-    importlib.reload(me)
-    end_first_half = me.end_first_half
-    filter_live_logs = me.filter_live_logs
-    load_game_plan = me.load_game_plan
-    load_game_state = me.load_game_state
-    save_game_state = me.save_game_state
+    from mesh_engine import (
+        end_first_half,
+        filter_live_logs,
+        load_game_plan,
+        load_game_state,
+        save_game_state,
+    )
 
     state = load_game_state()
     same_opp = (
@@ -13337,25 +13647,22 @@ def _halftime_panel(
     offense_df: pd.DataFrame,
     defense_df: pd.DataFrame,
 ) -> None:
-    import importlib
-
-    import mesh_engine as me
-
-    importlib.reload(me)
-    broaden_situation = me.broaden_situation
-    build_halftime_report = me.build_halftime_report
-    defense_scout_tendencies = me.defense_scout_tendencies
-    filter_live_logs = me.filter_live_logs
-    format_halftime_report_markdown = me.format_halftime_report_markdown
-    live_log_adjustments = me.live_log_adjustments
-    load_game_state = me.load_game_state
-    load_scout = me.load_scout
-    mesh_rankings = me.mesh_rankings
-    offense_scout_tendencies = me.offense_scout_tendencies
-    pin_names = me.pin_names
-    plan_pin_status = me.plan_pin_status
-    save_game_state = me.save_game_state
-    score_live_calls = me.score_live_calls
+    from mesh_engine import (
+        broaden_situation,
+        build_halftime_report,
+        defense_scout_tendencies,
+        filter_live_logs,
+        format_halftime_report_markdown,
+        live_log_adjustments,
+        load_game_state,
+        load_scout,
+        mesh_rankings,
+        offense_scout_tendencies,
+        pin_names,
+        plan_pin_status,
+        save_game_state,
+        score_live_calls,
+    )
 
     st.subheader("Halftime — tonight over the plan")
     st.caption("Live evidence wins. Plan items are Confirmed, Unproven, or Kill.")
@@ -14289,12 +14596,12 @@ def main() -> None:
             "Game Plan",
             "Opponent Scout",
         ]
-        # Deep-link from Home → Live Track
+        # Deep-link from Home → Live Track; default Main into Live Track for booth speed
         pending = st.session_state.pop("lt_nav_page", None)
         if pending in pages:
             st.session_state.main_page_radio = pending
         if "main_page_radio" not in st.session_state:
-            st.session_state.main_page_radio = "Home"
+            st.session_state.main_page_radio = "Live Track"
         page = st.sidebar.radio(
             "Page",
             pages,
@@ -14309,7 +14616,11 @@ def main() -> None:
                 st.sidebar.caption(f"Link: {public}")
 
     offense_df = load_plays("Offense")
-    defense_df = load_plays("Defense")
+    # Live Track (and taggers) only need offense EPA — skip Defense SQLite load
+    if tagger or page == "Live Track":
+        defense_df = pd.DataFrame()
+    else:
+        defense_df = load_plays("Defense")
     db_ready = _epa_db_ready(offense_df, defense_df)
 
     # Taggers never upload — wait for Main's shared database

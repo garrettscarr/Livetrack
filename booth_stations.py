@@ -337,3 +337,8 @@ def main_invite_url(base_url: str) -> str:
     if not base:
         return ""
     return f"{base}/?station=main"
+
+
+# Back-compat alias (older Home pages / partial deploys)
+def build_invite_url(base_url: str, focuses: list[str] | None = None) -> str:
+    return tagger_invite_url(base_url, focuses)

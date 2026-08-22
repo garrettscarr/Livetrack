@@ -115,8 +115,12 @@ def sync_booth_snap_to_drive(
             # but if taggers created stubs at cur, stay on cur until Main logs.
             # Only bump if every play through max_n exists and pointer is stale empty.
             pass
-    state["opponent"] = opponent or state.get("opponent")
-    state["half"] = int(half or state.get("half") or 1)
+    new_opp = opponent or state.get("opponent")
+    new_half = int(half or state.get("half") or 1)
+    if state.get("opponent") == new_opp and int(state.get("half") or 1) == new_half:
+        return state
+    state["opponent"] = new_opp
+    state["half"] = new_half
     save_booth_snap(state)
     return state
 

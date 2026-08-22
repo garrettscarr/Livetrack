@@ -295,11 +295,24 @@ def load_scout_opponent_defense() -> pd.DataFrame:
     return load_scout("opponent_defense")
 
 
+_LIVE_LOG_CACHE: tuple[float, int, pd.DataFrame] | None = None
+
+
 def load_live_log() -> pd.DataFrame:
+    """Read live_log.csv; reuse in-process cache when mtime/size unchanged."""
+    global _LIVE_LOG_CACHE
     if not LIVE_LOG_FILE.exists():
+        _LIVE_LOG_CACHE = None
         return pd.DataFrame()
     try:
-        return pd.read_csv(LIVE_LOG_FILE)
+        st = LIVE_LOG_FILE.stat()
+        mtime, size = st.st_mtime, st.st_size
+        cached = _LIVE_LOG_CACHE
+        if cached is not None and cached[0] == mtime and cached[1] == size:
+            return cached[2].copy()
+        df = pd.read_csv(LIVE_LOG_FILE)
+        _LIVE_LOG_CACHE = (mtime, size, df)
+        return df.copy()
     except Exception:
         return pd.DataFrame()
 
