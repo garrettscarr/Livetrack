@@ -7,9 +7,13 @@ devices have cellular. Updates deploy to that same URL.
 
 | Device | Link | Sees |
 |--------|------|------|
-| **You (coach)** | `https://YOUR-APP.streamlit.app` | **Full** — log, lineup, film, drives, all pages |
-| Call tagger | `…/?station=call` | Snap log only (no film / other pages) |
-| Defense tagger | `…/?station=defense` | Fill Film only (front / cover / blitz) |
+| **You (master)** | `https://YOUR-APP.streamlit.app` | **Full** — everything |
+| Extra tagger | `…/?station=tag` | Chooses Front / Coverage / Blitz / Snap log |
+| Front only | `…/?station=tag&focus=front` | Front tags only |
+| Coverage only | `…/?station=tag&focus=coverage` | Coverage only |
+| Blitz only | `…/?station=tag&focus=blitz` | Blitz only |
+| Snap logger | `…/?station=tag&focus=snaps` (or `?station=call`) | Log snaps only |
+| All film | `…/?station=defense` | Front + coverage + blitz |
 
 Tagger bookmarks stay locked — they can’t flip into Full from the UI.
 
@@ -40,8 +44,11 @@ set `FOOTBALL_EPA_SHARED=1`, use `$PORT`.
 ## iPad bookmarks
 
 - **You (everything):** `https://YOUR-HOST/`
-- Call tagger: `https://YOUR-HOST/?station=call`
-- Defense tagger: `https://YOUR-HOST/?station=defense`
+- Tagger (pick job): `https://YOUR-HOST/?station=tag`
+- Front: `https://YOUR-HOST/?station=tag&focus=front`
+- Coverage: `https://YOUR-HOST/?station=tag&focus=coverage`
+- Blitz: `https://YOUR-HOST/?station=tag&focus=blitz`
+- Snaps: `https://YOUR-HOST/?station=tag&focus=snaps`
 
 Unlock once with the booth PIN (shared mode).
 

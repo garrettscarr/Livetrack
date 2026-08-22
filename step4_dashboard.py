@@ -3657,14 +3657,37 @@ def play_needs_film(row: pd.Series | dict) -> bool:
         return True
     if fp in {"0", "false", "no", "n"}:
         return False
-    cov = str(row.get("coverage", "") or "").strip()
-    front = str(row.get("def_front", "") or "").strip()
-    blitz = str(row.get("blitz", "") or "").strip()
-    # Legacy quick logs: no film tags yet
-    return not cov and not front and blitz.lower() not in {"yes", "no"}
+    return bool(play_missing_film_fields(row))
 
 
-def count_film_pending(live_logs: pd.DataFrame | None, opponent: str | None = None) -> int:
+def play_missing_film_fields(row: pd.Series | dict) -> set[str]:
+    """Which film tags are still empty: front / coverage / blitz."""
+    missing: set[str] = set()
+    if not str(row.get("def_front", "") or "").strip():
+        missing.add("front")
+    if not str(row.get("coverage", "") or "").strip():
+        missing.add("coverage")
+    blitz = str(row.get("blitz", "") or "").strip().lower()
+    if blitz not in {"yes", "no"}:
+        missing.add("blitz")
+    return missing
+
+
+def play_needs_tag_focuses(row: pd.Series | dict, focuses: list[str] | None) -> bool:
+    """True if this play still needs any of the tagger's film focuses."""
+    from booth_stations import FILM_FOCUSES
+
+    wanted = FILM_FOCUSES.intersection(focuses or [])
+    if not wanted:
+        return False
+    return bool(play_missing_film_fields(row).intersection(wanted))
+
+
+def count_film_pending(
+    live_logs: pd.DataFrame | None,
+    opponent: str | None = None,
+    focuses: list[str] | None = None,
+) -> int:
     if live_logs is None or live_logs.empty:
         return 0
     logs = live_logs
@@ -3674,6 +3697,16 @@ def count_film_pending(live_logs: pd.DataFrame | None, opponent: str | None = No
         ]
     if logs.empty:
         return 0
+    if focuses is not None:
+        from booth_stations import FILM_FOCUSES, has_film_focus
+
+        if has_film_focus(focuses):
+            film_only = [f for f in focuses if f in FILM_FOCUSES]
+            # Subset of film fields → queue is "missing my fields"
+            if set(film_only) != FILM_FOCUSES:
+                return int(
+                    sum(play_needs_tag_focuses(row, focuses) for _, row in logs.iterrows())
+                )
     return int(sum(play_needs_film(row) for _, row in logs.iterrows()))
 
 
@@ -6355,31 +6388,30 @@ def _render_start_new_game_panel(season_opps: list[str]) -> None:
 
 
 def _booth_station_bar() -> str:
-    """Full can pick role; Call/Defense from ?station= stay locked to tagging only."""
+    """Full can pick role; taggers from ?station= stay locked (+ optional focus picker)."""
     from booth_stations import (
         STATION_HELP,
         STATION_LABELS,
+        focus_summary,
         is_tagger_station,
         normalize_station,
         resolve_booth_station,
+        resolve_tag_focuses,
     )
 
     station = resolve_booth_station(st.session_state, st.query_params)
+    focuses = resolve_tag_focuses(st.session_state, st.query_params, station)
 
     if is_tagger_station(station) and st.session_state.get("booth_station_locked"):
         st.markdown(f"**{STATION_LABELS.get(station, station)}**")
-        if station == "call":
-            st.caption("Snap logger only — you won’t see film, lineup, or other pages.")
-        else:
-            st.caption(
-                "Film tags only (front / coverage / blitz). "
-                "Auto-refreshes when snaps are logged."
-            )
+        st.caption(f"Tagging: {focus_summary(focuses)}")
         return station
 
-    opts = list(STATION_LABELS.keys())
+    opts = ["full", "tag", "call", "defense"]
     cur = normalize_station(st.session_state.get("booth_station"))
-    idx = opts.index(cur) if cur in opts else 0
+    if cur not in opts:
+        cur = "full"
+    idx = opts.index(cur)
     pick = st.radio(
         "Booth station",
         opts,
@@ -6393,9 +6425,10 @@ def _booth_station_bar() -> str:
     st.session_state.booth_station = station
     try:
         if station == "full":
-            # Keep main coach URL clean
             if "station" in st.query_params:
                 del st.query_params["station"]
+            if "focus" in st.query_params:
+                del st.query_params["focus"]
         else:
             st.query_params["station"] = station
     except Exception:
@@ -6403,18 +6436,95 @@ def _booth_station_bar() -> str:
     return station
 
 
+def _render_tag_focus_picker() -> list[str]:
+    """Multiselect for extra taggers: what fields this device owns."""
+    from booth_stations import (
+        ALL_FOCUSES,
+        FOCUS_LABELS,
+        focus_summary,
+        normalize_focuses,
+    )
+
+    st.subheader("What are you tagging?")
+    st.caption(
+        "Master (Full) sees everything. Pick only your job — others can take the rest."
+    )
+    cur = normalize_focuses(st.session_state.get("tag_focuses"))
+    picked = st.multiselect(
+        "Focuses",
+        options=list(ALL_FOCUSES),
+        default=cur,
+        format_func=lambda k: FOCUS_LABELS.get(k, k),
+        key="tag_focus_picker",
+        label_visibility="collapsed",
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        if st.button("Save focuses", type="primary", use_container_width=True, key="tag_focus_save"):
+            st.session_state.tag_focuses = list(picked)
+            try:
+                st.query_params["station"] = "tag"
+                if picked:
+                    st.query_params["focus"] = ",".join(picked)
+                elif "focus" in st.query_params:
+                    del st.query_params["focus"]
+            except Exception:
+                pass
+            st.rerun()
+    with c2:
+        if st.button("Clear selection", use_container_width=True, key="tag_focus_clear"):
+            st.session_state.tag_focuses = []
+            st.rerun()
+    if picked:
+        st.info(f"Will tag: **{focus_summary(picked)}** — tap Save focuses.")
+    return cur
+
+
 def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     """Live Track: offense play log + lineup (booth-simple)."""
-    from booth_stations import is_tagger_station
+    from booth_stations import (
+        focus_summary,
+        has_film_focus,
+        has_snaps_focus,
+        is_tagger_station,
+        resolve_tag_focuses,
+    )
     from mesh_engine import load_live_log, load_season_opponents
 
     booth_station = _booth_station_bar()
     tagger = is_tagger_station(booth_station)
+    focuses = resolve_tag_focuses(st.session_state, st.query_params, booth_station)
 
-    if booth_station == "defense":
-        st.markdown('<p class="live-title">Fill Film</p>', unsafe_allow_html=True)
-    elif booth_station == "call":
+    # Taggers with no focus yet (or forced edit) → choose
+    if tagger and st.session_state.get("booth_station_locked"):
+        need_pick = (
+            booth_station == "tag"
+            and (
+                not focuses
+                or st.session_state.pop("tag_focus_force_edit", False)
+            )
+        )
+        if need_pick:
+            st.markdown('<p class="live-title">Tagger setup</p>', unsafe_allow_html=True)
+            _render_tag_focus_picker()
+            return
+        if booth_station == "tag" and focuses:
+            if st.button("Change what I’m tagging", key="tag_refocus"):
+                st.session_state.tag_focus_force_edit = True
+                st.rerun()
+
+    if tagger and has_film_focus(focuses) and not has_snaps_focus(focuses):
+        st.markdown(
+            f'<p class="live-title">Tag · {focus_summary(focuses)}</p>',
+            unsafe_allow_html=True,
+        )
+    elif tagger and has_snaps_focus(focuses) and not has_film_focus(focuses):
         st.markdown('<p class="live-title">Call — Log</p>', unsafe_allow_html=True)
+    elif tagger:
+        st.markdown(
+            f'<p class="live-title">Tag · {focus_summary(focuses)}</p>',
+            unsafe_allow_html=True,
+        )
     else:
         st.markdown('<p class="live-title">Live Track</p>', unsafe_allow_html=True)
 
@@ -6461,8 +6571,8 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     except Exception:
         pass
 
-    # --- Defense: film tags only ---
-    if booth_station == "defense":
+    # --- Film-only tagger (no snap log) ---
+    if tagger and has_film_focus(focuses) and not has_snaps_focus(focuses):
         live_logs = load_live_log()
         st.session_state.lt_unit = "Offense"
         st.caption(f"vs {opponent} · half {st.session_state.get('lt_half', 1)}")
@@ -6482,18 +6592,24 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         @st.fragment(run_every=timedelta(seconds=5))
         def _defense_fill_film_loop() -> None:
             fresh = load_live_log()
-            n = count_film_pending(fresh, opponent)
+            n = count_film_pending(fresh, opponent, focuses=focuses)
             if n:
-                st.info(f"**{n}** snap(s) waiting for front / coverage / blitz")
+                st.info(f"**{n}** snap(s) waiting for {focus_summary(focuses)}")
             else:
                 st.caption("Caught up — waiting for snaps…")
-            _live_track_fill_film(opponent, offense_df, fresh)
+            _live_track_fill_film(opponent, offense_df, fresh, focuses=focuses)
 
         _defense_fill_film_loop()
         return
 
-    # --- Call / Full chrome ---
-    if booth_station == "call":
+    # --- Call / Full / mixed tagger chrome ---
+    snaps_mode = (not tagger) or has_snaps_focus(focuses)
+    if not snaps_mode:
+        st.warning("No focuses selected.")
+        _render_tag_focus_picker()
+        return
+
+    if tagger and has_snaps_focus(focuses):
         st.caption(f"vs {opponent}")
         top = st.columns([2.6, 1])
         with top[0]:
@@ -6541,10 +6657,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
                 label_visibility="collapsed",
             )
 
-    if booth_station == "full":
-        with st.expander("Start new game", expanded=False):
-            _render_start_new_game_panel(season_opps)
-    elif booth_station == "call":
+    if booth_station == "full" or (tagger and has_snaps_focus(focuses)):
         with st.expander("Start new game", expanded=False):
             _render_start_new_game_panel(season_opps)
 
@@ -6595,7 +6708,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             unsafe_allow_html=True,
         )
 
-    # Drive row — Call + Full (not Defense)
+    # Drive row — Call + Full (not film-only taggers)
     dstate = load_drive_state()
     active_did = current_drive_id(opponent)
     can_undo = bool(dstate.get("undo_stack"))
@@ -6606,7 +6719,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         st.success(f"Drive #{start_drive(opponent)} started.")
         st.rerun()
     if d3.button(
-        "End" if booth_station == "call" else "End + Film",
+        "End" if tagger else "End + Film",
         use_container_width=True,
         key="lt_end_fill",
         disabled=active_did is None,
@@ -6629,10 +6742,19 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         _live_track_field_screen(opponent, live_logs)
         return
 
-    # Log vs Fill Film — only Full can switch; Call stays on Log
+    # Mixed tagger: snaps + film on one device
+    if tagger and has_snaps_focus(focuses) and has_film_focus(focuses):
+        tab_log, tab_film = st.tabs(["Log snaps", f"Film ({focus_summary([f for f in focuses if f != 'snaps'])})"])
+        with tab_log:
+            _live_track_log_screen(opponent, offense_df, defense_df, live_logs, quick=True)
+        with tab_film:
+            _live_track_fill_film(opponent, offense_df, live_logs, focuses=focuses)
+        return
+
+    # Log vs Fill Film — only Full can switch; snap taggers stay on Log
     if "lt_play_sheet" not in st.session_state:
         st.session_state.lt_play_sheet = "Log"
-    if booth_station == "call":
+    if tagger:
         st.session_state.lt_play_sheet = "Log"
 
     mode_opts = ["Log"]
@@ -6664,7 +6786,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         st.session_state.lt_play_sheet = "Log"
 
     if st.session_state.get("lt_play_sheet") == "Fill Film" and booth_station == "full":
-        _live_track_fill_film(opponent, offense_df, live_logs)
+        _live_track_fill_film(opponent, offense_df, live_logs, focuses=None)
     else:
         _live_track_log_screen(opponent, offense_df, defense_df, live_logs, quick=True)
 
@@ -6679,7 +6801,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
                 resume_drive(int(resume_pick), opponent)
                 st.success(f"Back on drive #{int(resume_pick)}.")
                 st.rerun()
-    elif booth_station == "call":
+    elif tagger and has_snaps_focus(focuses):
         with st.expander("Halftime / end 1st half", expanded=False):
             _end_first_half_action(opponent, live_logs, key_prefix="lt")
 
@@ -8795,11 +8917,40 @@ def _live_track_fill_film(
     opponent: str,
     offense_df: pd.DataFrame,
     live_logs: pd.DataFrame,
+    focuses: list[str] | None = None,
 ) -> None:
-    """Between-drive editor: add coverage / blitz / front from Sky Coach."""
-    st.subheader("Fill Film")
+    """Between-drive editor: add coverage / blitz / front from Sky Coach.
+
+    focuses: optional subset (front / coverage / blitz) for split taggers.
+    None = master / all film fields.
+    """
+    from booth_stations import (
+        FILM_FOCUSES,
+        FOCUS_BLITZ,
+        FOCUS_COVERAGE,
+        FOCUS_FRONT,
+        focus_summary,
+    )
+
+    film_focus = (
+        list(FILM_FOCUSES)
+        if focuses is None
+        else [f for f in focuses if f in FILM_FOCUSES]
+    )
+    if not film_focus:
+        film_focus = list(FILM_FOCUSES)
+    show_front = FOCUS_FRONT in film_focus
+    show_cov = FOCUS_COVERAGE in film_focus
+    show_blitz = FOCUS_BLITZ in film_focus
+    partial = set(film_focus) != set(FILM_FOCUSES)
+
+    st.subheader(
+        "Fill Film" if not partial else f"Fill Film · {focus_summary(film_focus)}"
+    )
     st.caption(
-        "Scoped to a drive by default — tag coverage / blitz / front from Sky Coach "
+        "Tag only your assigned look, then next series."
+        if partial
+        else "Scoped to a drive by default — tag coverage / blitz / front from Sky Coach "
         "(phrase or dropdowns), then next series."
     )
     if live_logs is None or live_logs.empty:
@@ -8856,14 +9007,25 @@ def _live_track_fill_film(
     idxs = [
         int(i)
         for i in opp_df.index
-        if play_needs_film(full.loc[i]) and _in_drive(full.loc[i])
+        if (
+            (
+                play_needs_tag_focuses(full.loc[i], film_focus)
+                if partial
+                else play_needs_film(full.loc[i])
+            )
+            and _in_drive(full.loc[i])
+        )
     ]
 
     if not idxs:
         st.success(
             "Nothing pending for this drive."
             if drive_pick != "all"
-            else "All plays have film tags — nothing pending."
+            else (
+                f"No plays waiting for {focus_summary(film_focus)}."
+                if partial
+                else "All plays have film tags — nothing pending."
+            )
         )
         _render_live_log_tail(opponent, live_logs)
         return
@@ -8896,9 +9058,9 @@ def _live_track_fill_film(
     def _save_film_row(
         idx: int,
         *,
-        front: str,
-        cov: str,
-        blitz: str,
+        front: str | None = None,
+        cov: str | None = None,
+        blitz: str | None = None,
         motion: str = "",
         note: str | None = None,
         yds: int | None = None,
@@ -8913,31 +9075,59 @@ def _live_track_fill_film(
         result_v, yds_v, warns = validate_live_play(result_in, yds_in, to_go)
         motion_v = motion if motion else str(row.get("motion") or "")
         note_v = str(row.get("note") or "") if note is None else str(note)
+
+        front_v = (
+            front
+            if (show_front and front is not None)
+            else str(row.get("def_front") or "")
+        )
+        cov_v = (
+            cov if (show_cov and cov is not None) else str(row.get("coverage") or "")
+        )
+        blitz_v = (
+            blitz
+            if (show_blitz and blitz is not None)
+            else str(row.get("blitz") or "")
+        )
+
         if unit.lower() == "offense":
             mesh_call = play_call or str(row.get("call") or "(none)")
         else:
             mesh_call = (
-                f"{front or 'Unknown'}  |  {cov or 'Unknown'}"
-                if front or cov
+                f"{front_v or 'Unknown'}  |  {cov_v or 'Unknown'}"
+                if front_v or cov_v
                 else str(row.get("call") or "(none)")
             )
-        ok = update_live_log_at(
-            idx,
-            {
-                "def_front": front,
-                "coverage": cov,
-                "blitz": blitz,
-                "motion": motion_v,
-                "note": note_v,
-                "yards_gained": int(yds_v),
-                "result": result_v,
-                "call": mesh_call,
-                "film_pending": "No",
-            },
-        )
+
+        still_missing = set()
+        if not str(front_v or "").strip():
+            still_missing.add("front")
+        if not str(cov_v or "").strip():
+            still_missing.add("coverage")
+        if str(blitz_v or "").strip().lower() not in {"yes", "no"}:
+            still_missing.add("blitz")
+
+        patch: dict = {
+            "motion": motion_v,
+            "note": note_v,
+            "yards_gained": int(yds_v),
+            "result": result_v,
+            "call": mesh_call,
+            "film_pending": "Yes" if still_missing else "No",
+        }
+        if show_front and front is not None:
+            patch["def_front"] = front_v
+        if show_cov and cov is not None:
+            patch["coverage"] = cov_v
+        if show_blitz and blitz is not None:
+            patch["blitz"] = blitz_v
+
+        ok = update_live_log_at(idx, patch)
         if ok:
-            learn_live_tag("def_front", front)
-            learn_live_tag("coverage", cov)
+            if show_front and front_v:
+                learn_live_tag("def_front", front_v)
+            if show_cov and cov_v:
+                learn_live_tag("coverage", cov_v)
             if motion_v:
                 learn_live_tag("motion", motion_v)
         return ok, warns
@@ -8947,176 +9137,220 @@ def _live_track_fill_film(
         st.session_state.ff_phrase_global = ""
 
     newest = idxs[-1]
-    st.markdown("#### Film phrase")
-    st.caption(
-        'Say the look — e.g. "Even front, no blitz, cover 3" or "odd front, blitz, cover 4". '
-        "Applies to the newest pending play in this drive."
-    )
-    st.text_input(
-        "Phrase",
-        key="ff_phrase_global",
-        placeholder="Even front, no blitz, cover 3",
-        label_visibility="collapsed",
-    )
-    pg1, pg2, pg3 = st.columns([2, 2, 1])
-    with pg1:
-        log_newest = st.button(
-            "LOG film from phrase ▶",
-            type="primary",
-            key="ff_log_phrase_global",
-            use_container_width=True,
+    if not partial:
+        st.markdown("#### Film phrase")
+        st.caption(
+            'Say the look — e.g. "Even front, no blitz, cover 3" or "odd front, blitz, cover 4". '
+            "Applies to the newest pending play in this drive."
         )
-    with pg2:
-        fill_newest = st.button(
-            "Fill newest only",
-            key="ff_fill_phrase_global",
-            use_container_width=True,
+        st.text_input(
+            "Phrase",
+            key="ff_phrase_global",
+            placeholder="Even front, no blitz, cover 3",
+            label_visibility="collapsed",
         )
-    with pg3:
-        if st.button("Clear", key="ff_clear_phrase_global", use_container_width=True):
-            st.session_state.ff_clear_phrase_pending = True
-            st.rerun()
-
-    phrase_g = str(st.session_state.get("ff_phrase_global") or "").strip()
-    if log_newest or fill_newest:
-        if not phrase_g:
-            st.warning("Type or speak a film phrase first.")
-        else:
-            parsed_g = parse_film_phrase(phrase_g)
-            if not _ff_phrase_has_tags(parsed_g):
-                st.warning("Could not parse front / blitz / coverage from that phrase.")
-            elif fill_newest:
-                _ff_apply_phrase_to_keys(parsed_g, newest)
-                bits = [
-                    parsed_g.get("def_front") or "",
-                    parsed_g.get("blitz") or "",
-                    parsed_g.get("coverage") or "",
-                ]
-                st.info("Filled newest → " + " · ".join(b for b in bits if b))
+        pg1, pg2, pg3 = st.columns([2, 2, 1])
+        with pg1:
+            log_newest = st.button(
+                "LOG film from phrase ▶",
+                type="primary",
+                key="ff_log_phrase_global",
+                use_container_width=True,
+            )
+        with pg2:
+            fill_newest = st.button(
+                "Fill newest only",
+                key="ff_fill_phrase_global",
+                use_container_width=True,
+            )
+        with pg3:
+            if st.button("Clear", key="ff_clear_phrase_global", use_container_width=True):
+                st.session_state.ff_clear_phrase_pending = True
                 st.rerun()
+
+        phrase_g = str(st.session_state.get("ff_phrase_global") or "").strip()
+        if log_newest or fill_newest:
+            if not phrase_g:
+                st.warning("Type or speak a film phrase first.")
             else:
-                row_n = full.loc[newest]
-                front = parsed_g.get("def_front") or str(row_n.get("def_front") or "")
-                cov = parsed_g.get("coverage") or str(row_n.get("coverage") or "")
-                blitz = parsed_g.get("blitz") or str(row_n.get("blitz") or "No") or "No"
-                ok, warns = _save_film_row(newest, front=front, cov=cov, blitz=blitz)
-                if ok:
-                    st.session_state.ff_clear_phrase_pending = True
-                    if warns:
-                        st.warning(" · ".join(warns))
-                    st.success(
-                        f"Film saved on play #{newest}: "
-                        f"{front or '—'} · blitz {blitz} · {cov or '—'}"
-                    )
+                parsed_g = parse_film_phrase(phrase_g)
+                if not _ff_phrase_has_tags(parsed_g):
+                    st.warning("Could not parse front / blitz / coverage from that phrase.")
+                elif fill_newest:
+                    _ff_apply_phrase_to_keys(parsed_g, newest)
+                    bits = [
+                        parsed_g.get("def_front") or "",
+                        parsed_g.get("blitz") or "",
+                        parsed_g.get("coverage") or "",
+                    ]
+                    st.info("Filled newest → " + " · ".join(b for b in bits if b))
                     st.rerun()
                 else:
-                    st.error("Could not save.")
+                    row_n = full.loc[newest]
+                    front = parsed_g.get("def_front") or str(row_n.get("def_front") or "")
+                    cov = parsed_g.get("coverage") or str(row_n.get("coverage") or "")
+                    blitz = parsed_g.get("blitz") or str(row_n.get("blitz") or "No") or "No"
+                    ok, warns = _save_film_row(newest, front=front, cov=cov, blitz=blitz)
+                    if ok:
+                        st.session_state.ff_clear_phrase_pending = True
+                        if warns:
+                            st.warning(" · ".join(warns))
+                        st.success(
+                            f"Film saved on play #{newest}: "
+                            f"{front or '—'} · blitz {blitz} · {cov or '—'}"
+                        )
+                        st.rerun()
+                    else:
+                        st.error("Could not save.")
 
     st.write(f"**{len(idxs)}** play(s) waiting — newest first.")
     for idx in reversed(idxs[-15:]):
         row = full.loc[idx]
         title = _live_log_row_label(row, idx)
         with st.expander(title, expanded=(idx == idxs[-1])):
-            if st.session_state.pop(f"ff_clear_phrase_{idx}", False):
-                st.session_state[f"ff_phrase_{idx}"] = ""
-            st.text_input(
-                "Film phrase",
-                key=f"ff_phrase_{idx}",
-                placeholder="odd front, blitz, cover 4",
-            )
-            pa1, pa2 = st.columns(2)
-            with pa1:
-                apply_p = st.button(
-                    "Apply phrase",
-                    key=f"ff_apply_{idx}",
-                    use_container_width=True,
+            if not partial:
+                if st.session_state.pop(f"ff_clear_phrase_{idx}", False):
+                    st.session_state[f"ff_phrase_{idx}"] = ""
+                st.text_input(
+                    "Film phrase",
+                    key=f"ff_phrase_{idx}",
+                    placeholder="odd front, blitz, cover 4",
                 )
-            with pa2:
-                log_p = st.button(
-                    "LOG from phrase ▶",
-                    key=f"ff_log_phrase_{idx}",
-                    use_container_width=True,
-                )
-            phrase_p = str(st.session_state.get(f"ff_phrase_{idx}") or "").strip()
-            if apply_p or log_p:
-                if not phrase_p:
-                    st.warning("Type a film phrase for this play.")
-                else:
-                    parsed_p = parse_film_phrase(phrase_p)
-                    if not _ff_phrase_has_tags(parsed_p):
-                        st.warning("Could not parse front / blitz / coverage.")
-                    elif apply_p:
-                        _ff_apply_phrase_to_keys(parsed_p, idx)
-                        st.rerun()
+                pa1, pa2 = st.columns(2)
+                with pa1:
+                    apply_p = st.button(
+                        "Apply phrase",
+                        key=f"ff_apply_{idx}",
+                        use_container_width=True,
+                    )
+                with pa2:
+                    log_p = st.button(
+                        "LOG from phrase ▶",
+                        key=f"ff_log_phrase_{idx}",
+                        use_container_width=True,
+                    )
+                phrase_p = str(st.session_state.get(f"ff_phrase_{idx}") or "").strip()
+                if apply_p or log_p:
+                    if not phrase_p:
+                        st.warning("Type a film phrase for this play.")
                     else:
-                        front = parsed_p.get("def_front") or str(row.get("def_front") or "")
-                        cov = parsed_p.get("coverage") or str(row.get("coverage") or "")
-                        blitz = parsed_p.get("blitz") or str(row.get("blitz") or "No") or "No"
-                        ok, warns = _save_film_row(idx, front=front, cov=cov, blitz=blitz)
-                        if ok:
-                            st.session_state[f"ff_clear_phrase_{idx}"] = True
-                            if warns:
-                                st.warning(" · ".join(warns))
-                            st.success(f"Updated play #{idx}.")
+                        parsed_p = parse_film_phrase(phrase_p)
+                        if not _ff_phrase_has_tags(parsed_p):
+                            st.warning("Could not parse front / blitz / coverage.")
+                        elif apply_p:
+                            _ff_apply_phrase_to_keys(parsed_p, idx)
                             st.rerun()
                         else:
-                            st.error("Could not save.")
+                            front = parsed_p.get("def_front") or str(row.get("def_front") or "")
+                            cov = parsed_p.get("coverage") or str(row.get("coverage") or "")
+                            blitz = parsed_p.get("blitz") or str(row.get("blitz") or "No") or "No"
+                            ok, warns = _save_film_row(idx, front=front, cov=cov, blitz=blitz)
+                            if ok:
+                                st.session_state[f"ff_clear_phrase_{idx}"] = True
+                                if warns:
+                                    st.warning(" · ".join(warns))
+                                st.success(f"Updated play #{idx}.")
+                                st.rerun()
+                            else:
+                                st.error("Could not save.")
 
-            c1, c2, c3, c4 = st.columns(4)
-            with c1:
-                front = _select_or_type("Front", front_opts, f"ff_front_{idx}")
-            with c2:
-                cov = _select_or_type("Coverage", cov_opts, f"ff_cov_{idx}")
-            with c3:
-                blitz = st.radio(
-                    "Blitz",
-                    ["No", "Yes"],
-                    horizontal=True,
-                    key=f"ff_blitz_{idx}",
+            # Show already-tagged fields as caption for split taggers
+            if partial:
+                bits = []
+                if str(row.get("def_front") or "").strip():
+                    bits.append(f"Front {row.get('def_front')}")
+                if str(row.get("coverage") or "").strip():
+                    bits.append(f"Cov {row.get('coverage')}")
+                bz = str(row.get("blitz") or "").strip()
+                if bz.lower() in {"yes", "no"}:
+                    bits.append(f"Blitz {bz}")
+                if bits:
+                    st.caption("Already tagged: " + " · ".join(bits))
+
+            cols_n = sum([show_front, show_cov, show_blitz, not partial])
+            cols_n = max(cols_n, 1)
+            cols = st.columns(cols_n)
+            ci = 0
+            front = str(row.get("def_front") or "")
+            cov = str(row.get("coverage") or "")
+            blitz = str(row.get("blitz") or "No") or "No"
+            motion = str(row.get("motion") or "")
+            if show_front:
+                with cols[ci]:
+                    front = _select_or_type("Front", front_opts, f"ff_front_{idx}")
+                ci += 1
+            if show_cov:
+                with cols[ci]:
+                    cov = _select_or_type("Coverage", cov_opts, f"ff_cov_{idx}")
+                ci += 1
+            if show_blitz:
+                with cols[ci]:
+                    blitz = st.radio(
+                        "Blitz",
+                        ["No", "Yes"],
+                        horizontal=True,
+                        key=f"ff_blitz_{idx}",
+                        index=1 if str(row.get("blitz") or "").strip().lower() == "yes" else 0,
+                    )
+                ci += 1
+            if not partial:
+                with cols[ci]:
+                    motion = _select_or_type("Motion", motion_opts, f"ff_motion_{idx}")
+                note = st.text_input(
+                    "Note",
+                    value=str(row.get("note") or ""),
+                    key=f"ff_note_{idx}",
                 )
-            with c4:
-                motion = _select_or_type("Motion", motion_opts, f"ff_motion_{idx}")
-            note = st.text_input(
-                "Note",
-                value=str(row.get("note") or ""),
-                key=f"ff_note_{idx}",
-            )
-            with st.expander("Fix gain / result (optional)", expanded=False):
-                yds = st.number_input(
-                    "Yards",
-                    value=int(row.get("yards_gained") or 0),
-                    step=1,
-                    key=f"ff_yds_{idx}",
-                )
-                result_opts = [
-                    "Gain",
-                    "No gain",
-                    "Incomplete",
-                    "TD",
-                    "Turnover",
-                    "Penalty",
-                    "Sack / TFL",
-                    "Punt",
-                    "Other",
-                ]
-                cur_res = str(row.get("result") or "Gain")
-                result = st.selectbox(
-                    "Result",
-                    result_opts,
-                    index=result_opts.index(cur_res) if cur_res in result_opts else 0,
-                    key=f"ff_result_{idx}",
-                )
-            if st.button("Save film tags", type="primary", key=f"ff_save_{idx}", use_container_width=True):
-                ok, warns = _save_film_row(
-                    idx,
-                    front=front,
-                    cov=cov,
-                    blitz=blitz,
-                    motion=motion,
-                    note=note,
-                    yds=int(yds),
-                    result=result,
-                )
+                with st.expander("Fix gain / result (optional)", expanded=False):
+                    yds = st.number_input(
+                        "Yards",
+                        value=int(row.get("yards_gained") or 0),
+                        step=1,
+                        key=f"ff_yds_{idx}",
+                    )
+                    result_opts = [
+                        "Gain",
+                        "No gain",
+                        "Incomplete",
+                        "TD",
+                        "Turnover",
+                        "Penalty",
+                        "Sack / TFL",
+                        "Punt",
+                        "Other",
+                    ]
+                    cur_res = str(row.get("result") or "Gain")
+                    result = st.selectbox(
+                        "Result",
+                        result_opts,
+                        index=result_opts.index(cur_res) if cur_res in result_opts else 0,
+                        key=f"ff_result_{idx}",
+                    )
+            else:
+                note = None
+                yds = None
+                result = None
+
+            save_kwargs = {}
+            if show_front:
+                save_kwargs["front"] = front
+            if show_cov:
+                save_kwargs["cov"] = cov
+            if show_blitz:
+                save_kwargs["blitz"] = blitz
+            if not partial:
+                save_kwargs["motion"] = motion
+                save_kwargs["note"] = note
+                save_kwargs["yds"] = int(yds) if yds is not None else None
+                save_kwargs["result"] = result
+
+            if st.button(
+                "Save" if partial else "Save film tags",
+                type="primary",
+                key=f"ff_save_{idx}",
+                use_container_width=True,
+            ):
+                ok, warns = _save_film_row(idx, **save_kwargs)
                 if ok:
                     if warns:
                         st.warning(" · ".join(warns))
@@ -9125,7 +9359,7 @@ def _live_track_fill_film(
                 else:
                     st.error("Could not save.")
 
-    if st.button("Mark all remaining as No blitz / skip film", key="ff_skip_all"):
+    if not partial and st.button("Mark all remaining as No blitz / skip film", key="ff_skip_all"):
         for idx in idxs:
             row = full.loc[idx]
             update_live_log_at(
@@ -13213,7 +13447,7 @@ def main() -> None:
             st.sidebar.caption("Shared booth mode · PIN unlocked")
             if public:
                 st.sidebar.caption(f"Link: {public}")
-            st.sidebar.caption("You: plain link (Full). Taggers: ?station=call or ?station=defense")
+            st.sidebar.caption("You: plain link (Full). Extras: ?station=tag (pick focuses)")
 
     offense_df = load_plays("Offense")
     defense_df = load_plays("Defense")
