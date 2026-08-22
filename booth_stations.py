@@ -21,12 +21,14 @@ FOCUS_SNAPS = "snaps"
 FOCUS_FRONT = "front"
 FOCUS_COVERAGE = "coverage"
 FOCUS_BLITZ = "blitz"
+FOCUS_MOTION = "motion"
 
 ALL_FOCUSES: tuple[str, ...] = (
     FOCUS_SNAPS,
     FOCUS_FRONT,
     FOCUS_COVERAGE,
     FOCUS_BLITZ,
+    FOCUS_MOTION,
 )
 
 FOCUS_LABELS: dict[str, str] = {
@@ -34,25 +36,62 @@ FOCUS_LABELS: dict[str, str] = {
     FOCUS_FRONT: "Front",
     FOCUS_COVERAGE: "Coverage",
     FOCUS_BLITZ: "Blitz",
+    FOCUS_MOTION: "Motion",
 }
 
 FOCUS_HELP: dict[str, str] = {
-    FOCUS_SNAPS: "Formation, play, result (usually Main)",
-    FOCUS_FRONT: "Even / Odd / …",
-    FOCUS_COVERAGE: "Cover 2 / 3 / 4 / …",
-    FOCUS_BLITZ: "Yes or No",
+    FOCUS_SNAPS: "Formation, play, result (Main)",
+    FOCUS_FRONT: "Pre-snap — Even / Odd / …",
+    FOCUS_COVERAGE: "Pre-snap — Cover 2 / 3 / 4 / …",
+    FOCUS_BLITZ: "Post-snap — Yes or No",
+    FOCUS_MOTION: "Post-snap — motion / shift",
 }
 
-# Extra taggers: one job each (simplest booth split)
-TAGGER_JOBS: tuple[str, ...] = (FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ)
-
-TAGGER_SPLIT_HELP = (
-    "Best split: one phone per job — Front · Coverage · Blitz. "
-    "Main logs the snaps."
-)
+# Timing buckets so packs balance load across the snap
+PRE_SNAP_FOCUSES: frozenset[str] = frozenset({FOCUS_FRONT, FOCUS_COVERAGE})
+POST_SNAP_FOCUSES: frozenset[str] = frozenset({FOCUS_BLITZ, FOCUS_MOTION})
 
 FILM_FOCUSES: frozenset[str] = frozenset(
-    {FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ}
+    {FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_MOTION}
+)
+
+# Normal booth = 2 taggers, each gets one pre + one post
+TAGGER_PACKS: tuple[dict, ...] = (
+    {
+        "id": "front_blitz",
+        "label": "Front + Blitz",
+        "subtitle": "Pre-snap: Front  →  Post-snap: Blitz",
+        "focuses": (FOCUS_FRONT, FOCUS_BLITZ),
+        "slot": 1,
+    },
+    {
+        "id": "coverage_motion",
+        "label": "Coverage + Motion",
+        "subtitle": "Pre-snap: Coverage  →  Post-snap: Motion",
+        "focuses": (FOCUS_COVERAGE, FOCUS_MOTION),
+        "slot": 2,
+    },
+)
+
+# Optional 3rd phone: lighter single-end overflow / catch-up
+TAGGER_PACK_THIRD: dict = {
+    "id": "coverage_blitz",
+    "label": "Coverage + Blitz (3rd phone)",
+    "subtitle": "Pre: Coverage  →  Post: Blitz — use only with 3 taggers",
+    "focuses": (FOCUS_COVERAGE, FOCUS_BLITZ),
+    "slot": 3,
+}
+
+TAGGER_JOBS: tuple[str, ...] = (
+    FOCUS_FRONT,
+    FOCUS_COVERAGE,
+    FOCUS_BLITZ,
+    FOCUS_MOTION,
+)
+
+TAGGER_SPLIT_HELP = (
+    "Normal: 2 phones — Front+Blitz and Coverage+Motion "
+    "(each works pre-snap and post-snap). Optional 3rd phone below. Main logs snaps."
 )
 
 STATION_LABELS: dict[str, str] = {
@@ -102,10 +141,34 @@ def normalize_focuses(raw) -> list[str]:
         "cover": FOCUS_COVERAGE,
         "cov": FOCUS_COVERAGE,
         "blitz": FOCUS_BLITZ,
+        "motion": FOCUS_MOTION,
+        # Pack shortcuts
+        "front_blitz": "__pack_front_blitz__",
+        "coverage_motion": "__pack_coverage_motion__",
+        "coverage_blitz": "__pack_coverage_blitz__",
+        "pack1": "__pack_front_blitz__",
+        "pack2": "__pack_coverage_motion__",
+        "pack3": "__pack_coverage_blitz__",
+    }
+    pack_map = {
+        "__pack_front_blitz__": [FOCUS_FRONT, FOCUS_BLITZ],
+        "__pack_coverage_motion__": [FOCUS_COVERAGE, FOCUS_MOTION],
+        "__pack_coverage_blitz__": [FOCUS_COVERAGE, FOCUS_BLITZ],
     }
     for p in parts:
-        key = aliases.get(p.strip().lower())
-        if key and key not in out:
+        key = aliases.get(p.strip().lower(), p.strip().lower())
+        if key in pack_map:
+            for f in pack_map[key]:
+                if f not in out:
+                    out.append(f)
+            continue
+        if key in {
+            FOCUS_SNAPS,
+            FOCUS_FRONT,
+            FOCUS_COVERAGE,
+            FOCUS_BLITZ,
+            FOCUS_MOTION,
+        } and key not in out:
             out.append(key)
     return out
 

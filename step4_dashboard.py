@@ -6470,13 +6470,14 @@ def _render_booth_role_gate() -> None:
 
 
 def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
-    """One-tap job pick — one field per tagger (recommended booth split)."""
+    """Pick a pre+post pack (2-tagger default) — balanced across the snap."""
     from booth_stations import (
         FOCUS_HELP,
         FOCUS_LABELS,
         TAGGER_JOBS,
+        TAGGER_PACK_THIRD,
+        TAGGER_PACKS,
         TAGGER_SPLIT_HELP,
-        focus_summary,
         normalize_focuses,
     )
 
@@ -6485,8 +6486,8 @@ def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
         <style>
         div[data-testid="stMainBlockContainer"] { max-width: 480px; margin: 0 auto; }
         div[data-testid="stButton"] > button {
-            min-height: 4rem !important;
-            font-size: 1.4rem !important;
+            min-height: 4.2rem !important;
+            font-size: 1.25rem !important;
             border-radius: 12px !important;
             font-weight: 700 !important;
         }
@@ -6495,67 +6496,64 @@ def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
         """,
         unsafe_allow_html=True,
     )
-    st.markdown("## Your job")
+    st.markdown("## Your phone")
     st.caption(TAGGER_SPLIT_HELP)
 
-    for key in TAGGER_JOBS:
-        label = FOCUS_LABELS.get(key, key)
-        help_t = FOCUS_HELP.get(key, "")
-        if st.button(
-            label,
-            key=f"tag_job_{key}",
-            use_container_width=True,
-            type="primary",
-            help=help_t,
-        ):
-            st.session_state.tag_focuses = [key]
-            st.session_state.tag_focus_force_edit = False
-            st.session_state.pop("tag_focus_draft", None)
-            try:
-                st.query_params["station"] = "tag"
-                st.query_params["focus"] = key
-            except Exception:
-                pass
-            st.rerun()
-        if help_t:
-            st.caption(help_t)
+    def _pick_pack(pack: dict) -> None:
+        foc = list(pack["focuses"])
+        st.session_state.tag_focuses = foc
+        st.session_state.tag_pack_id = pack["id"]
+        st.session_state.tag_focus_force_edit = False
+        st.session_state.pop("tag_focus_draft", None)
+        try:
+            st.query_params["station"] = "tag"
+            st.query_params["focus"] = ",".join(foc)
+        except Exception:
+            pass
+        st.rerun()
 
-    with st.expander("Advanced: more than one job on this phone", expanded=False):
-        st.caption("Only if you’re short phones — one job per person is better.")
-        cur = normalize_focuses(st.session_state.get("tag_focuses"))
-        if "tag_focus_draft" not in st.session_state:
-            st.session_state.tag_focus_draft = list(cur)
-        draft: list[str] = list(st.session_state.tag_focus_draft)
-        for key in TAGGER_JOBS:
-            on = key in draft
-            if st.button(
-                f"{'✓ ' if on else ''}{FOCUS_LABELS.get(key, key)}",
-                key=f"tag_job_multi_{key}",
-                use_container_width=True,
-                type="primary" if on else "secondary",
-            ):
-                draft = [x for x in draft if x != key] if on else draft + [key]
-                st.session_state.tag_focus_draft = draft
-                st.rerun()
+    st.markdown("### 2 taggers (normal)")
+    for pack in TAGGER_PACKS:
         if st.button(
-            "Continue with selected",
-            type="primary",
+            f"{pack['label']}",
+            key=f"tag_pack_{pack['id']}",
             use_container_width=True,
-            key="tag_focus_continue",
-            disabled=not draft,
+            type="primary",
+            help=pack["subtitle"],
         ):
-            st.session_state.tag_focuses = list(draft)
-            st.session_state.tag_focus_force_edit = False
-            st.session_state.pop("tag_focus_draft", None)
-            try:
-                st.query_params["station"] = "tag"
-                st.query_params["focus"] = ",".join(draft)
-            except Exception:
-                pass
-            st.rerun()
+            _pick_pack(pack)
+        st.caption(pack["subtitle"])
+
+    st.markdown("### 3rd tagger (optional)")
+    if st.button(
+        TAGGER_PACK_THIRD["label"],
+        key=f"tag_pack_{TAGGER_PACK_THIRD['id']}",
+        use_container_width=True,
+        type="secondary",
+        help=TAGGER_PACK_THIRD["subtitle"],
+    ):
+        _pick_pack(TAGGER_PACK_THIRD)
+    st.caption(TAGGER_PACK_THIRD["subtitle"])
+
+    with st.expander("Single field only (not recommended)", expanded=False):
+        for key in TAGGER_JOBS:
+            if st.button(
+                FOCUS_LABELS.get(key, key),
+                key=f"tag_job_single_{key}",
+                use_container_width=True,
+            ):
+                st.session_state.tag_focuses = [key]
+                st.session_state.tag_focus_force_edit = False
+                try:
+                    st.query_params["station"] = "tag"
+                    st.query_params["focus"] = key
+                except Exception:
+                    pass
+                st.rerun()
+            st.caption(FOCUS_HELP.get(key, ""))
 
     if require_save:
-        st.caption("Tap one job above.")
+        st.caption("Tap a pack above.")
     return normalize_focuses(st.session_state.get("tag_focuses"))
 
 
@@ -6732,13 +6730,16 @@ def _render_current_snap_tagger(
     drive_id: int | None,
     play_n: int,
 ) -> None:
-    """Tagger-only editor: one job, current Drive/Play, big taps."""
+    """Tagger editor: PRE-snap fields then POST-snap fields on this Drive/Play."""
     from booth_stations import (
         FOCUS_BLITZ,
         FOCUS_COVERAGE,
         FOCUS_FRONT,
         FOCUS_LABELS,
+        FOCUS_MOTION,
         FOCUS_SNAPS,
+        POST_SNAP_FOCUSES,
+        PRE_SNAP_FOCUSES,
         focus_summary,
         has_snaps_focus,
     )
@@ -6756,9 +6757,10 @@ def _render_current_snap_tagger(
     if idx is not None and logs is not None and not logs.empty:
         row = logs.reset_index(drop=True).loc[idx].to_dict()
 
-    job = focuses[0] if len(focuses) == 1 else None
-    job_label = FOCUS_LABELS.get(job or "", focus_summary(focuses) if focuses else "Tag")
-    st.markdown(f'<p class="live-title">{job_label}</p>', unsafe_allow_html=True)
+    pre = [f for f in focuses if f in PRE_SNAP_FOCUSES]
+    post = [f for f in focuses if f in POST_SNAP_FOCUSES]
+    title = " · ".join(FOCUS_LABELS.get(f, f) for f in focuses) or focus_summary(focuses)
+    st.markdown(f'<p class="live-title">{title}</p>', unsafe_allow_html=True)
 
     updates: dict = {}
     ensure_default_film_tags()
@@ -6768,7 +6770,6 @@ def _render_current_snap_tagger(
         st.caption(label)
         if key not in st.session_state:
             st.session_state[key] = current if current in options else (options[0] if options else "")
-        # Keep current if still valid
         if current and current in options and st.session_state.get(key) not in options:
             st.session_state[key] = current
         cols = st.columns(min(3, max(len(options), 1)))
@@ -6785,59 +6786,86 @@ def _render_current_snap_tagger(
                     st.rerun()
         return str(st.session_state.get(key, ""))
 
-    if FOCUS_FRONT in focuses:
-        front_opts = _merge_film_tag_options(
-            _tag_options(
-                offense_df["def_front"] if "def_front" in offense_df.columns else pd.Series(dtype=str),
-            ),
-            full["def_front"] if "def_front" in full.columns else pd.Series(dtype=str),
-            kind="def_front",
-        )
-        updates["def_front"] = _chip_pick(
-            "Front",
-            front_opts[:12] or ["Even", "Odd"],
-            f"tg_front_{drive_id}_{play_n}",
-            str(row.get("def_front") or ""),
-        )
-    if FOCUS_COVERAGE in focuses:
-        cov_opts = _merge_film_tag_options(
-            _tag_options(
-                offense_df["coverage"] if "coverage" in offense_df.columns else pd.Series(dtype=str),
-            ),
-            full["coverage"] if "coverage" in full.columns else pd.Series(dtype=str),
-            kind="coverage",
-        )
-        updates["coverage"] = _chip_pick(
-            "Coverage",
-            cov_opts[:12] or ["Cover 2", "Cover 3", "Cover 4"],
-            f"tg_cov_{drive_id}_{play_n}",
-            str(row.get("coverage") or ""),
-        )
-    if FOCUS_BLITZ in focuses:
-        st.caption("Blitz")
-        cur_b = str(row.get("blitz") or "No").strip().title()
-        if cur_b not in {"Yes", "No"}:
-            cur_b = "No"
-        b1, b2 = st.columns(2)
-        with b1:
-            if st.button(
-                "No",
-                key=f"tg_blitz_no_{drive_id}_{play_n}",
-                use_container_width=True,
-                type="primary" if cur_b == "No" else "secondary",
-            ):
-                st.session_state[f"tg_blitz_val_{drive_id}_{play_n}"] = "No"
-                st.rerun()
-        with b2:
-            if st.button(
-                "Yes",
-                key=f"tg_blitz_yes_{drive_id}_{play_n}",
-                use_container_width=True,
-                type="primary" if cur_b == "Yes" else "secondary",
-            ):
-                st.session_state[f"tg_blitz_val_{drive_id}_{play_n}"] = "Yes"
-                st.rerun()
-        updates["blitz"] = st.session_state.get(f"tg_blitz_val_{drive_id}_{play_n}", cur_b)
+    def _render_field(fid: str) -> None:
+        if fid == FOCUS_FRONT:
+            front_opts = _merge_film_tag_options(
+                _tag_options(
+                    offense_df["def_front"] if "def_front" in offense_df.columns else pd.Series(dtype=str),
+                ),
+                full["def_front"] if "def_front" in full.columns else pd.Series(dtype=str),
+                kind="def_front",
+            )
+            updates["def_front"] = _chip_pick(
+                "Front",
+                front_opts[:12] or ["Even", "Odd"],
+                f"tg_front_{drive_id}_{play_n}",
+                str(row.get("def_front") or ""),
+            )
+        elif fid == FOCUS_COVERAGE:
+            cov_opts = _merge_film_tag_options(
+                _tag_options(
+                    offense_df["coverage"] if "coverage" in offense_df.columns else pd.Series(dtype=str),
+                ),
+                full["coverage"] if "coverage" in full.columns else pd.Series(dtype=str),
+                kind="coverage",
+            )
+            updates["coverage"] = _chip_pick(
+                "Coverage",
+                cov_opts[:12] or ["Cover 2", "Cover 3", "Cover 4"],
+                f"tg_cov_{drive_id}_{play_n}",
+                str(row.get("coverage") or ""),
+            )
+        elif fid == FOCUS_BLITZ:
+            st.caption("Blitz")
+            cur_b = str(row.get("blitz") or "No").strip().title()
+            if cur_b not in {"Yes", "No"}:
+                cur_b = "No"
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button(
+                    "No",
+                    key=f"tg_blitz_no_{drive_id}_{play_n}",
+                    use_container_width=True,
+                    type="primary" if cur_b == "No" else "secondary",
+                ):
+                    st.session_state[f"tg_blitz_val_{drive_id}_{play_n}"] = "No"
+                    st.rerun()
+            with b2:
+                if st.button(
+                    "Yes",
+                    key=f"tg_blitz_yes_{drive_id}_{play_n}",
+                    use_container_width=True,
+                    type="primary" if cur_b == "Yes" else "secondary",
+                ):
+                    st.session_state[f"tg_blitz_val_{drive_id}_{play_n}"] = "Yes"
+                    st.rerun()
+            updates["blitz"] = st.session_state.get(f"tg_blitz_val_{drive_id}_{play_n}", cur_b)
+        elif fid == FOCUS_MOTION:
+            motion_opts = _merge_tag_options(
+                _tag_options(
+                    offense_df["motion"] if "motion" in offense_df.columns else pd.Series(dtype=str),
+                ),
+                full["motion"] if "motion" in full.columns else pd.Series(dtype=str),
+                kind="motion",
+            )
+            for m in _hudl_motion_options():
+                if m not in motion_opts:
+                    motion_opts.append(m)
+            updates["motion"] = _chip_pick(
+                "Motion",
+                motion_opts[:12] or ["None"],
+                f"tg_motion_{drive_id}_{play_n}",
+                str(row.get("motion") or ""),
+            )
+
+    if pre:
+        st.markdown("##### Pre-snap")
+        for fid in pre:
+            _render_field(fid)
+    if post:
+        st.markdown("##### Post-snap")
+        for fid in post:
+            _render_field(fid)
 
     if has_snaps_focus(focuses) and FOCUS_SNAPS in focuses:
         updates["formation"] = st.text_input(
@@ -6936,7 +6964,8 @@ def _render_home_page() -> None:
     from booth_stations import (
         FOCUS_HELP,
         FOCUS_LABELS,
-        TAGGER_JOBS,
+        TAGGER_PACK_THIRD,
+        TAGGER_PACKS,
         TAGGER_SPLIT_HELP,
         main_invite_url,
         tagger_invite_url,
@@ -7025,15 +7054,20 @@ def _render_home_page() -> None:
         st.warning("Set the booth website URL above so invite links work.")
         return
 
-    st.markdown("**Send one link per phone**")
-    for key in TAGGER_JOBS:
-        link = tagger_invite_url(base, [key])
-        label = FOCUS_LABELS.get(key, key)
-        help_t = FOCUS_HELP.get(key, "")
-        st.markdown(f"**{label}** — {help_t}")
+    st.markdown("**Send one link per phone (2 taggers)**")
+    for pack in TAGGER_PACKS:
+        foc = list(pack["focuses"])
+        link = tagger_invite_url(base, foc)
+        st.markdown(f"**Phone {pack['slot']}: {pack['label']}**")
+        st.caption(pack["subtitle"])
         st.code(link, language=None)
 
-    with st.expander("Let them pick the job (one link)"):
+    with st.expander("3rd phone (optional)"):
+        foc = list(TAGGER_PACK_THIRD["focuses"])
+        st.caption(TAGGER_PACK_THIRD["subtitle"])
+        st.code(tagger_invite_url(base, foc), language=None)
+
+    with st.expander("Let them pick the pack"):
         st.code(tagger_invite_url(base), language=None)
 
     with st.expander("Main device link"):
