@@ -133,7 +133,7 @@ def apply_chart_style(fig: go.Figure, title: str | None = None, height: int = 42
         **CHART_LAYOUT,
         template="simple_white",
         height=height,
-        colorway=["#14532D", "#B91C1C", "#1D4ED8", "#B45309", "#0F766E"],
+        colorway=["#1B4332", "#C9A227", "#1D4ED8", "#B45309", "#0F766E"],
     )
     if title:
         fig.update_layout(title=title)
@@ -150,7 +150,18 @@ def smooth_line_chart(
     dash: str = "solid",
     width: float = 3.5,
     show_labels: bool = False,
+    curved: bool = True,
 ) -> go.Scatter:
+    line: dict = {
+        "color": color,
+        "width": width,
+        "dash": dash,
+    }
+    if curved:
+        line["shape"] = "spline"
+        line["smoothing"] = 0.85
+    else:
+        line["shape"] = "linear"
     return go.Scatter(
         x=df[x_col],
         y=df[y_col],
@@ -159,12 +170,7 @@ def smooth_line_chart(
         text=[f"{v:.0f}" for v in df[y_col]] if show_labels else None,
         textposition="top center",
         textfont={"size": 12, "color": color, "family": "Arial Black, Arial, sans-serif"},
-        line={
-            "color": color,
-            "width": width,
-            "dash": dash,
-            "shape": "linear",
-        },
+        line=line,
         marker={
             "size": 12,
             "color": color,
@@ -733,18 +739,32 @@ def inject_styles() -> None:
             color: #5c6b62 !important;
         }
 
-        /* School primary buttons */
+        /* School primary / green buttons — white label (beat global span color rules) */
         div[data-testid="stButton"] > button[kind="primary"],
-        button[data-testid="baseButton-primary"] {
+        div[data-testid="stButton"] > button[kind="primary"] *,
+        div[data-testid="stButton"] > button[data-testid="baseButton-primary"],
+        div[data-testid="stButton"] > button[data-testid="baseButton-primary"] *,
+        button[data-testid="baseButton-primary"],
+        button[data-testid="baseButton-primary"] *,
+        div[data-testid="stForm"] button[data-testid="baseButton-primaryFormSubmit"],
+        div[data-testid="stForm"] button[data-testid="baseButton-primaryFormSubmit"] *,
+        div[data-testid="stForm"] div[data-testid="stButton"] > button[kind="primary"],
+        div[data-testid="stForm"] div[data-testid="stButton"] > button[kind="primary"] * {
             background-color: #1B4332 !important;
             border-color: #2D6A4F !important;
             color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
         }
         div[data-testid="stButton"] > button[kind="primary"]:hover,
-        button[data-testid="baseButton-primary"]:hover {
+        div[data-testid="stButton"] > button[kind="primary"]:hover *,
+        div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:hover,
+        div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:hover *,
+        button[data-testid="baseButton-primary"]:hover,
+        button[data-testid="baseButton-primary"]:hover * {
             background-color: #2D6A4F !important;
             border-color: #40916C !important;
             color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
         }
         /* Compact Database roster */
         [data-testid="stDataFrame"] td,
@@ -2241,9 +2261,10 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
             "game_label",
             "actual_points",
             unit_cfg["actual_line"],
-            "#14532D",
+            "#1B4332",
             width=4.5,
             show_labels=True,
+            curved=True,
         )
     )
     points_fig.add_trace(
@@ -2252,33 +2273,37 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
             "game_label",
             "xpoints",
             "Expected points (xP)",
-            "#DC2626",
+            "#C9A227",
             dash="solid",
             width=4.5,
             show_labels=True,
+            curved=True,
         )
     )
-    # Hard-lock by index — name selectors can miss; Streamlit theme used to wash xP white
+    # Hard-lock by index — Streamlit theme can remap named colors
     if len(points_fig.data) >= 1:
-        points_fig.data[0].line.color = "#14532D"
-        points_fig.data[0].marker.color = "#14532D"
-        points_fig.data[0].marker.line.color = "#14532D"
+        points_fig.data[0].line.color = "#1B4332"
+        points_fig.data[0].line.shape = "spline"
+        points_fig.data[0].line.smoothing = 0.85
+        points_fig.data[0].marker.color = "#1B4332"
+        points_fig.data[0].marker.line.color = "#1B4332"
         if getattr(points_fig.data[0], "textfont", None) is not None:
-            points_fig.data[0].textfont.color = "#14532D"
+            points_fig.data[0].textfont.color = "#1B4332"
     if len(points_fig.data) >= 2:
-        points_fig.data[1].line.color = "#DC2626"
-        points_fig.data[1].marker.color = "#DC2626"
-        points_fig.data[1].marker.line.color = "#991B1B"
+        points_fig.data[1].line.color = "#C9A227"
+        points_fig.data[1].line.shape = "spline"
+        points_fig.data[1].line.smoothing = 0.85
         points_fig.data[1].line.width = 4.5
+        points_fig.data[1].marker.color = "#C9A227"
+        points_fig.data[1].marker.line.color = "#A16207"
         if getattr(points_fig.data[1], "textfont", None) is not None:
-            points_fig.data[1].textfont.color = "#991B1B"
+            points_fig.data[1].textfont.color = "#A16207"
     points_fig.update_layout(
         xaxis_title="Game",
         yaxis_title="Points",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
         hovermode="x unified",
-        # Keep our colors even if a theme tries to recolor
-        colorway=["#14532D", "#DC2626"],
+        colorway=["#1B4332", "#C9A227"],
     )
     # theme=None stops Streamlit from remapping Plotly colors to the app theme
     st.plotly_chart(points_fig, use_container_width=True, theme=None)
@@ -12920,6 +12945,13 @@ def _inject_main_booth_css() -> None:
             text-transform: uppercase !important;
             background: #1B4332 !important;
             border-color: #1B4332 !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+        div[data-testid="stForm"] div[data-testid="stButton"] > button[kind="primary"] *,
+        div[data-testid="stForm"] button[data-testid="baseButton-primaryFormSubmit"] * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
         }
         /* Soft page wash */
         [data-testid="stAppViewContainer"] > .main {
@@ -13035,16 +13067,29 @@ def _inject_main_booth_css() -> None:
         div[data-testid="stButton"] > button[data-testid="baseButton-primary"] {
             background: #1B4332 !important;
             color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
             border-color: #1B4332 !important;
             min-height: 3.1rem !important;
             font-size: 1.05rem !important;
             font-weight: 700 !important;
             letter-spacing: 0.04em;
         }
+        div[data-testid="stButton"] > button[kind="primary"] *,
+        div[data-testid="stButton"] > button[data-testid="baseButton-primary"] * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
         div[data-testid="stButton"] > button[kind="primary"]:hover,
         div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:hover {
             background: #2D6A4F !important;
             border-color: #2D6A4F !important;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+        div[data-testid="stButton"] > button[kind="primary"]:hover *,
+        div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:hover * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
         }
         div[data-testid="stTextInput"] input {
             min-height: 3.15rem !important;

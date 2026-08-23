@@ -7,8 +7,8 @@ textColor = "#14201a"
 font = "sans serif"
 # Used when Streamlit remaps Plotly — keep xP (2nd series) vivid, never near-white
 chartCategoricalColors = [
-  "#14532D",
-  "#DC2626",
+  "#1B4332",
+  "#C9A227",
   "#1D4ED8",
   "#B45309",
   "#0F766E",
