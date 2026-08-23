@@ -193,14 +193,33 @@ def inject_styles() -> None:
             background-color: #F4F7F5;
             border-right: 1px solid #D8E2DC;
         }
-        [data-testid="stSidebar"] * {
+        [data-testid="stSidebar"] p,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] span,
+        [data-testid="stSidebar"] .stMarkdown {
             color: #1e3328 !important;
+        }
+        /* Sidebar primary buttons stay white-on-green */
+        [data-testid="stSidebar"] button[kind="primary"],
+        [data-testid="stSidebar"] button[kind="primary"] *,
+        [data-testid="stSidebar"] button[data-testid*="primary"],
+        [data-testid="stSidebar"] button[data-testid*="primary"] * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
         }
         .block-container {
             padding-top: 0.75rem;
             color: #14201a;
         }
-        h1, h2, h3, h4, p, label, span, .stMarkdown {
+        /* Body copy only — do NOT paint every span (breaks green button labels) */
+        h1, h2, h3, h4, .stMarkdown {
+            color: #14201a !important;
+        }
+        [data-testid="stMarkdownContainer"] p,
+        [data-testid="stMarkdownContainer"] li,
+        [data-testid="stWidgetLabel"] p,
+        [data-testid="stWidgetLabel"],
+        label[data-testid="stWidgetLabel"] {
             color: #14201a !important;
         }
         div[data-testid="stMetric"] {
@@ -236,9 +255,11 @@ def inject_styles() -> None:
         .stTabs [data-baseweb="tab"] {
             color: #5c6b62 !important;
         }
-        .stTabs [aria-selected="true"] {
+        .stTabs [aria-selected="true"],
+        .stTabs [aria-selected="true"] * {
             background-color: #1B4332 !important;
             color: #ffffff !important;
+            -webkit-text-fill-color: #ffffff !important;
         }
         div[data-baseweb="select"] > div,
         div[data-baseweb="input"] {
@@ -766,6 +787,32 @@ def inject_styles() -> None:
             color: #FFFFFF !important;
             -webkit-text-fill-color: #FFFFFF !important;
         }
+
+        /* FINAL OVERRIDE — white text on every green / primary control (Streamlit 1.3x–1.6x testids) */
+        button[kind="primary"],
+        button[kind="primary"] *,
+        button[data-testid*="primary"],
+        button[data-testid*="primary"] *,
+        button[data-testid*="Primary"],
+        button[data-testid*="Primary"] *,
+        [data-testid="stDownloadButton"] button,
+        [data-testid="stDownloadButton"] button *,
+        [data-testid="stFormSubmitButton"] button,
+        [data-testid="stFormSubmitButton"] button *,
+        [data-testid="stPopover"] button[kind="primary"],
+        [data-testid="stPopover"] button[kind="primary"] *,
+        div[data-testid="stButton"] button[kind="primary"],
+        div[data-testid="stButton"] button[kind="primary"] p,
+        div[data-testid="stButton"] button[kind="primary"] span,
+        div[data-testid="stButton"] button[kind="primary"] div,
+        div[data-testid="stButton"] button[data-testid*="primary"],
+        div[data-testid="stButton"] button[data-testid*="primary"] p,
+        div[data-testid="stButton"] button[data-testid*="primary"] span,
+        div[data-testid="stButton"] button[data-testid*="primary"] div {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            fill: #FFFFFF !important;
+        }
         /* Compact Database roster */
         [data-testid="stDataFrame"] td,
         [data-testid="stDataFrame"] th,
@@ -786,6 +833,27 @@ def inject_styles() -> None:
         }
         @media (max-width: 900px) {
             .ht-strip { grid-template-columns: 1fr 1fr; }
+        }
+
+        /* LAST RULE IN FILE — white on green must win over earlier span/label colors */
+        button[kind="primary"],
+        button[kind="primary"] *,
+        button[data-testid*="primary"],
+        button[data-testid*="primary"] *,
+        button[data-testid*="Primary"],
+        button[data-testid*="Primary"] *,
+        [data-testid="stDownloadButton"] button,
+        [data-testid="stDownloadButton"] button *,
+        [data-testid="stFormSubmitButton"] button,
+        [data-testid="stFormSubmitButton"] button *,
+        [data-testid="baseButton-primary"],
+        [data-testid="baseButton-primary"] *,
+        [data-testid="baseButton-primaryFormSubmit"],
+        [data-testid="baseButton-primaryFormSubmit"] *,
+        .stTabs [aria-selected="true"],
+        .stTabs [aria-selected="true"] * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
         }
         </style>
         """,
@@ -13125,6 +13193,27 @@ def _inject_main_booth_css() -> None:
         /* Soften default Live Track title when app bar present */
         .live-title { display: none !important; }
         hr { border: none !important; border-top: 1px solid #E2EBE5 !important; margin: 0.55rem 0 !important; }
+
+        /* LAST — white text on green primary controls (booth CSS loads after inject_styles) */
+        button[kind="primary"],
+        button[kind="primary"] *,
+        button[data-testid*="primary"],
+        button[data-testid*="primary"] *,
+        button[data-testid*="Primary"],
+        button[data-testid*="Primary"] *,
+        [data-testid="stDownloadButton"] button,
+        [data-testid="stDownloadButton"] button *,
+        [data-testid="stFormSubmitButton"] button,
+        [data-testid="stFormSubmitButton"] button *,
+        [data-testid="baseButton-primary"],
+        [data-testid="baseButton-primary"] *,
+        [data-testid="baseButton-primaryFormSubmit"],
+        [data-testid="baseButton-primaryFormSubmit"] *,
+        .stTabs [aria-selected="true"],
+        .stTabs [aria-selected="true"] * {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
