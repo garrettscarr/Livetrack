@@ -273,8 +273,8 @@ def upsert_live_snap(
         # Recompute film_pending from film fields if present
         front = str(merged.get("def_front") or "").strip()
         cov = str(merged.get("coverage") or "").strip()
-        blitz = str(merged.get("blitz") or "").strip().lower()
-        if front and cov and blitz in {"yes", "no"}:
+        # Front + Coverage is enough for the 1-tagger pack (blitz optional)
+        if front and cov:
             merged["film_pending"] = "No"
         elif updates.get("film_pending") is not None:
             merged["film_pending"] = updates["film_pending"]

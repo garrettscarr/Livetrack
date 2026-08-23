@@ -55,31 +55,24 @@ FILM_FOCUSES: frozenset[str] = frozenset(
     {FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_MOTION}
 )
 
-# Normal booth = 2 taggers, each gets one pre + one post
+# Normal booth with 1 extra phone: Front + Coverage (no headset → no play call)
 TAGGER_PACKS: tuple[dict, ...] = (
     {
-        "id": "front_blitz",
-        "label": "Front + Blitz",
-        "subtitle": "Pre-snap: Front  →  Post-snap: Blitz",
-        "focuses": (FOCUS_FRONT, FOCUS_BLITZ),
+        "id": "front_coverage",
+        "label": "Front + Coverage",
+        "subtitle": "Pre-snap looks · End yard for auto gain · (1 tagger)",
+        "focuses": (FOCUS_FRONT, FOCUS_COVERAGE),
         "slot": 1,
-    },
-    {
-        "id": "coverage_motion",
-        "label": "Coverage + Motion",
-        "subtitle": "Pre-snap: Coverage  →  Post-snap: Motion",
-        "focuses": (FOCUS_COVERAGE, FOCUS_MOTION),
-        "slot": 2,
     },
 )
 
-# Optional 3rd phone: lighter single-end overflow / catch-up
+# Optional 2nd helper phone if you ever need post-snap overflow
 TAGGER_PACK_THIRD: dict = {
-    "id": "coverage_blitz",
-    "label": "Coverage + Blitz (3rd phone)",
-    "subtitle": "Pre: Coverage  →  Post: Blitz — use only with 3 taggers",
-    "focuses": (FOCUS_COVERAGE, FOCUS_BLITZ),
-    "slot": 3,
+    "id": "blitz_motion",
+    "label": "Blitz + Motion (2nd phone)",
+    "subtitle": "Post-snap only — only if you add a second tagger",
+    "focuses": (FOCUS_BLITZ, FOCUS_MOTION),
+    "slot": 2,
 }
 
 TAGGER_JOBS: tuple[str, ...] = (
@@ -90,8 +83,9 @@ TAGGER_JOBS: tuple[str, ...] = (
 )
 
 TAGGER_SPLIT_HELP = (
-    "Normal: 2 phones — Front+Blitz and Coverage+Motion "
-    "(each works pre-snap and post-snap). Optional 3rd phone below. Main logs snaps."
+    "1 tagger (recommended): Front + Coverage + end yard line. "
+    "Main (headset) logs the call; app computes yards from start→end. "
+    "Optional 2nd phone for Blitz + Motion."
 )
 
 STATION_LABELS: dict[str, str] = {
@@ -143,17 +137,21 @@ def normalize_focuses(raw) -> list[str]:
         "blitz": FOCUS_BLITZ,
         "motion": FOCUS_MOTION,
         # Pack shortcuts
+        "front_coverage": "__pack_front_coverage__",
         "front_blitz": "__pack_front_blitz__",
         "coverage_motion": "__pack_coverage_motion__",
         "coverage_blitz": "__pack_coverage_blitz__",
-        "pack1": "__pack_front_blitz__",
-        "pack2": "__pack_coverage_motion__",
+        "blitz_motion": "__pack_blitz_motion__",
+        "pack1": "__pack_front_coverage__",
+        "pack2": "__pack_blitz_motion__",
         "pack3": "__pack_coverage_blitz__",
     }
     pack_map = {
+        "__pack_front_coverage__": [FOCUS_FRONT, FOCUS_COVERAGE],
         "__pack_front_blitz__": [FOCUS_FRONT, FOCUS_BLITZ],
         "__pack_coverage_motion__": [FOCUS_COVERAGE, FOCUS_MOTION],
         "__pack_coverage_blitz__": [FOCUS_COVERAGE, FOCUS_BLITZ],
+        "__pack_blitz_motion__": [FOCUS_BLITZ, FOCUS_MOTION],
     }
     for p in parts:
         key = aliases.get(p.strip().lower(), p.strip().lower())

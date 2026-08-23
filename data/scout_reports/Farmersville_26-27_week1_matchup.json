@@ -1,0 +1,430 @@
+{
+  "rule": "4-2 \u2192 booth Even for all numbered fronts",
+  "scout_n": 58,
+  "booth_even_pct": 96.6,
+  "booth_bear_pct": 3.4,
+  "detail_fronts": [
+    {
+      "look": "31",
+      "n": 22,
+      "pct": 37.9,
+      "booth": "even"
+    },
+    {
+      "look": "13",
+      "n": 20,
+      "pct": 34.5,
+      "booth": "even"
+    },
+    {
+      "look": "22",
+      "n": 10,
+      "pct": 17.2,
+      "booth": "even"
+    },
+    {
+      "look": "11",
+      "n": 2,
+      "pct": 3.4,
+      "booth": "even"
+    },
+    {
+      "look": "BEAR",
+      "n": 2,
+      "pct": 3.4,
+      "booth": "bear"
+    },
+    {
+      "look": "23",
+      "n": 1,
+      "pct": 1.7,
+      "booth": "even"
+    },
+    {
+      "look": "33",
+      "n": 1,
+      "pct": 1.7,
+      "booth": "even"
+    }
+  ],
+  "coverages": [
+    {
+      "look": "3",
+      "scout_n": 29,
+      "scout_pct": 50.0,
+      "prior": {
+        "n": 48,
+        "epa": -0.353,
+        "suc": 0.286
+      },
+      "prior_even": {
+        "n": 41,
+        "epa": -0.34,
+        "suc": 0.314
+      },
+      "scrim": {
+        "n": 1,
+        "epa": 0.0,
+        "suc": 1.0
+      },
+      "best_prior": [
+        {
+          "call": "IRELAND",
+          "plays": 2,
+          "avg_epa": 0.535
+        }
+      ],
+      "best_prior_even": []
+    },
+    {
+      "look": "4",
+      "scout_n": 18,
+      "scout_pct": 31.0,
+      "prior": {
+        "n": 101,
+        "epa": 0.061,
+        "suc": 0.457
+      },
+      "prior_even": {
+        "n": 87,
+        "epa": 0.072,
+        "suc": 0.485
+      },
+      "scrim": {
+        "n": 0,
+        "epa": null,
+        "suc": null
+      },
+      "best_prior": [
+        {
+          "call": "ILLINOIS",
+          "plays": 2,
+          "avg_epa": 1.376
+        },
+        {
+          "call": "HORNS",
+          "plays": 2,
+          "avg_epa": 0.203
+        }
+      ],
+      "best_prior_even": [
+        {
+          "call": "ILLINOIS",
+          "plays": 2,
+          "avg_epa": 1.376
+        },
+        {
+          "call": "HORNS",
+          "plays": 2,
+          "avg_epa": 0.203
+        }
+      ]
+    },
+    {
+      "look": "0",
+      "scout_n": 7,
+      "scout_pct": 12.1,
+      "prior": {
+        "n": 10,
+        "epa": 1.212,
+        "suc": 0.444
+      },
+      "prior_even": {
+        "n": 9,
+        "epa": 1.515,
+        "suc": 0.5
+      },
+      "scrim": {
+        "n": 0,
+        "epa": null,
+        "suc": null
+      },
+      "best_prior": [],
+      "best_prior_even": []
+    },
+    {
+      "look": "0 SWITCH",
+      "scout_n": 1,
+      "scout_pct": 1.7,
+      "prior": {
+        "n": 10,
+        "epa": 1.212,
+        "suc": 0.444
+      },
+      "prior_even": {
+        "n": 9,
+        "epa": 1.515,
+        "suc": 0.5
+      },
+      "scrim": {
+        "n": 0,
+        "epa": null,
+        "suc": null
+      },
+      "best_prior": [],
+      "best_prior_even": []
+    }
+  ],
+  "even": {
+    "look": "even",
+    "prior": {
+      "n": 159,
+      "epa": 0.109,
+      "suc": 0.421
+    },
+    "last": {
+      "n": 378,
+      "epa": 0.091,
+      "suc": 0.447
+    },
+    "scrim": {
+      "n": 13,
+      "epa": 0.678,
+      "suc": 0.583
+    },
+    "combo": {
+      "n": 391,
+      "epa": 0.111,
+      "suc": 0.452
+    },
+    "fv_ly": {
+      "n": 64,
+      "epa": 0.106,
+      "suc": 0.436
+    },
+    "best_combo": [
+      {
+        "call": "2 PLAY",
+        "plays": 2,
+        "avg_epa": 1.896
+      },
+      {
+        "call": "BATMAN",
+        "plays": 2,
+        "avg_epa": 1.602
+      },
+      {
+        "call": "OUT",
+        "plays": 2,
+        "avg_epa": 1.071
+      }
+    ],
+    "best_last": [
+      {
+        "call": "2 PLAY",
+        "plays": 2,
+        "avg_epa": 1.896
+      },
+      {
+        "call": "BATMAN",
+        "plays": 2,
+        "avg_epa": 1.602
+      },
+      {
+        "call": "OUT",
+        "plays": 2,
+        "avg_epa": 1.071
+      }
+    ]
+  },
+  "bear": {
+    "look": "bear",
+    "prior": {
+      "n": 1,
+      "epa": -0.078,
+      "suc": 0.0
+    },
+    "last": {
+      "n": 0,
+      "epa": null,
+      "suc": null
+    },
+    "scrim": {
+      "n": 10,
+      "epa": -0.0,
+      "suc": 0.4
+    },
+    "combo": {
+      "n": 10,
+      "epa": -0.0,
+      "suc": 0.4
+    },
+    "fv_ly": {
+      "n": 0,
+      "epa": null,
+      "suc": null
+    },
+    "best_combo": [],
+    "best_last": []
+  },
+  "odd": {
+    "look": "odd",
+    "prior": {
+      "n": 0,
+      "epa": null,
+      "suc": null
+    },
+    "last": {
+      "n": 143,
+      "epa": 0.017,
+      "suc": 0.421
+    },
+    "scrim": {
+      "n": 0,
+      "epa": null,
+      "suc": null
+    },
+    "combo": {
+      "n": 143,
+      "epa": 0.017,
+      "suc": 0.421
+    },
+    "fv_ly": {
+      "n": 2,
+      "epa": -2.638,
+      "suc": NaN
+    },
+    "best_combo": [
+      {
+        "call": "JOKER",
+        "plays": 3,
+        "avg_epa": 1.394
+      },
+      {
+        "call": "BATMAN",
+        "plays": 2,
+        "avg_epa": 1.097
+      },
+      {
+        "call": "WAVE",
+        "plays": 4,
+        "avg_epa": 1.078
+      }
+    ],
+    "best_last": [
+      {
+        "call": "JOKER",
+        "plays": 3,
+        "avg_epa": 1.394
+      },
+      {
+        "call": "BATMAN",
+        "plays": 2,
+        "avg_epa": 1.097
+      },
+      {
+        "call": "WAVE",
+        "plays": 4,
+        "avg_epa": 1.078
+      }
+    ]
+  },
+  "edges": [
+    {
+      "look": "0",
+      "scout_n": 7,
+      "scout_pct": 12.1,
+      "prior": {
+        "n": 10,
+        "epa": 1.212,
+        "suc": 0.444
+      },
+      "prior_even": {
+        "n": 9,
+        "epa": 1.515,
+        "suc": 0.5
+      },
+      "scrim": {
+        "n": 0,
+        "epa": null,
+        "suc": null
+      },
+      "best_prior": [],
+      "best_prior_even": [],
+      "verdict_epa": 1.515,
+      "verdict_n": 9,
+      "verdict_scope": "even+cov"
+    },
+    {
+      "look": "4",
+      "scout_n": 18,
+      "scout_pct": 31.0,
+      "prior": {
+        "n": 101,
+        "epa": 0.061,
+        "suc": 0.457
+      },
+      "prior_even": {
+        "n": 87,
+        "epa": 0.072,
+        "suc": 0.485
+      },
+      "scrim": {
+        "n": 0,
+        "epa": null,
+        "suc": null
+      },
+      "best_prior": [
+        {
+          "call": "ILLINOIS",
+          "plays": 2,
+          "avg_epa": 1.376
+        },
+        {
+          "call": "HORNS",
+          "plays": 2,
+          "avg_epa": 0.203
+        }
+      ],
+      "best_prior_even": [
+        {
+          "call": "ILLINOIS",
+          "plays": 2,
+          "avg_epa": 1.376
+        },
+        {
+          "call": "HORNS",
+          "plays": 2,
+          "avg_epa": 0.203
+        }
+      ],
+      "verdict_epa": 0.072,
+      "verdict_n": 87,
+      "verdict_scope": "even+cov"
+    }
+  ],
+  "traps": [
+    {
+      "look": "3",
+      "scout_n": 29,
+      "scout_pct": 50.0,
+      "prior": {
+        "n": 48,
+        "epa": -0.353,
+        "suc": 0.286
+      },
+      "prior_even": {
+        "n": 41,
+        "epa": -0.34,
+        "suc": 0.314
+      },
+      "scrim": {
+        "n": 1,
+        "epa": 0.0,
+        "suc": 1.0
+      },
+      "best_prior": [
+        {
+          "call": "IRELAND",
+          "plays": 2,
+          "avg_epa": 0.535
+        }
+      ],
+      "best_prior_even": [],
+      "verdict_epa": -0.34,
+      "verdict_n": 41,
+      "verdict_scope": "even+cov"
+    }
+  ],
+  "lean_cov": "3"
+}

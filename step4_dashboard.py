@@ -108,27 +108,33 @@ def show_defense_legend() -> None:
     )
 CHART_LAYOUT = {
     "paper_bgcolor": "#FFFFFF",
-    "plot_bgcolor": "#F8FAF9",
+    "plot_bgcolor": "#EEF2EF",
     "font": {"color": "#14201a", "size": 13},
     "title": {"font": {"color": "#14201a", "size": 16}},
     "xaxis": {
-        "gridcolor": "#E2E8E4",
-        "linecolor": "#C5D0CA",
+        "gridcolor": "#D5DED8",
+        "linecolor": "#9AA89F",
         "tickfont": {"color": "#3d4f45"},
         "title_font": {"color": "#3d4f45"},
     },
     "yaxis": {
-        "gridcolor": "#E2E8E4",
-        "linecolor": "#C5D0CA",
+        "gridcolor": "#D5DED8",
+        "linecolor": "#9AA89F",
         "tickfont": {"color": "#3d4f45"},
         "title_font": {"color": "#3d4f45"},
     },
-    "legend": {"font": {"color": "#14201a"}},
+    "legend": {"font": {"color": "#14201a"}, "bgcolor": "rgba(255,255,255,0.85)"},
 }
 
 
 def apply_chart_style(fig: go.Figure, title: str | None = None, height: int = 420) -> go.Figure:
-    fig.update_layout(**CHART_LAYOUT, template=CHART_TEMPLATE, height=height)
+    # Prefer explicit layout over plotly_white — that template can wash out custom trace colors
+    fig.update_layout(
+        **CHART_LAYOUT,
+        template="simple_white",
+        height=height,
+        colorway=["#14532D", "#B91C1C", "#1D4ED8", "#B45309", "#0F766E"],
+    )
     if title:
         fig.update_layout(title=title)
     return fig
@@ -140,14 +146,31 @@ def smooth_line_chart(
     y_col: str,
     name: str,
     color: str,
+    *,
+    dash: str = "solid",
+    width: float = 3.5,
+    show_labels: bool = False,
 ) -> go.Scatter:
     return go.Scatter(
         x=df[x_col],
         y=df[y_col],
         name=name,
-        mode="lines+markers",
-        line={"color": color, "width": 3, "shape": "spline", "smoothing": 1.3},
-        marker={"size": 8, "color": color, "line": {"width": 1, "color": "#ffffff"}},
+        mode="lines+markers+text" if show_labels else "lines+markers",
+        text=[f"{v:.0f}" for v in df[y_col]] if show_labels else None,
+        textposition="top center",
+        textfont={"size": 12, "color": color, "family": "Arial Black, Arial, sans-serif"},
+        line={
+            "color": color,
+            "width": width,
+            "dash": dash,
+            "shape": "linear",
+        },
+        marker={
+            "size": 12,
+            "color": color,
+            "line": {"width": 2, "color": color},
+            "symbol": "circle",
+        },
         hovertemplate=f"{name}: %{{y:.1f}}<extra></extra>",
     )
 
@@ -698,7 +721,12 @@ def inject_styles() -> None:
             color: #14201a !important;
         }
         .stPlotlyChart, .js-plotly-plot, .plot-container {
-            background-color: #F4F7F5 !important;
+            background-color: #EEF2EF !important;
+            color: #14201a !important;
+        }
+        /* Never force color onto Plotly SVG children — stroke uses currentColor when remapped */
+        .js-plotly-plot .legendtext {
+            fill: #14201a !important;
         }
         div[data-testid="stCaptionContainer"] p,
         div[data-testid="stCaptionContainer"] span {
@@ -745,9 +773,11 @@ def inject_styles() -> None:
     )
 
 
-@st.cache_data
 def _is_current_season_mask(season: pd.Series) -> pd.Series:
-    """True for current-season rows (or legacy rows with no season column value)."""
+    """True for current-season rows (or legacy rows with no season column value).
+
+    Not cached — `current` aliases change with team_config / season rollover.
+    """
     return season.map(_season_api().is_current_season_value)
 
 
@@ -962,6 +992,19 @@ def side_yard_to_ball_yard(side: str, yard: int) -> int:
     if str(side or "").lower().startswith("own"):
         return yd
     return 100 - yd
+
+
+def yards_from_ball_span(
+    start_ball: int | float | None,
+    end_ball: int | float | None,
+) -> int | None:
+    """Gain = end − start in own-goal coords (Own 25 → Opp 25 = +50)."""
+    try:
+        if start_ball is None or end_ball is None:
+            return None
+        return int(end_ball) - int(start_ball)
+    except (TypeError, ValueError):
+        return None
 
 
 def advance_ball_yard(
@@ -1880,8 +1923,10 @@ KEY_SITUATIONS = [
 
 def format_game_label(opponent: str, game_notes: str = "", game_id: int | None = None) -> str:
     label = f"vs {opponent}"
-    if game_notes and str(game_notes).strip():
-        label = f"{label} ({game_notes})"
+    notes = str(game_notes or "").strip()
+    # Live Track games all share the same note — don't clutter the x-axis
+    if notes and notes.lower() not in {"live track", "live", "nan", "none"}:
+        label = f"{label} ({notes})"
     elif game_id is not None:
         label = f"{label} (G{int(game_id)})"
     return label
@@ -1891,26 +1936,33 @@ def game_review_table(df: pd.DataFrame, invert_xp: bool = False) -> pd.DataFrame
     if "game_id" not in df.columns:
         return pd.DataFrame()
 
-    games = (
-        df.groupby("game_id")
-        .agg(
-            plays=("epa", "count"),
-            total_epa=("epa", "sum"),
-            actual_points=("points_scored", "sum"),
-            touchdowns=("is_touchdown", "sum"),
-            opponent=("opponent", "first") if "opponent" in df.columns else ("game_id", "count"),
-            game_notes=("game_notes", "first") if "game_notes" in df.columns else ("game_id", "count"),
-        )
-        .reset_index()
-    )
-    if "opponent" not in df.columns:
+    # game_id alone can collide across sources; keep opponent in the key
+    group_cols: list[str] = ["game_id"]
+    if "opponent" in df.columns:
+        group_cols.append("opponent")
+
+    agg: dict = {
+        "plays": ("epa", "count"),
+        "total_epa": ("epa", "sum"),
+        "actual_points": ("points_scored", "sum"),
+        "touchdowns": ("is_touchdown", "sum"),
+    }
+    if "game_notes" in df.columns:
+        agg["game_notes"] = ("game_notes", "first")
+    if "opponent" in df.columns and "opponent" not in group_cols:
+        agg["opponent"] = ("opponent", "first")
+
+    games = df.groupby(group_cols, dropna=False).agg(**agg).reset_index()
+    if "opponent" not in games.columns:
         games["opponent"] = "Unknown"
+    if "game_notes" not in games.columns:
         games["game_notes"] = ""
 
     games["game_label"] = games.apply(
         lambda row: format_game_label(
             str(row["opponent"]),
             str(row["game_notes"]) if pd.notna(row["game_notes"]) else "",
+            game_id=int(row["game_id"]) if pd.notna(row.get("game_id")) else None,
         ),
         axis=1,
     )
@@ -1925,7 +1977,7 @@ def game_review_table(df: pd.DataFrame, invert_xp: bool = False) -> pd.DataFrame
     games["luck"] = (games["actual_points"] - games["xpoints"]).round(1)
     games["total_epa"] = games["total_epa"].round(2)
 
-    return games.sort_values("game_id")
+    return games.sort_values(["game_id", "opponent"] if "opponent" in games.columns else ["game_id"])
 
 
 def combo_heatmap(
@@ -2026,10 +2078,16 @@ def plays_for_season(df: pd.DataFrame, season_id: str | None) -> pd.DataFrame:
         return df
     tc = _season_api()
     sid = str(season_id or tc.current_season_id()).strip()
-    if tc.is_current_season_value(sid) or sid.lower() in {"current", ""}:
-        return df[_is_current_season_mask(df["season"])].copy()
     s = df["season"].fillna("").astype(str).str.strip().str.lower()
-    return df[s == sid.lower()].copy()
+    # Concrete id match (e.g. "26-27") — do not rely on a cached "current" mask
+    if sid.lower() not in {"current", ""} and not tc.is_current_season_value(sid):
+        return df[s == sid.lower()].copy()
+    # Active / current: include all aliases (26-27, current, blank, …)
+    aliases = {a for a in tc.current_season_aliases() if a is not None}
+    aliases.add(str(tc.current_season_id()).strip().lower())
+    aliases.add("current")
+    aliases.add("")
+    return df[s.isin(aliases)].copy()
 
 
 def list_play_seasons(df: pd.DataFrame) -> list[str]:
@@ -2113,6 +2171,25 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
         )
 
     review_df = plays_for_season(df, picked)
+    # Pull in any live_games CSVs that never merged (e.g. promote skipped / cache stale)
+    try:
+        from live_games import remerge_all_live_games
+
+        sync = remerge_all_live_games(skip_hudl_conflicts=True)
+        if int(sync.get("merged") or 0) > 0:
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
+            df = load_plays("Offense" if not invert else "Defense")
+            review_df = plays_for_season(df, picked)
+            st.caption(
+                f"Synced **{sync.get('plays', 0)}** live snaps into Game Review "
+                f"({sync.get('merged')} game file(s))."
+            )
+    except Exception:
+        pass
+
     other_n = 0
     if "season" in df.columns:
         other_n = int(len(df) - len(review_df))
@@ -2125,9 +2202,18 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
     if games.empty:
         st.warning(
             "No games for this season yet. Drop Hudl into `data/hudl_exports/`, "
-            "set the schedule under **Database → Schedule**, then run `python refresh_all.py`."
+            "set the schedule under **Database → Schedule**, then run `python refresh_all.py`. "
+            "Finished Live Track games also land here when you **Start new game**."
         )
         return
+
+    live_n = 0
+    if "game_notes" in review_df.columns:
+        live_n = int(
+            (review_df["game_notes"].astype(str).str.strip().str.lower() == "live track").sum()
+        )
+    if live_n:
+        st.caption(f"Includes **{live_n:,}** Live Track snaps this season.")
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Games", len(games))
@@ -2137,14 +2223,27 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
 
     chart_df = games.copy()
 
+    # Build axes first, then traces — applying a Plotly template *after* traces
+    # can wipe custom line colors (xP was rendering near-white).
     points_fig = go.Figure()
+    apply_chart_style(
+        points_fig,
+        title=(
+            "Points Allowed vs Expected — by Game"
+            if invert
+            else "Actual Points vs Expected Points — by Game"
+        ),
+        height=440,
+    )
     points_fig.add_trace(
         smooth_line_chart(
             chart_df,
             "game_label",
             "actual_points",
             unit_cfg["actual_line"],
-            "#52B788",
+            "#14532D",
+            width=4.5,
+            show_labels=True,
         )
     )
     points_fig.add_trace(
@@ -2153,38 +2252,55 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
             "game_label",
             "xpoints",
             "Expected points (xP)",
-            "#F8FAF8",
+            "#DC2626",
+            dash="solid",
+            width=4.5,
+            show_labels=True,
         )
     )
-    chart_title = (
-        "Points Allowed vs Expected — by Game"
-        if invert
-        else "Actual Points vs Expected Points — by Game"
-    )
-    apply_chart_style(points_fig, title=chart_title, height=440)
+    # Hard-lock by index — name selectors can miss; Streamlit theme used to wash xP white
+    if len(points_fig.data) >= 1:
+        points_fig.data[0].line.color = "#14532D"
+        points_fig.data[0].marker.color = "#14532D"
+        points_fig.data[0].marker.line.color = "#14532D"
+        if getattr(points_fig.data[0], "textfont", None) is not None:
+            points_fig.data[0].textfont.color = "#14532D"
+    if len(points_fig.data) >= 2:
+        points_fig.data[1].line.color = "#DC2626"
+        points_fig.data[1].marker.color = "#DC2626"
+        points_fig.data[1].marker.line.color = "#991B1B"
+        points_fig.data[1].line.width = 4.5
+        if getattr(points_fig.data[1], "textfont", None) is not None:
+            points_fig.data[1].textfont.color = "#991B1B"
     points_fig.update_layout(
         xaxis_title="Game",
         yaxis_title="Points",
         legend={"orientation": "h", "yanchor": "bottom", "y": 1.02, "x": 0},
         hovermode="x unified",
+        # Keep our colors even if a theme tries to recolor
+        colorway=["#14532D", "#DC2626"],
     )
-    st.plotly_chart(points_fig, use_container_width=True)
+    # theme=None stops Streamlit from remapping Plotly colors to the app theme
+    st.plotly_chart(points_fig, use_container_width=True, theme=None)
 
     c1, c2 = st.columns(2)
     with c1:
         epa_fig = go.Figure()
+        apply_chart_style(epa_fig, title="Total EPA by Game (↑ better)", height=380)
         epa_fig.add_trace(
             smooth_line_chart(
                 chart_df,
                 "game_label",
                 "total_epa",
                 "Total EPA (process)",
-                "#4ade80",
+                "#14532D",
+                width=4,
+                show_labels=True,
             )
         )
-        apply_chart_style(epa_fig, title="Total EPA by Game (↑ better)", height=380)
+        epa_fig.update_traces(line_color="#14532D", marker_color="#14532D")
         epa_fig.update_layout(xaxis_title="Game", yaxis_title="Def EPA" if invert else "EPA")
-        st.plotly_chart(epa_fig, use_container_width=True)
+        st.plotly_chart(epa_fig, use_container_width=True, theme=None)
     with c2:
         luck_fig = px.bar(
             chart_df,
@@ -2193,12 +2309,12 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
             title="Finishing Luck (↓ better on defense)" if invert else "Finishing Luck by Game",
             color="luck",
             color_continuous_scale=luck_color_scale(unit_cfg),
-            template=CHART_TEMPLATE,
+            template="simple_white",
         )
         apply_chart_style(luck_fig, height=380)
-        luck_fig.add_hline(y=0, line_dash="dash", line_color="#9ca3af")
+        luck_fig.add_hline(y=0, line_dash="dash", line_color="#64748B")
         luck_fig.update_layout(xaxis_title="Game", yaxis_title="Luck")
-        st.plotly_chart(luck_fig, use_container_width=True)
+        st.plotly_chart(luck_fig, use_container_width=True, theme=None)
 
     st.subheader("Game-by-game table")
     show = games[
@@ -2693,6 +2809,7 @@ LIVE_LOG_COLUMNS = [
     "call",
     "result",
     "yards_gained",
+    "end_ball_yard",
     "players_on",
     "lineup",
     "ball_player",
@@ -2974,6 +3091,13 @@ def start_new_live_game(
             empty.to_csv(tmp, index=False)
             tmp.replace(LIVE_LOG_FILE)
         result["archived"] = None
+
+    # Bust Streamlit play-table cache so Game Review graphs pick up the promote
+    try:
+        st.cache_data.clear()
+    except Exception:
+        pass
+    result["cache_cleared"] = True
 
     # Fresh drive counter for the night
     save_drive_state(
@@ -5795,6 +5919,314 @@ def _apply_pending_live_situation() -> None:
         st.session_state.lt_situation_note = note
 
 
+def _look_table_for_display(rows: list[dict]) -> pd.DataFrame:
+    """Coach-facing table for scout × our success rows."""
+    if not rows:
+        return pd.DataFrame()
+    out = []
+    for r in rows:
+        suc = r.get("success_rate")
+        epa = r.get("avg_epa")
+        row = {
+            "Look": r.get("look"),
+            "Scout %": r.get("scout_pct"),
+            "Scout n": r.get("scout_plays"),
+            "Our n": r.get("our_plays"),
+            "Our EPA": epa if epa is not None else "—",
+            "Success": f"{100 * suc:.0f}%" if suc is not None else "—",
+            "Verdict": str(r.get("verdict") or "—"),
+        }
+        if r.get("booth_tag"):
+            row["Booth"] = r.get("booth_tag")
+        out.append(row)
+    return pd.DataFrame(out)
+
+
+def _render_scout_matchup_report(
+    report: dict,
+    *,
+    key_prefix: str = "scout_rpt",
+    expanded: bool = True,
+) -> None:
+    """Show tendencies × our success after scout upload / on Scout page."""
+    if not report or not report.get("scout_snaps"):
+        st.info(report.get("summary") or "No scout defense data yet.")
+        return
+
+    st.markdown(f"### Scout matchup · vs {report.get('opponent')}")
+    st.caption(str(report.get("summary") or ""))
+    for note in report.get("notes") or []:
+        st.caption(note)
+
+    e1, e2 = st.columns(2)
+    with e1:
+        st.markdown("**Edges** (we good vs looks they run)")
+        if report.get("edges"):
+            for r in report["edges"]:
+                calls = r.get("best_calls") or []
+                call_bit = ""
+                if calls:
+                    call_bit = " · feature " + ", ".join(
+                        f"{c['call']} ({c['avg_epa']:+.2f})" for c in calls[:2]
+                    )
+                epa = r.get("avg_epa")
+                epa_s = f"{epa:+.3f}" if epa is not None else "—"
+                st.success(
+                    f"**{r['look']}** · scout {r['scout_pct']}% · "
+                    f"EPA {epa_s} (n={r['our_plays']}){call_bit}"
+                )
+        else:
+            st.caption("No clear edges yet (need more tagged snaps vs their looks).")
+    with e2:
+        st.markdown("**Traps / caution** (they run it · we struggle)")
+        if report.get("traps"):
+            for r in report["traps"]:
+                epa = r.get("avg_epa")
+                epa_s = f"{epa:+.3f}" if epa is not None else "—"
+                st.warning(
+                    f"**{r['look']}** · scout {r['scout_pct']}% · "
+                    f"EPA {epa_s} (n={r['our_plays']})"
+                )
+        else:
+            st.caption("No traps flagged.")
+
+    front_label = (
+        "Booth fronts · full table"
+        if report.get("booth_front_mode") == "even_42"
+        else "Fronts · full table"
+    )
+    with st.expander(front_label, expanded=expanded):
+        tf = _look_table_for_display(report.get("fronts") or [])
+        if tf.empty:
+            st.caption("No fronts in scout.")
+        else:
+            st.dataframe(tf, hide_index=True, use_container_width=True)
+    if report.get("fronts_detail") and report.get("booth_front_mode") == "even_42":
+        with st.expander("Scout front detail (film only)", expanded=False):
+            td = _look_table_for_display(report.get("fronts_detail") or [])
+            if not td.empty:
+                cols = [c for c in ["Look", "Booth", "Scout %", "Scout n"] if c in td.columns]
+                st.dataframe(td[cols], hide_index=True, use_container_width=True)
+    with st.expander("Coverages · full table", expanded=False):
+        tc = _look_table_for_display(report.get("coverages") or [])
+        if tc.empty:
+            st.caption("No coverages in scout.")
+        else:
+            st.dataframe(tc, hide_index=True, use_container_width=True)
+    with st.expander("Front | Coverage pairs", expanded=False):
+        tp = _look_table_for_display(report.get("def_calls") or [])
+        if tp.empty:
+            st.caption("No paired calls in scout.")
+        else:
+            st.dataframe(tp, hide_index=True, use_container_width=True)
+
+    from mesh_engine import scout_matchup_report_markdown
+
+    md = scout_matchup_report_markdown(report)
+    st.download_button(
+        "Download matchup report (.md)",
+        data=md,
+        file_name=f"scout_matchup_{report.get('opponent', 'opp').replace(' ', '_')}.md",
+        mime="text/markdown",
+        key=f"{key_prefix}_dl",
+        use_container_width=True,
+        type="primary",
+    )
+
+
+def _save_scout_matchup_report(report: dict) -> Path | None:
+    """Persist markdown under data/scout_reports/."""
+    if not report or not report.get("scout_snaps"):
+        return None
+    try:
+        from mesh_engine import scout_matchup_report_markdown
+
+        out_dir = PROJECT_DIR / "data" / "scout_reports"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        opp = str(report.get("opponent") or "opponent").replace("/", "-")
+        path = out_dir / f"{opp}_matchup.md"
+        path.write_text(scout_matchup_report_markdown(report), encoding="utf-8")
+        return path
+    except Exception:
+        return None
+
+
+def _render_scout_upload_matchup_panel(offense_df: pd.DataFrame) -> None:
+    """Upload Hudl scout → match to stored EPA → downloadable report."""
+    from mesh_engine import build_scout_matchup_report, load_season_opponents
+    from team_config import current_season_id
+
+    st.subheader("Upload scout → matchup report")
+    st.caption(
+        "Drop a Hudl D scout export (.xlsx). We match their looks to your stored "
+        "offense EPA and build a downloadable call-sheet report."
+    )
+
+    season_opps = load_season_opponents()
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        typed = st.text_input(
+            "Opponent name",
+            value=st.session_state.get("scout_upload_opp")
+            or (season_opps[0] if season_opps else ""),
+            key="scout_upload_opp_input",
+            placeholder="Farmersville",
+        )
+    with c2:
+        if season_opps:
+            pick = st.selectbox(
+                "Or pick from schedule",
+                ["—"] + season_opps,
+                key="scout_upload_opp_pick",
+            )
+            if pick and pick != "—":
+                typed = pick
+
+    role = st.radio(
+        "Scout file is…",
+        [
+            "Their defense (D) — match to our offense EPA",
+            "Their offense (O) — stored only (matchup report is D-focused)",
+        ],
+        key="scout_upload_role",
+        horizontal=False,
+    )
+    is_defense = role.startswith("Their defense")
+
+    booth_even = st.checkbox(
+        "4-2 booth tagging (map numbered fronts → Even)",
+        value=True,
+        key="scout_upload_even42",
+        help="Use when the opponent is a 4-2 / Even front family but Hudl charts 31/13/22 detail.",
+    )
+
+    # Season sample for our EPA
+    season_opts = []
+    if offense_df is not None and not offense_df.empty and "season" in offense_df.columns:
+        season_opts = sorted(
+            {
+                str(s).strip()
+                for s in offense_df["season"].dropna().tolist()
+                if str(s).strip() and str(s).strip().lower() != "nan"
+            },
+            reverse=True,
+        )
+    default_seasons = [
+        s for s in season_opts if s in {"24-25", "25-26", "26-27", current_season_id()}
+    ]
+    if not default_seasons and season_opts:
+        default_seasons = season_opts[:2]
+    our_seasons = st.multiselect(
+        "Our EPA seasons to include",
+        options=season_opts or ["all"],
+        default=default_seasons or season_opts,
+        key="scout_upload_our_seasons",
+        help="Last year + this year’s scrimmages is the usual week-1 mix.",
+    )
+
+    up = st.file_uploader(
+        "Hudl scout export (.xlsx)",
+        type=["xlsx", "xls"],
+        key="scout_matchup_uploader",
+    )
+
+    save_db = st.checkbox(
+        "Also save into scout database (for Live Track / tendencies)",
+        value=True,
+        key="scout_upload_save_db",
+    )
+
+    go = st.button(
+        "Generate matchup report",
+        type="primary",
+        key="scout_upload_generate",
+        disabled=up is None or not str(typed or "").strip(),
+        use_container_width=True,
+    )
+
+    if not go:
+        # Show last report if present
+        prev = st.session_state.get("scout_upload_last_report")
+        if prev:
+            st.markdown("---")
+            _render_scout_matchup_report(
+                prev, key_prefix="scout_upload_prev", expanded=True
+            )
+        return
+
+    opp_name = str(typed or "").strip()
+    st.session_state["scout_upload_opp"] = opp_name
+    scout_role = "opponent_defense" if is_defense else "opponent_offense"
+
+    try:
+        exports = PROJECT_DIR / "data" / "hudl_exports"
+        exports.mkdir(parents=True, exist_ok=True)
+        safe = "".join(ch if ch.isalnum() or ch in " -_" else "_" for ch in opp_name)
+        side = "D" if is_defense else "O"
+        dest = exports / f"{safe} {side} Scout.xlsx"
+        dest.write_bytes(up.getvalue())
+
+        n_rows = upsert_scout_plays_from_file(
+            dest, opponent=opp_name, role=scout_role
+        ) if save_db else 0
+
+        # Stamp current season on just-imported rows
+        if save_db and n_rows:
+            try:
+                import sqlite3
+
+                from mesh_engine import DB_FILE
+
+                sid = current_season_id()
+                with sqlite3.connect(DB_FILE) as conn:
+                    conn.execute(
+                        "UPDATE scout_plays SET season=? "
+                        "WHERE LOWER(TRIM(opponent))=? AND scout_role=?",
+                        (sid, opp_name.lower(), scout_role),
+                    )
+            except Exception:
+                pass
+
+        if not is_defense:
+            st.success(
+                f"Saved **{n_rows or 'file'}** offense-scout rows for {opp_name}. "
+                "Matchup report is built for D scout (their defense vs our offense)."
+            )
+            return
+
+        # Build from freshly cleaned file when possible
+        from step2_clean import assign_game_ids, clean_scout_file
+
+        raw = pd.read_excel(dest)
+        raw = raw.copy()
+        raw["game_id"] = assign_game_ids(raw["PLAY #"])
+        cleaned = clean_scout_file(
+            raw, opp_name, scout_role, dest.name, season=current_season_id()
+        )
+        booth_mode = "even_42" if booth_even else "as_scouted"
+        seasons = our_seasons if our_seasons else None
+        report = build_scout_matchup_report(
+            opp_name,
+            offense_df,
+            scout_df=cleaned if cleaned is not None and not cleaned.empty else None,
+            booth_front_mode=booth_mode,
+            our_seasons=seasons,
+        )
+        saved = _save_scout_matchup_report(report)
+        st.session_state["scout_upload_last_report"] = report
+        bits = [f"**{report.get('scout_snaps', 0)}** D snaps matched"]
+        if save_db:
+            bits.append(f"DB +{n_rows}")
+        if saved:
+            bits.append(f"saved `{saved.name}`")
+        st.success(" · ".join(bits))
+        _render_scout_matchup_report(
+            report, key_prefix="scout_upload_new", expanded=True
+        )
+    except Exception as exc:
+        st.error(f"Could not build matchup report: {exc}")
+
+
 def scout_tendencies_page() -> None:
     from mesh_engine import (
         defense_scout_tendencies,
@@ -5804,113 +6236,155 @@ def scout_tendencies_page() -> None:
     )
     current_season_label = _season_api().current_season_label
 
-    st.header("Opponent Scout Tendencies")
-    st.markdown(
-        f"""
-        From per-opponent scout files in `data/hudl_exports/`:
-        - **`Farmersville D.xlsx`** = their defense (fronts/coverages) → helps **our offense**
-        - **`Farmersville O.xlsx`** = their offense (formations/run-pass) → helps **our defense**
-        - Prior season: `Farmersville D_24-25.xlsx` (or `… O_24-25.xlsx`)
-        - PLAY # drop = another prior game of film for that team
-        - Defaults to **{current_season_label()}** scout only
-        """
-    )
+    st.header("Opponent Scout")
+    offense_df = load_plays("Offense")
 
-    season_opps = load_season_opponents()
-    f0, f1 = st.columns([2, 1])
-    opp_choice = f0.selectbox(
-        "Filter by opponent",
-        ["All (pooled)"] + season_opps,
-        key="scout_page_opp",
-    )
-    season_scope = f1.selectbox(
-        "Season",
-        [f"Current ({current_season_label()})", "All seasons"],
-        key="scout_page_season",
-    )
-    opponent = None if opp_choice == "All (pooled)" else opp_choice
-    scout_season = "current" if season_scope.startswith("Current") else "all"
+    tab_upload, tab_tend = st.tabs(["Upload & matchup report", "Tendencies by situation"])
 
-    scout_d = load_scout("opponent_defense", opponent, season=scout_season)
-    scout_o = load_scout("opponent_offense", opponent, season=scout_season)
+    with tab_upload:
+        _render_scout_upload_matchup_panel(offense_df)
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Opponent defense snaps", f"{len(scout_d):,}")
-    c2.metric("Opponent offense snaps", f"{len(scout_o):,}")
-    mapped_note = opponent or "all cuts"
-    c3.metric("Scope", mapped_note)
-
-    if scout_d.empty and scout_o.empty:
-        st.warning(
-            "No scout data for this opponent. Drop `{Opponent} D.xlsx` / `{Opponent} O.xlsx` "
-            "into `data/hudl_exports/`, track progress in `data/scout_opponents.csv`, "
-            "then run `python refresh_all.py`."
+    with tab_tend:
+        st.markdown(
+            f"""
+            From per-opponent scout files in `data/hudl_exports/`:
+            - **`Farmersville D.xlsx`** = their defense (fronts/coverages) → helps **our offense**
+            - **`Farmersville O.xlsx`** = their offense (formations/run-pass) → helps **our defense**
+            - Defaults to **{current_season_label()}** scout only
+            """
         )
-        return
 
-    f1, f2, f3 = st.columns(3)
-    down = f1.selectbox("Down", [1, 2, 3, 4], key="scout_down")
-    dist = f2.selectbox("Distance", ["short", "medium", "long"], key="scout_dist")
-    zone = f3.selectbox(
-        "Field zone",
-        ["backed_up", "own_territory", "midfield", "opp_territory", "red_zone"],
-        index=2,
-        key="scout_zone",
-    )
+        season_opps = load_season_opponents()
+        f0, f1 = st.columns([2, 1])
+        opp_choice = f0.selectbox(
+            "Filter by opponent",
+            ["All (pooled)"] + season_opps,
+            key="scout_page_opp",
+        )
+        season_scope = f1.selectbox(
+            "Season",
+            [f"Current ({current_season_label()})", "All seasons"],
+            key="scout_page_season",
+        )
+        opponent = None if opp_choice == "All (pooled)" else opp_choice
+        scout_season = "current" if season_scope.startswith("Current") else "all"
 
-    off_tend = offense_scout_tendencies(scout_d, down, dist, zone)
-    def_tend = defense_scout_tendencies(scout_o, down, dist, zone)
+        scout_d = load_scout("opponent_defense", opponent, season=scout_season)
+        scout_o = load_scout("opponent_offense", opponent, season=scout_season)
 
-    st.subheader(situation_label(down, dist, zone))
-    left, right = st.columns(2)
-    with left:
-        st.markdown("**Their defense (for our offense)**")
-        if off_tend["plays"]:
-            st.info(
-                f"n={off_tend['plays']} ({off_tend['scope']}) · lean **{off_tend['lean']}**"
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Opponent defense snaps", f"{len(scout_d):,}")
+        c2.metric("Opponent offense snaps", f"{len(scout_o):,}")
+        mapped_note = opponent or "all cuts"
+        c3.metric("Scope", mapped_note)
+
+        if scout_d.empty and scout_o.empty:
+            st.warning(
+                "No scout data for this opponent. Use **Upload & matchup report**, "
+                "or drop `{Opponent} D.xlsx` / `{Opponent} O.xlsx` into `data/hudl_exports/`."
             )
-            st.markdown(
-                f"Most called — Front **{_fmt_most(off_tend.get('most_front'))}** · "
-                f"Coverage **{_fmt_most(off_tend.get('most_coverage'))}** · "
-                f"Call **{_fmt_most(off_tend.get('most_play'))}**"
-            )
-            if off_tend["top_fronts"]:
-                st.write("Top fronts")
-                st.dataframe(pd.DataFrame(off_tend["top_fronts"]), hide_index=True, use_container_width=True)
-            if off_tend["top_coverages"]:
-                st.write("Top coverages")
-                st.dataframe(pd.DataFrame(off_tend["top_coverages"]), hide_index=True, use_container_width=True)
-            if off_tend.get("top_def_calls"):
-                st.write("Top front | coverage calls")
-                st.dataframe(pd.DataFrame(off_tend["top_def_calls"]), hide_index=True, use_container_width=True)
-        else:
-            st.write("No opponent-defense scout in this bucket.")
-    with right:
-        st.markdown("**Their offense (for our defense)**")
-        if def_tend["plays"]:
-            st.info(
-                f"n={def_tend['plays']} ({def_tend['scope']}) · lean **{def_tend['lean']}** "
-                f"(Run {def_tend['run_pct']}% / Pass {def_tend['pass_pct']}%)"
-            )
-            st.markdown(
-                f"Most called — Formation **{_fmt_most(def_tend.get('most_formation'))}** · "
-                f"Play **{_fmt_most(def_tend.get('most_play'))}**"
-            )
-            if def_tend["top_formations"]:
-                st.write("Top formations")
-                st.dataframe(pd.DataFrame(def_tend["top_formations"]), hide_index=True, use_container_width=True)
-            if def_tend.get("top_plays"):
-                st.write("Top plays")
-                st.dataframe(pd.DataFrame(def_tend["top_plays"]), hide_index=True, use_container_width=True)
-        else:
-            st.write("No opponent-offense scout in this bucket.")
+            return
 
-    map_path = PROJECT_DIR / "data" / "hudl_exports"
-    with st.expander("Scout files on disk"):
-        files = sorted(map_path.glob("*.xlsx"))
-        names = [f.name for f in files if not f.name.startswith("~$")]
-        st.write(names if names else "No Excel files found.")
+        # Matchup from DB (no upload needed)
+        if opponent and not scout_d.empty:
+            try:
+                from mesh_engine import build_scout_matchup_report
 
+                report = build_scout_matchup_report(
+                    opponent,
+                    offense_df,
+                    scout_season=scout_season,
+                    booth_front_mode="even_42",
+                )
+                with st.expander("Matchup report · tendencies × our success", expanded=False):
+                    _render_scout_matchup_report(
+                        report, key_prefix="scout_page_match", expanded=False
+                    )
+            except Exception as exc:
+                st.caption(f"Matchup report unavailable: {exc}")
+
+        f1, f2, f3 = st.columns(3)
+        down = f1.selectbox("Down", [1, 2, 3, 4], key="scout_down")
+        dist = f2.selectbox("Distance", ["short", "medium", "long"], key="scout_dist")
+        zone = f3.selectbox(
+            "Field zone",
+            ["backed_up", "own_territory", "midfield", "opp_territory", "red_zone"],
+            index=2,
+            key="scout_zone",
+        )
+
+        off_tend = offense_scout_tendencies(scout_d, down, dist, zone)
+        def_tend = defense_scout_tendencies(scout_o, down, dist, zone)
+
+        st.subheader(situation_label(down, dist, zone))
+        left, right = st.columns(2)
+        with left:
+            st.markdown("**Their defense (for our offense)**")
+            if off_tend["plays"]:
+                st.info(
+                    f"n={off_tend['plays']} ({off_tend['scope']}) · lean **{off_tend['lean']}**"
+                )
+                st.markdown(
+                    f"Most called — Front **{_fmt_most(off_tend.get('most_front'))}** · "
+                    f"Coverage **{_fmt_most(off_tend.get('most_coverage'))}** · "
+                    f"Call **{_fmt_most(off_tend.get('most_play'))}**"
+                )
+                if off_tend["top_fronts"]:
+                    st.write("Top fronts")
+                    st.dataframe(
+                        pd.DataFrame(off_tend["top_fronts"]),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+                if off_tend["top_coverages"]:
+                    st.write("Top coverages")
+                    st.dataframe(
+                        pd.DataFrame(off_tend["top_coverages"]),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+                if off_tend.get("top_def_calls"):
+                    st.write("Top front | coverage calls")
+                    st.dataframe(
+                        pd.DataFrame(off_tend["top_def_calls"]),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+            else:
+                st.write("No opponent-defense scout in this bucket.")
+        with right:
+            st.markdown("**Their offense (for our defense)**")
+            if def_tend["plays"]:
+                st.info(
+                    f"n={def_tend['plays']} ({def_tend['scope']}) · lean **{def_tend['lean']}** "
+                    f"(Run {def_tend['run_pct']}% / Pass {def_tend['pass_pct']}%)"
+                )
+                st.markdown(
+                    f"Most called — Formation **{_fmt_most(def_tend.get('most_formation'))}** · "
+                    f"Play **{_fmt_most(def_tend.get('most_play'))}**"
+                )
+                if def_tend["top_formations"]:
+                    st.write("Top formations")
+                    st.dataframe(
+                        pd.DataFrame(def_tend["top_formations"]),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+                if def_tend["top_plays"]:
+                    st.write("Top plays")
+                    st.dataframe(
+                        pd.DataFrame(def_tend["top_plays"]),
+                        hide_index=True,
+                        use_container_width=True,
+                    )
+            else:
+                st.write("No opponent-offense scout in this bucket.")
+
+        map_path = PROJECT_DIR / "data" / "hudl_exports"
+        with st.expander("Scout files on disk"):
+            files = sorted(map_path.glob("*.xlsx"))
+            names = [f.name for f in files if not f.name.startswith("~$")]
+            st.write(names if names else "No Excel files found.")
 
 
 def game_plan_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
@@ -6450,8 +6924,8 @@ def in_game_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
 def _render_start_new_game_panel(season_opps: list[str]) -> None:
     """Booth control: start a fresh game night (scout optional)."""
     st.caption(
-        "Archives tonight’s log, resets drives / half, and sets the opponent. "
-        "Scout file is optional — skip it for scrimmages or tracking tests."
+        "Saves tonight’s finished log into **Game Review** (EPA graph), archives the CSV, "
+        "resets drives / half, and sets the opponent. Scout file is optional."
     )
     known = [o for o in (season_opps or []) if str(o).strip()]
     name_opts = ["(type a new name)"] + known
@@ -6571,6 +7045,38 @@ def _render_start_new_game_panel(season_opps: list[str]) -> None:
     if result.get("promote_error"):
         st.warning(f"Game Review save issue: {result['promote_error']}")
     st.success(" · ".join(bits))
+
+    # Auto matchup report when scout defense landed
+    if (
+        scout_path
+        and result.get("scout_rows")
+        and role == "opponent_defense"
+        and not result.get("scout_error")
+    ):
+        try:
+            from mesh_engine import build_scout_matchup_report
+
+            off_epa = load_plays("Offense")
+            report = build_scout_matchup_report(
+                opp_name,
+                off_epa,
+                booth_front_mode="even_42",
+            )
+            saved = _save_scout_matchup_report(report)
+            st.session_state["lt_scout_matchup_report"] = report
+            if saved:
+                st.caption(f"Matchup report saved → `{saved.name}`")
+            _render_scout_matchup_report(
+                report, key_prefix="lt_newgame_match", expanded=True
+            )
+            st.info(
+                "Review edges/traps above, then open **Game Plan** to pin calls for tonight."
+            )
+            # Don't auto-rerun — leave report on screen
+            return
+        except Exception as exc:
+            st.warning(f"Scout imported, but matchup report failed: {exc}")
+
     st.rerun()
 
 
@@ -6676,7 +7182,7 @@ def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
             pass
         st.rerun()
 
-    st.markdown("### 2 taggers (normal)")
+    st.markdown("### 1 tagger (recommended)")
     for pack in TAGGER_PACKS:
         if st.button(
             f"{pack['label']}",
@@ -6688,7 +7194,7 @@ def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
             _pick_pack(pack)
         st.caption(pack["subtitle"])
 
-    st.markdown("### 3rd tagger (optional)")
+    st.markdown("### 2nd phone (optional)")
     if st.button(
         TAGGER_PACK_THIRD["label"],
         key=f"tag_pack_{TAGGER_PACK_THIRD['id']}",
@@ -6790,18 +7296,29 @@ def _render_shared_snap_bar(
         if did is None:
             st.caption("Waiting for Main to start a drive…")
         elif follow:
-            st.caption("Following live · updates when Main logs")
+            st.caption("Following live")
         else:
-            st.caption("Catch-up mode")
-            if st.button("Back to live", type="primary", use_container_width=True, key=f"{key_prefix}_follow_btn"):
+            st.caption(f"Catch-up · Play #{view_pn}")
+            if st.button(
+                "Back to live",
+                type="primary",
+                use_container_width=True,
+                key=f"{key_prefix}_follow_btn",
+            ):
                 st.session_state[f"{key_prefix}_follow"] = True
                 st.session_state[f"{key_prefix}_view_drive"] = did
                 st.session_state[f"{key_prefix}_view_play"] = shared_pn
                 st.rerun()
-        with st.expander("Behind? Jump to a play", expanded=not follow):
+        # Catch-up buried — stays out of the hot path
+        with st.expander("More · jump / catch-up", expanded=False):
             j1, j2, j3 = st.columns([1, 1, 1])
             with j1:
-                if st.button("◀", use_container_width=True, key=f"{key_prefix}_prev", disabled=view_pn <= 1):
+                if st.button(
+                    "◀",
+                    use_container_width=True,
+                    key=f"{key_prefix}_prev",
+                    disabled=view_pn <= 1,
+                ):
                     st.session_state[f"{key_prefix}_follow"] = False
                     st.session_state[f"{key_prefix}_view_play"] = max(1, view_pn - 1)
                     st.rerun()
@@ -6908,17 +7425,85 @@ def _tagger_field_filled(row: dict, fid: str) -> bool:
 
 
 def _tagger_pack_complete(row: dict, focuses: list[str]) -> bool:
+    from booth_stations import FOCUS_COVERAGE, FOCUS_FRONT
+
     needed = [f for f in focuses if f != "snaps"]
     if not needed:
         return False
-    return all(_tagger_field_filled(row, f) for f in needed)
+    if not all(_tagger_field_filled(row, f) for f in needed):
+        return False
+    # 1-tagger Front+Coverage pack also needs end yard (auto gain)
+    if FOCUS_FRONT in focuses and FOCUS_COVERAGE in focuses:
+        end = row.get("end_ball_yard")
+        if end is None or str(end).strip() == "":
+            return False
+    return True
+
+
+def _tagger_status_bits(row: dict, focuses: list[str], *, need_end_yard: bool) -> str:
+    """Compact Front ✓ · Cov · End strip."""
+    from booth_stations import FOCUS_BLITZ, FOCUS_COVERAGE, FOCUS_FRONT, FOCUS_MOTION
+
+    bits: list[str] = []
+    checks = [
+        (FOCUS_FRONT, "Front", "def_front"),
+        (FOCUS_COVERAGE, "Cov", "coverage"),
+        (FOCUS_BLITZ, "Blitz", "blitz"),
+        (FOCUS_MOTION, "Motion", "motion"),
+    ]
+    for fid, label, col in checks:
+        if fid not in focuses:
+            continue
+        ok = _tagger_field_filled(row, fid)
+        bits.append(f"{label} ✓" if ok else label)
+    if need_end_yard:
+        end = row.get("end_ball_yard")
+        end_ok = end is not None and str(end).strip() != ""
+        bits.append("End ✓" if end_ok else "End")
+    return " · ".join(bits) if bits else ""
 
 
 def _tagger_advance_after_save(play_n: int, key_prefix: str = "tag") -> None:
-    """Move tagger view to the next play after their pack is done."""
-    st.session_state[f"{key_prefix}_follow"] = False
-    st.session_state[f"{key_prefix}_view_play"] = int(play_n) + 1
-    st.session_state["tagger_flash"] = f"Saved · next → Play #{int(play_n) + 1}"
+    """Mark pack done; stay on this play until Main advances the shared pointer."""
+    st.session_state[f"{key_prefix}_follow"] = True
+    st.session_state["tagger_done_play"] = int(play_n)
+    st.session_state["tagger_flash"] = (
+        f"✓ Play #{int(play_n)} complete — waiting for Main"
+    )
+    st.session_state["tagger_flash_strong"] = True
+
+
+def _tagger_pulse_done() -> None:
+    """Strong flash + light haptic on phones that support vibrate."""
+    try:
+        import streamlit.components.v1 as components
+
+        components.html(
+            "<script>try{navigator.vibrate([50,40,50]);}catch(e){}</script>",
+            height=0,
+        )
+    except Exception:
+        pass
+
+
+def _tagger_recalc_yards_from_end(row: dict) -> dict:
+    """If Main already logged result + start ball, apply end → yards_gained."""
+    raw_end = row.get("end_ball_yard")
+    raw_start = row.get("ball_yard")
+    if raw_end is None or str(raw_end).strip() == "":
+        return {}
+    if raw_start is None or str(raw_start).strip() == "":
+        return {}
+    result_l = str(row.get("result") or "").strip().lower()
+    if result_l in {"incomplete", "inc", "turnover", "int", "fumble"}:
+        return {"yards_gained": 0}
+    if not result_l:
+        # Main hasn't logged outcome yet — end spot waits for commit
+        return {}
+    auto = yards_from_ball_span(raw_start, raw_end)
+    if auto is None:
+        return {}
+    return {"yards_gained": int(auto)}
 
 
 def _tagger_instant_save(
@@ -6931,7 +7516,7 @@ def _tagger_instant_save(
     field_updates: dict,
     key_prefix: str = "tag",
 ) -> None:
-    """Save field(s), remember sticky last, advance when pack is complete."""
+    """Save field(s), remember sticky last, mark done when pack is complete."""
     from booth_stations import FOCUS_BLITZ, FOCUS_COVERAGE, FOCUS_FRONT, FOCUS_MOTION
     from booth_snaps import find_snap_index
     from mesh_engine import load_live_log
@@ -6969,19 +7554,47 @@ def _tagger_instant_save(
         fid = col_to_focus.get(col)
         if fid:
             st.session_state[f"tag_last_{fid}"] = val
+    if "end_ball_yard" in clean:
+        try:
+            end_i = int(clean["end_ball_yard"])
+            st.session_state["tag_last_end_side"] = "Own" if end_i <= 50 else "Opp"
+            st.session_state["tag_last_end_yard"] = end_i if end_i <= 50 else 100 - end_i
+        except (TypeError, ValueError):
+            pass
+
+    # Clear look drafts after a committed look save
+    if "def_front" in clean or "coverage" in clean:
+        st.session_state.pop(f"tg_draft_front_{drive_id}_{play_n}", None)
+        st.session_state.pop(f"tg_draft_cov_{drive_id}_{play_n}", None)
 
     logs = load_live_log()
     idx = find_snap_index(logs, int(drive_id), int(play_n))
     row = {}
     if idx is not None and logs is not None and not logs.empty:
         row = logs.reset_index(drop=True).loc[idx].to_dict()
-    # Merge just-saved into row for completion check
     row.update(clean)
+
+    if "end_ball_yard" in clean:
+        yard_fix = _tagger_recalc_yards_from_end(row)
+        if yard_fix:
+            _booth_upsert_snap(
+                drive_id=int(drive_id),
+                play_n=int(play_n),
+                updates=yard_fix,
+                opponent=opponent,
+                half=half,
+            )
+            row.update(yard_fix)
+            st.session_state["tagger_flash"] = (
+                f"End {format_ball_spot(clean['end_ball_yard'])} → "
+                f"{int(yard_fix['yards_gained']):+d} yds"
+            )
 
     if _tagger_pack_complete(row, focuses):
         _tagger_advance_after_save(play_n, key_prefix=key_prefix)
     else:
-        st.session_state["tagger_flash"] = "Saved"
+        if "tagger_flash" not in st.session_state:
+            st.session_state["tagger_flash"] = "Saved"
     st.rerun()
 
 
@@ -6993,7 +7606,7 @@ def _render_current_snap_tagger(
     drive_id: int | None,
     play_n: int,
 ) -> None:
-    """Tagger editor: tap chip = save; Same as last; auto-advance when pack done."""
+    """Tagger editor: tap chip = save; Same as last; wait for Main after pack done."""
     from booth_stations import (
         FOCUS_BLITZ,
         FOCUS_COVERAGE,
@@ -7007,7 +7620,7 @@ def _render_current_snap_tagger(
         has_snaps_focus,
     )
     from booth_snaps import find_snap_index
-    from mesh_engine import load_live_log
+    from mesh_engine import load_live_log, scout_favorite_looks
 
     if drive_id is None:
         st.info("Waiting for Main to start the drive…")
@@ -7022,34 +7635,88 @@ def _render_current_snap_tagger(
 
     pre = [f for f in focuses if f in PRE_SNAP_FOCUSES]
     post = [f for f in focuses if f in POST_SNAP_FOCUSES]
+    need_end_yard = FOCUS_FRONT in focuses and FOCUS_COVERAGE in focuses
+    batch_look = need_end_yard  # Front+Coverage pack → one write when both set
     title = " · ".join(FOCUS_LABELS.get(f, f) for f in focuses) or focus_summary(focuses)
     st.markdown(f'<p class="live-title">{title}</p>', unsafe_allow_html=True)
 
+    # Start LOS from Main (once logged / stubbed)
+    start_ball = row.get("ball_yard")
+    try:
+        start_i = (
+            int(start_ball)
+            if start_ball is not None and str(start_ball).strip() != ""
+            else None
+        )
+    except (TypeError, ValueError):
+        start_i = None
+    if start_i is not None:
+        st.markdown(
+            f'<div class="tg-start">Start · <b>{format_ball_spot(start_i)}</b></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.caption("Start yard — waiting for Main")
+
+    status = _tagger_status_bits(row, focuses, need_end_yard=need_end_yard)
+    if status:
+        done = _tagger_pack_complete(row, focuses)
+        cls = "tg-status done" if done else "tg-status"
+        st.markdown(f'<div class="{cls}">{status}</div>', unsafe_allow_html=True)
+
     flash = st.session_state.pop("tagger_flash", None)
+    strong = st.session_state.pop("tagger_flash_strong", False)
     if flash:
-        st.caption(str(flash))
+        if strong:
+            st.markdown(
+                f'<div class="tg-flash-ok">{flash}</div>',
+                unsafe_allow_html=True,
+            )
+            _tagger_pulse_done()
+        else:
+            st.caption(str(flash))
+
+    if st.session_state.get("tagger_done_play") == int(play_n) and _tagger_pack_complete(
+        row, focuses
+    ):
+        # Layout 4 — soft lock while waiting for Main
+        st.markdown(
+            f'<div class="tg-wait-lock"><h3>Play #{int(play_n)} done</h3>'
+            f"<p>Waiting for Main…</p>"
+            f"<p style='margin:0;opacity:0.75'>{status}</p></div>",
+            unsafe_allow_html=True,
+        )
+        return
 
     ensure_default_film_tags()
     full = logs if logs is not None and not logs.empty else pd.DataFrame()
+    scout_looks = scout_favorite_looks(opponent, n=8)
+    scout_fronts = list(scout_looks.get("fronts") or [])
+    scout_covs = list(scout_looks.get("coverages") or [])
 
-    # Same as last — apply sticky values for this pack
-    last_bits = []
-    last_updates: dict = {}
+    draft_f_key = f"tg_draft_front_{drive_id}_{play_n}"
+    draft_c_key = f"tg_draft_cov_{drive_id}_{play_n}"
+    edit_look_key = f"tg_edit_look_{drive_id}_{play_n}"
+
+    # SAME LOOK only (end almost never repeats) — layout 4
+    look_bits = []
+    look_updates: dict = {}
     for fid in focuses:
         if fid == FOCUS_SNAPS:
             continue
         raw = st.session_state.get(f"tag_last_{fid}")
         if raw is None or (isinstance(raw, str) and not str(raw).strip()):
             continue
-        last_bits.append(f"{FOCUS_LABELS.get(fid, fid)} {raw}")
-        last_updates[_tagger_focus_to_col(fid)] = raw
+        look_bits.append(f"{FOCUS_LABELS.get(fid, fid)} {raw}")
+        look_updates[_tagger_focus_to_col(fid)] = raw
 
-    if last_updates:
+    if look_updates:
+        st.markdown('<div class="tg-same-last">', unsafe_allow_html=True)
         if st.button(
-            "Same as last · " + " · ".join(last_bits),
+            "SAME LOOK · " + " · ".join(look_bits),
             type="primary",
             use_container_width=True,
-            key=f"tg_same_last_{drive_id}_{play_n}",
+            key=f"tg_same_look_{drive_id}_{play_n}",
         ):
             _tagger_instant_save(
                 opponent=opponent,
@@ -7057,14 +7724,66 @@ def _render_current_snap_tagger(
                 drive_id=int(drive_id),
                 play_n=int(play_n),
                 focuses=focuses,
-                field_updates=last_updates,
+                field_updates=look_updates,
             )
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    def _chip_save(label: str, options: list[str], col: str, current: str = "") -> None:
+    def _save_look_fields(updates: dict) -> None:
+        if "def_front" in updates or "coverage" in updates:
+            st.session_state.pop(edit_look_key, None)
+        _tagger_instant_save(
+            opponent=opponent,
+            half=half,
+            drive_id=int(drive_id),
+            play_n=int(play_n),
+            focuses=focuses,
+            field_updates=updates,
+        )
+
+    def _tap_front_or_cov(col: str, opt: str) -> None:
+        """Batch Front+Coverage into one save when both are chosen."""
+        if not batch_look:
+            _save_look_fields({col: opt})
+            return
+        if col == "def_front":
+            st.session_state[draft_f_key] = opt
+        else:
+            st.session_state[draft_c_key] = opt
+        front = str(
+            st.session_state.get(draft_f_key)
+            or (opt if col == "def_front" else "")
+            or row.get("def_front")
+            or ""
+        ).strip()
+        cov = str(
+            st.session_state.get(draft_c_key)
+            or (opt if col == "coverage" else "")
+            or row.get("coverage")
+            or ""
+        ).strip()
+        if col == "def_front":
+            front = opt
+        if col == "coverage":
+            cov = opt
+        if front and cov:
+            _save_look_fields({"def_front": front, "coverage": cov})
+            return
+        missing = "Coverage" if front and not cov else "Front"
+        st.session_state["tagger_flash"] = f"{'Front' if col == 'def_front' else 'Coverage'} set · tap {missing}"
+        st.rerun()
+
+    def _chip_row(
+        label: str,
+        options: list[str],
+        col: str,
+        current: str = "",
+        *,
+        more: list[str] | None = None,
+        batch: bool = False,
+    ) -> None:
         st.caption(f"{label} · tap to save")
-        # Prefer booth defaults first for speed
-        opts = list(options)[:8]
-        cols = st.columns(min(2, max(len(opts), 1)))
+        opts = list(options)
+        cols = st.columns(min(3, max(len(opts), 1)))
         for i, opt in enumerate(opts):
             with cols[i % len(cols)]:
                 active = str(current or "").strip().lower() == str(opt).strip().lower()
@@ -7074,47 +7793,64 @@ def _render_current_snap_tagger(
                     use_container_width=True,
                     type="primary" if active else "secondary",
                 ):
-                    _tagger_instant_save(
-                        opponent=opponent,
-                        half=half,
-                        drive_id=int(drive_id),
-                        play_n=int(play_n),
-                        focuses=focuses,
-                        field_updates={col: opt},
-                    )
+                    if batch:
+                        _tap_front_or_cov(col, opt)
+                    else:
+                        _save_look_fields({col: opt})
+        extra = [x for x in (more or []) if x not in opts]
+        if extra:
+            with st.expander("More…", expanded=False):
+                mcols = st.columns(min(3, max(len(extra), 1)))
+                for i, opt in enumerate(extra):
+                    with mcols[i % len(mcols)]:
+                        active = (
+                            str(current or "").strip().lower()
+                            == str(opt).strip().lower()
+                        )
+                        if st.button(
+                            opt,
+                            key=f"tg_chip_more_{col}_{drive_id}_{play_n}_{i}",
+                            use_container_width=True,
+                            type="primary" if active else "secondary",
+                        ):
+                            if batch:
+                                _tap_front_or_cov(col, opt)
+                            else:
+                                _save_look_fields({col: opt})
 
     def _render_field(fid: str) -> None:
         cur_col = _tagger_focus_to_col(fid)
         current = str(row.get(cur_col) or "")
         if fid == FOCUS_FRONT:
-            front_opts = _merge_film_tag_options(
-                _tag_options(
-                    offense_df["def_front"] if "def_front" in offense_df.columns else pd.Series(dtype=str),
-                ),
-                full["def_front"] if "def_front" in full.columns else pd.Series(dtype=str),
-                kind="def_front",
+            draft = str(st.session_state.get(draft_f_key) or "").strip()
+            if draft:
+                current = draft
+            ordered = list(scout_fronts) if scout_fronts else list(DEFAULT_FILM_FRONTS)
+            src = "scout" if scout_fronts else "defaults"
+            top, rest = ordered[:3], ordered[3:]
+            _chip_row(
+                f"Front · {src} top 3",
+                top,
+                "def_front",
+                current,
+                more=rest,
+                batch=batch_look,
             )
-            # Defaults first
-            preferred = ["Even", "Odd", "Bear"]
-            ordered = list(preferred)
-            for p in front_opts:
-                if p not in ordered:
-                    ordered.append(p)
-            _chip_save("Front", ordered[:8] or preferred, "def_front", current)
         elif fid == FOCUS_COVERAGE:
-            cov_opts = _merge_film_tag_options(
-                _tag_options(
-                    offense_df["coverage"] if "coverage" in offense_df.columns else pd.Series(dtype=str),
-                ),
-                full["coverage"] if "coverage" in full.columns else pd.Series(dtype=str),
-                kind="coverage",
+            draft = str(st.session_state.get(draft_c_key) or "").strip()
+            if draft:
+                current = draft
+            ordered = list(scout_covs) if scout_covs else list(DEFAULT_FILM_COVERAGES)
+            src = "scout" if scout_covs else "defaults"
+            top, rest = ordered[:3], ordered[3:]
+            _chip_row(
+                f"Coverage · {src} top 3",
+                top,
+                "coverage",
+                current,
+                more=rest,
+                batch=batch_look,
             )
-            preferred = ["Cover 2", "Cover 3", "Cover 4", "Man", "Cover 1", "Cover 6"]
-            ordered = list(preferred)
-            for p in cov_opts:
-                if p not in ordered:
-                    ordered.append(p)
-            _chip_save("Coverage", ordered[:8], "coverage", current)
         elif fid == FOCUS_BLITZ:
             st.caption("Blitz · tap to save")
             cur_b = current.strip().title() if current else ""
@@ -7126,14 +7862,7 @@ def _render_current_snap_tagger(
                     use_container_width=True,
                     type="primary" if cur_b == "No" else "secondary",
                 ):
-                    _tagger_instant_save(
-                        opponent=opponent,
-                        half=half,
-                        drive_id=int(drive_id),
-                        play_n=int(play_n),
-                        focuses=focuses,
-                        field_updates={"blitz": "No"},
-                    )
+                    _save_look_fields({"blitz": "No"})
             with b2:
                 if st.button(
                     "Yes",
@@ -7141,18 +7870,13 @@ def _render_current_snap_tagger(
                     use_container_width=True,
                     type="primary" if cur_b == "Yes" else "secondary",
                 ):
-                    _tagger_instant_save(
-                        opponent=opponent,
-                        half=half,
-                        drive_id=int(drive_id),
-                        play_n=int(play_n),
-                        focuses=focuses,
-                        field_updates={"blitz": "Yes"},
-                    )
+                    _save_look_fields({"blitz": "Yes"})
         elif fid == FOCUS_MOTION:
             motion_opts = _merge_tag_options(
                 _tag_options(
-                    offense_df["motion"] if "motion" in offense_df.columns else pd.Series(dtype=str),
+                    offense_df["motion"]
+                    if "motion" in offense_df.columns
+                    else pd.Series(dtype=str),
                 ),
                 full["motion"] if "motion" in full.columns else pd.Series(dtype=str),
                 kind="motion",
@@ -7165,16 +7889,125 @@ def _render_current_snap_tagger(
             for p in motion_opts:
                 if p not in ordered:
                     ordered.append(p)
-            _chip_save("Motion", ordered[:8], "motion", current)
+            _chip_row("Motion", ordered[:3], "motion", current, more=ordered[3:8])
 
-    if pre:
-        st.markdown("##### Pre-snap")
-        for fid in pre:
-            _render_field(fid)
-    if post:
-        st.markdown("##### Post-snap")
-        for fid in post:
-            _render_field(fid)
+    front_saved = str(row.get("def_front") or "").strip()
+    cov_saved = str(row.get("coverage") or "").strip()
+    look_complete = bool(front_saved and cov_saved) if need_end_yard else False
+    editing_look = bool(st.session_state.get(edit_look_key))
+
+    # Layout 4 — collapse look when Front+Cov set; keep End pinned
+    if look_complete and not editing_look:
+        st.markdown(
+            f'<div class="tg-look-collapsed">Look · {front_saved} / {cov_saved}</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button(
+            "Edit look",
+            key=f"tg_edit_look_btn_{drive_id}_{play_n}",
+            use_container_width=True,
+        ):
+            st.session_state[edit_look_key] = True
+            st.rerun()
+    else:
+        if pre:
+            st.markdown("##### Pre-snap")
+            for fid in pre:
+                _render_field(fid)
+        if post:
+            st.markdown("##### Post-snap")
+            for fid in post:
+                _render_field(fid)
+
+    if need_end_yard:
+        st.markdown('<div class="tg-end-pin">', unsafe_allow_html=True)
+        st.markdown("##### End of play")
+        st.caption("Tap side + yard · saves immediately · gain = end − start")
+        side_key = f"tg_end_side_{drive_id}_{play_n}"
+        if side_key not in st.session_state:
+            st.session_state[side_key] = st.session_state.get("tag_last_end_side") or "Own"
+        cur_end = row.get("end_ball_yard")
+        try:
+            cur_end_i = (
+                int(cur_end)
+                if cur_end is not None and str(cur_end).strip() != ""
+                else None
+            )
+        except (TypeError, ValueError):
+            cur_end_i = None
+        if cur_end_i is not None:
+            st.session_state[side_key] = "Own" if cur_end_i <= 50 else "Opp"
+
+        s1, s2 = st.columns(2)
+        with s1:
+            if st.button(
+                "Own",
+                key=f"tg_side_own_{drive_id}_{play_n}",
+                use_container_width=True,
+                type="primary" if st.session_state[side_key] == "Own" else "secondary",
+            ):
+                st.session_state[side_key] = "Own"
+                st.rerun()
+        with s2:
+            if st.button(
+                "Opp",
+                key=f"tg_side_opp_{drive_id}_{play_n}",
+                use_container_width=True,
+                type="primary" if st.session_state[side_key] == "Opp" else "secondary",
+            ):
+                st.session_state[side_key] = "Opp"
+                st.rerun()
+
+        end_side = st.session_state[side_key]
+        yard_opts = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
+        cur_yd = None
+        if cur_end_i is not None:
+            cur_yd = cur_end_i if cur_end_i <= 50 else 100 - cur_end_i
+        ycols = st.columns(5)
+        for i, yd in enumerate(yard_opts):
+            with ycols[i % 5]:
+                active = False
+                if cur_end_i is not None and cur_yd == yd:
+                    saved_side = "Own" if cur_end_i <= 50 else "Opp"
+                    active = saved_side == end_side
+                if st.button(
+                    str(yd),
+                    key=f"tg_yd_{drive_id}_{play_n}_{yd}",
+                    use_container_width=True,
+                    type="primary" if active else "secondary",
+                ):
+                    end_ball = side_yard_to_ball_yard(end_side, int(yd))
+                    _save_look_fields({"end_ball_yard": end_ball})
+
+        z1, z2 = st.columns(2)
+        with z1:
+            same_disabled = start_i is None
+            if st.button(
+                "Same as start (0)",
+                use_container_width=True,
+                key=f"tg_end_same_{drive_id}_{play_n}",
+                disabled=same_disabled,
+                help="No gain — end = start",
+            ):
+                _save_look_fields({"end_ball_yard": int(start_i)})
+        with z2:
+            if st.button(
+                "Inc → 0",
+                use_container_width=True,
+                key=f"tg_end_inc_{drive_id}_{play_n}",
+                disabled=same_disabled,
+                help="Incomplete / no gain — end = start",
+            ):
+                _save_look_fields({"end_ball_yard": int(start_i)})
+        if start_i is None:
+            st.caption("Same as start / Inc need Main’s start yard")
+        elif cur_end_i is not None:
+            g = yards_from_ball_span(start_i, cur_end_i)
+            if g is not None:
+                st.caption(
+                    f"{format_ball_spot(start_i)} → {format_ball_spot(cur_end_i)} = {g:+d}"
+                )
+        st.markdown("</div>", unsafe_allow_html=True)
 
     if has_snaps_focus(focuses) and FOCUS_SNAPS in focuses:
         st.caption("Snap fields still use Save (Main usually logs these).")
@@ -7188,7 +8021,12 @@ def _render_current_snap_tagger(
             value=str(row.get("play_call") or ""),
             key=f"snap_play_{drive_id}_{play_n}",
         )
-        if st.button("Save snap fields", type="primary", use_container_width=True, key=f"snap_save_{drive_id}_{play_n}"):
+        if st.button(
+            "Save snap fields",
+            type="primary",
+            use_container_width=True,
+            key=f"snap_save_{drive_id}_{play_n}",
+        ):
             _tagger_instant_save(
                 opponent=opponent,
                 half=half,
@@ -7376,7 +8214,7 @@ def _render_home_page() -> None:
         st.warning("Set the booth website URL above so invite links work.")
         return
 
-    st.markdown("**Send one link per phone (2 taggers)**")
+    st.markdown("**Send one link (1 tagger)**")
     for pack in TAGGER_PACKS:
         foc = list(pack["focuses"])
         link = tagger_invite_url(base, foc)
@@ -7384,7 +8222,7 @@ def _render_home_page() -> None:
         st.caption(pack["subtitle"])
         st.code(link, language=None)
 
-    with st.expander("3rd phone (optional)"):
+    with st.expander("2nd phone (optional)"):
         foc = list(TAGGER_PACK_THIRD["focuses"])
         st.caption(TAGGER_PACK_THIRD["subtitle"])
         st.code(tagger_invite_url(base, foc), language=None)
@@ -7424,13 +8262,83 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             [data-testid="stHeader"] { background: transparent !important; }
             #MainMenu, footer { visibility: hidden !important; }
             div[data-testid="stMainBlockContainer"] {
-                padding-top: 0.4rem !important;
+                padding-top: 0.35rem !important;
                 max-width: 480px !important;
             }
             div[data-testid="stButton"] > button {
                 min-height: 3.4rem !important;
-                font-size: 1.2rem !important;
+                font-size: 1.15rem !important;
                 font-weight: 700 !important;
+            }
+            .tg-same-last div[data-testid="stButton"] > button {
+                min-height: 4.4rem !important;
+                font-size: 1.05rem !important;
+                letter-spacing: 0.02em;
+            }
+            .tg-start {
+                font-size: 1.15rem;
+                font-weight: 700;
+                color: #1B4332;
+                margin: 0.15rem 0 0.35rem 0;
+            }
+            .tg-status {
+                font-size: 0.95rem;
+                font-weight: 600;
+                color: #5c6b62;
+                margin: 0 0 0.4rem 0;
+                padding: 0.35rem 0.55rem;
+                background: #F4F7F5;
+                border-radius: 8px;
+                border: 1px solid #D0DAD4;
+            }
+            .tg-status.done {
+                color: #1B4332;
+                background: #D8F3DC;
+                border-color: #40916C;
+            }
+            .tg-flash-ok {
+                font-size: 1.15rem;
+                font-weight: 800;
+                color: #081c15;
+                background: #95D5B2;
+                border: 2px solid #1B4332;
+                border-radius: 10px;
+                padding: 0.75rem 0.85rem;
+                margin: 0.35rem 0 0.6rem 0;
+                text-align: center;
+            }
+            /* Layout 4 — end pinned */
+            .tg-end-pin {
+                position: sticky;
+                bottom: 0;
+                z-index: 30;
+                background: #ffffff;
+                border-top: 2px solid #1B4332;
+                padding: 0.55rem 0 0.85rem 0;
+                margin-top: 0.5rem;
+            }
+            .tg-look-collapsed {
+                font-size: 1.05rem;
+                font-weight: 700;
+                color: #1B4332;
+                padding: 0.45rem 0.55rem;
+                background: #D8F3DC;
+                border-radius: 8px;
+                border: 1px solid #40916C;
+                margin: 0.25rem 0 0.4rem 0;
+            }
+            .tg-wait-lock {
+                text-align: center;
+                padding: 1.25rem 0.75rem;
+                margin: 0.5rem 0;
+                background: #F4F7F5;
+                border: 2px solid #1B4332;
+                border-radius: 12px;
+            }
+            .tg-wait-lock h3 {
+                margin: 0 0 0.35rem 0;
+                font-size: 1.35rem;
+                color: #1B4332;
             }
             </style>
             """,
@@ -7447,6 +8355,9 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
 
     if tagger:
         pass  # title comes from current-snap editor
+    elif booth_station == "full":
+        # Professional Main chrome injected after opponent/half known
+        pass
     else:
         st.markdown('<p class="live-title">Live Track</p>', unsafe_allow_html=True)
 
@@ -7498,11 +8409,15 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         st.session_state.lt_unit = "Offense"
         from datetime import timedelta
 
-        @st.fragment(run_every=timedelta(seconds=3))
+        @st.fragment(run_every=timedelta(seconds=1))
         def _tagger_snap_loop() -> None:
             view_did, view_pn = _render_shared_snap_bar(
                 opponent, can_control=False, key_prefix="tag", minimal=True
             )
+            # Clear done banner once Main advances past this play
+            done_pn = st.session_state.get("tagger_done_play")
+            if done_pn is not None and int(view_pn) != int(done_pn):
+                st.session_state.pop("tagger_done_play", None)
             _render_current_snap_tagger(
                 opponent,
                 offense_df,
@@ -7510,9 +8425,10 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
                 drive_id=view_did,
                 play_n=view_pn,
             )
-            if st.button("Change job", key="tag_refocus_bottom"):
-                st.session_state.tag_focus_force_edit = True
-                st.rerun()
+            with st.expander("More · change job", expanded=False):
+                if st.button("Change job", key="tag_refocus_bottom"):
+                    st.session_state.tag_focus_force_edit = True
+                    st.rerun()
 
         _tagger_snap_loop()
         return
@@ -7606,108 +8522,109 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         st.session_state.lt_slot_gen = 0
     get_on_field()
 
-    if st.session_state.get("lt_tablet"):
-        st.markdown(
-            """
-            <style>
-            /* Live Track — denser booth layout (still tappable) */
-            [data-testid="stMainBlockContainer"] {
-                padding-top: 0.6rem !important;
-                padding-bottom: 1rem !important;
-            }
-            [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] {
-                gap: 0.35rem !important;
-            }
-            [data-testid="stHorizontalBlock"] {
-                gap: 0.4rem !important;
-            }
-            div[data-testid="stButton"] > button {
-                min-height: 2.35rem !important;
-                font-size: 0.95rem !important;
-                border-radius: 8px !important;
-                padding-top: 0.25rem !important;
-                padding-bottom: 0.25rem !important;
-            }
-            div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
-            div[data-testid="stNumberInput"] input,
-            div[data-testid="stTextInput"] input {
-                min-height: 2.25rem !important;
-                font-size: 0.95rem !important;
-            }
-            div[data-testid="stCaptionContainer"] {
-                margin-bottom: 0.1rem !important;
-            }
-            .block-container { max-width: 920px; padding-top: 0.5rem !important; }
-            hr { margin: 0.35rem 0 !important; }
-            </style>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    # Drive + play in one bar (Start / End / Undo). Catch-up under expander.
-    dstate = load_drive_state()
-    active_did = current_drive_id(opponent)
-    can_undo = bool(dstate.get("undo_stack"))
-    play_n_lbl = ""
-    try:
-        from booth_snaps import load_booth_snap
-
-        snap = load_booth_snap()
-        if active_did is not None and snap.get("drive_id") == int(active_did):
-            play_n_lbl = f" · Play #{int(snap.get('play_n') or 1)}"
-    except Exception:
-        pass
-    drive_lbl = (
-        f"Drive #{active_did}{play_n_lbl}" if active_did is not None else "No drive · LOG starts one"
-    )
-    d1, d2, d3, d4 = st.columns([1.6, 1, 1, 1])
-    d1.markdown(
-        f'<div class="ql-drive{" open" if active_did else ""}">{drive_lbl}</div>',
-        unsafe_allow_html=True,
-    )
-    if d2.button(
-        "Start",
-        use_container_width=True,
-        key="lt_start_drive",
-        disabled=active_did is not None,
-        help="Optional — first LOG also starts a drive automatically.",
-    ):
-        st.success(f"Drive #{start_drive(opponent)} started.")
-        st.rerun()
-    if d3.button(
-        "End drive",
-        use_container_width=True,
-        key="lt_end_fill",
-        disabled=active_did is None,
-        help="Ends the drive. Film stays with taggers — Main stays on Log.",
-    ):
-        ended = end_drive()
-        # Do not yank Main into Fill Film — taggers own film packs
-        if ended is not None:
-            st.session_state.ff_drive_filter = str(ended)
-            st.session_state["lt_end_drive_note"] = (
-                f"Drive #{ended} ended · taggers keep filming"
+    if st.session_state.get("lt_tablet") or booth_station == "full":
+        if booth_station == "full":
+            _inject_main_booth_css()
+        else:
+            st.markdown(
+                """
+                <style>
+                /* Live Track — denser booth layout (still tappable) */
+                [data-testid="stMainBlockContainer"] {
+                    padding-top: 0.6rem !important;
+                    padding-bottom: 1rem !important;
+                }
+                [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] {
+                    gap: 0.35rem !important;
+                }
+                [data-testid="stHorizontalBlock"] {
+                    gap: 0.4rem !important;
+                }
+                div[data-testid="stButton"] > button {
+                    min-height: 2.35rem !important;
+                    font-size: 0.95rem !important;
+                    border-radius: 8px !important;
+                    padding-top: 0.25rem !important;
+                    padding-bottom: 0.25rem !important;
+                }
+                div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+                div[data-testid="stNumberInput"] input,
+                div[data-testid="stTextInput"] input {
+                    min-height: 2.25rem !important;
+                    font-size: 0.95rem !important;
+                }
+                div[data-testid="stCaptionContainer"] {
+                    margin-bottom: 0.1rem !important;
+                }
+                .block-container { max-width: 1180px; padding-top: 0.5rem !important; }
+                hr { margin: 0.35rem 0 !important; }
+                </style>
+                """,
+                unsafe_allow_html=True,
             )
-        st.rerun()
-    if d4.button("Undo", use_container_width=True, key="lt_undo_drive", disabled=not can_undo):
-        entry = undo_drive_action()
-        if entry:
-            st.success(f"Undid {entry.get('action')}.")
-        st.rerun()
-
-    end_note = st.session_state.pop("lt_end_drive_note", None)
-    if end_note:
-        st.caption(end_note)
-
-    # Rare: jump / set shared pointer (taggers follow live by default)
-    if booth_station == "full" and active_did is not None:
-        with st.expander("Catch-up / set shared Play #", expanded=False):
-            _render_shared_snap_bar(opponent, can_control=True, key_prefix="main")
 
     pending_n = count_film_pending(live_logs, opponent)
     _apply_pending_live_situation()
 
+    # Main app bar (after opponent / half / pending known)
+    if booth_station == "full" and not tagger:
+        drive_id_bar = None
+        play_n_bar = None
+        try:
+            drive_id_bar = current_drive_id(opponent)
+            from booth_snaps import load_booth_snap
+
+            snap = load_booth_snap()
+            if drive_id_bar is not None and snap.get("drive_id") == int(drive_id_bar):
+                play_n_bar = int(snap.get("play_n") or 1)
+        except Exception:
+            pass
+        _render_main_app_bar(
+            str(opponent),
+            half=int(st.session_state.get("lt_half") or 1),
+            pending_n=int(pending_n or 0),
+            drive_id=drive_id_bar,
+            play_n=play_n_bar,
+        )
+
     if sheet == "Lineup" and booth_station == "full":
+        # Compact drive bar still available on Lineup sheet
+        dstate = load_drive_state()
+        active_did = current_drive_id(opponent)
+        can_undo = bool(dstate.get("undo_stack"))
+        drive_lbl = (
+            f"Drive #{active_did}" if active_did is not None else "No drive · LOG starts one"
+        )
+        d1, d2, d3, d4 = st.columns([1.6, 1, 1, 1])
+        d1.markdown(
+            f'<div class="ql-drive{" open" if active_did else ""}">{drive_lbl}</div>',
+            unsafe_allow_html=True,
+        )
+        if d2.button(
+            "Start",
+            use_container_width=True,
+            key="lt_start_drive",
+            disabled=active_did is not None,
+        ):
+            st.success(f"Drive #{start_drive(opponent)} started.")
+            st.rerun()
+        if d3.button(
+            "End drive",
+            use_container_width=True,
+            key="lt_end_fill",
+            disabled=active_did is None,
+        ):
+            ended = end_drive()
+            if ended is not None:
+                st.session_state.ff_drive_filter = str(ended)
+            st.rerun()
+        if d4.button(
+            "Undo", use_container_width=True, key="lt_undo_drive", disabled=not can_undo
+        ):
+            entry = undo_drive_action()
+            if entry:
+                st.success(f"Undid {entry.get('action')}.")
+            st.rerun()
         _live_track_field_screen(opponent, live_logs)
         return
 
@@ -7764,7 +8681,85 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
 
     if st.session_state.get("lt_play_sheet") == "Fill Film" and booth_station == "full":
         _live_track_fill_film(opponent, offense_df, live_logs, focuses=None)
+    elif booth_station == "full":
+        # Layout C — dual pane: phrase left · situation/drive right
+        @st.fragment
+        def _main_dual_fragment() -> None:
+            logs_now = load_live_log()
+            left, right = st.columns([1.35, 1])
+            with left:
+                st.markdown(
+                    '<div class="mb-console-title">Snap log</div>',
+                    unsafe_allow_html=True,
+                )
+                _live_track_log_screen(
+                    opponent,
+                    offense_df,
+                    defense_df,
+                    logs_now,
+                    quick=True,
+                    dual_pane=True,
+                )
+            with right:
+                _render_main_dual_rail(
+                    opponent,
+                    logs_now,
+                    pending_n=count_film_pending(logs_now, opponent),
+                    can_control_snap=True,
+                )
+
+        _main_dual_fragment()
+        with st.expander("Tonight’s log", expanded=False):
+            _render_live_log_tail(opponent, load_live_log())
     else:
+        # Snap-only tagger / call station — single column
+        dstate = load_drive_state()
+        active_did = current_drive_id(opponent)
+        can_undo = bool(dstate.get("undo_stack"))
+        play_n_lbl = ""
+        try:
+            from booth_snaps import load_booth_snap
+
+            snap = load_booth_snap()
+            if active_did is not None and snap.get("drive_id") == int(active_did):
+                play_n_lbl = f" · Play #{int(snap.get('play_n') or 1)}"
+        except Exception:
+            pass
+        drive_lbl = (
+            f"Drive #{active_did}{play_n_lbl}"
+            if active_did is not None
+            else "No drive · LOG starts one"
+        )
+        d1, d2, d3, d4 = st.columns([1.6, 1, 1, 1])
+        d1.markdown(
+            f'<div class="ql-drive{" open" if active_did else ""}">{drive_lbl}</div>',
+            unsafe_allow_html=True,
+        )
+        if d2.button(
+            "Start",
+            use_container_width=True,
+            key="lt_start_drive",
+            disabled=active_did is not None,
+        ):
+            st.success(f"Drive #{start_drive(opponent)} started.")
+            st.rerun()
+        if d3.button(
+            "End drive",
+            use_container_width=True,
+            key="lt_end_fill",
+            disabled=active_did is None,
+        ):
+            ended = end_drive()
+            if ended is not None:
+                st.session_state.ff_drive_filter = str(ended)
+            st.rerun()
+        if d4.button(
+            "Undo", use_container_width=True, key="lt_undo_drive", disabled=not can_undo
+        ):
+            entry = undo_drive_action()
+            if entry:
+                st.success(f"Undid {entry.get('action')}.")
+            st.rerun()
 
         @st.fragment
         def _main_log_fragment() -> None:
@@ -9802,6 +10797,33 @@ def _commit_live_play(
         ball = zone_default_ball_yard(field_zone)
     field_zone = ball_yard_to_zone(ball)
 
+    # Prefer tagger end-yard for gain when present (Incomplete stays 0)
+    end_from_tagger = None
+    try:
+        if find_snap_index is not None and logs_now is not None and not logs_now.empty:
+            _pre_idx = find_snap_index(logs_now, drive_id, play_n)
+            if _pre_idx is not None:
+                _pre = logs_now.reset_index(drop=True).loc[int(_pre_idx)].to_dict()
+                raw_end = _pre.get("end_ball_yard")
+                if raw_end is not None and str(raw_end).strip() != "":
+                    end_from_tagger = int(raw_end)
+    except Exception:
+        end_from_tagger = None
+    result_l = str(result or "").strip().lower()
+    if end_from_tagger is not None and result_l not in {
+        "incomplete",
+        "inc",
+        "turnover",
+        "int",
+        "fumble",
+    }:
+        auto_yds = yards_from_ball_span(ball, end_from_tagger)
+        if auto_yds is not None:
+            yards_gained = int(auto_yds)
+            warnings.append(
+                f"Yards from tagger end ({format_ball_spot(end_from_tagger)}) → {yards_gained:+d}"
+            )
+
     bp = str(ball_player or "").strip()
     # Dual-tag RPO concepts → logged type is run or pass from outcome / touch
     ptype = resolve_logged_play_type(
@@ -9838,6 +10860,7 @@ def _commit_live_play(
         "distance_yards": int(distance_yards),
         "field_zone": field_zone,
         "ball_yard": int(ball),
+        "end_ball_yard": end_from_tagger if end_from_tagger is not None else "",
         "situation": situation_label(
             int(down), dist_bucket, field_zone, ball_yard=ball
         ),
@@ -9914,9 +10937,13 @@ def _commit_live_play(
                 merged[k] = existing.get(k)
         front = str(merged.get("def_front") or "").strip()
         cov = str(merged.get("coverage") or "").strip()
-        bz = str(merged.get("blitz") or "").strip().lower()
-        if front and cov and bz in {"yes", "no"}:
+        if front and cov:
             merged["film_pending"] = "No"
+        # Keep tagger end spot if Main didn't supply one
+        if str(existing.get("end_ball_yard") or "").strip() and not str(
+            new_row.get("end_ball_yard") or ""
+        ).strip():
+            merged["end_ball_yard"] = existing.get("end_ball_yard")
         update_live_log_at(int(idx), merged)
     else:
         append_live_log(new_row)
@@ -11188,6 +12215,7 @@ def _render_quick_log_wizard(
     cov_opts: list[str],
     plan_pins: list[str],
     booth_favs: dict,
+    hide_situation: bool = False,
 ) -> None:
     """Phrase-first booth log with confirm; optional tap steps behind a toggle."""
     if "ql_step" not in st.session_state:
@@ -11243,12 +12271,18 @@ def _render_quick_log_wizard(
     ):
         return
 
-    st.markdown(
-        f'<p class="live-situation">'
-        f'{situation_label(cur_down, _yards_to_distance_bucket(cur_dist), cur_zone, ball_yard=cur_ball)}'
-        f' · to-go {cur_dist}</p>',
-        unsafe_allow_html=True,
-    )
+    if not hide_situation:
+        st.markdown(
+            f'<p class="live-situation">'
+            f"{situation_label(cur_down, _yards_to_distance_bucket(cur_dist), cur_zone, ball_yard=cur_ball)}"
+            f" · to-go {cur_dist}</p>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<div class="mb-console-title">Call console</div>',
+            unsafe_allow_html=True,
+        )
     # GameCast lives on the Halftime report (drive map) — keep Log free of Plotly
     if "ql_booth_tempo" not in st.session_state:
         st.session_state.ql_booth_tempo = "Fast"
@@ -11739,6 +12773,557 @@ def _render_quick_log_wizard(
                 st.session_state.ql_step = 0
                 st.rerun()
 
+def _inject_main_booth_css() -> None:
+    """Professional Main booth chrome — dual-pane console look."""
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap');
+
+        /* —— Main booth shell —— */
+        html, body, [data-testid="stAppViewContainer"],
+        [data-testid="stMain"], .stApp {
+            font-family: "IBM Plex Sans", "Segoe UI", sans-serif !important;
+        }
+        [data-testid="stHeader"] {
+            background: transparent !important;
+        }
+        [data-testid="stToolbar"] {
+            right: 0.75rem !important;
+            top: 0.35rem !important;
+        }
+        [data-testid="stMainBlockContainer"] {
+            padding-top: 0.35rem !important;
+            padding-bottom: 1.25rem !important;
+            max-width: 1240px !important;
+        }
+        [data-testid="stMainBlockContainer"] [data-testid="stVerticalBlock"] {
+            gap: 0.45rem !important;
+        }
+        [data-testid="stHorizontalBlock"] {
+            gap: 0.85rem !important;
+            align-items: flex-start !important;
+        }
+        div[data-testid="stCaptionContainer"] p {
+            color: #5a6b62 !important;
+            font-size: 0.82rem !important;
+        }
+
+        /* App bar */
+        .mb-appbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 1rem;
+            padding: 0.7rem 1rem;
+            margin: 0 0 0.65rem 0;
+            background: #0F2419;
+            color: #F2F7F4;
+            border-radius: 12px;
+            border: 1px solid #1B4332;
+        }
+        .mb-appbar-brand {
+            display: flex;
+            flex-direction: column;
+            gap: 0.1rem;
+            min-width: 0;
+        }
+        .mb-appbar-brand .mb-name {
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            color: #95D5B2;
+        }
+        .mb-appbar-brand .mb-match {
+            font-size: 1.15rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .mb-appbar-meta {
+            display: flex;
+            align-items: center;
+            gap: 0.45rem;
+            flex-shrink: 0;
+        }
+        .mb-pill {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.28rem 0.65rem;
+            border-radius: 999px;
+            font-size: 0.78rem;
+            font-weight: 700;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+            background: #1B4332;
+            color: #D8F3DC;
+            border: 1px solid #2D6A4F;
+        }
+        .mb-pill.warn {
+            background: #3D2E0F;
+            color: #FFE8A3;
+            border-color: #C9A227;
+        }
+        .mb-pill.ok {
+            background: #143528;
+            color: #95D5B2;
+            border-color: #40916C;
+        }
+
+        /* Panels */
+        .mb-panel {
+            background: #FFFFFF;
+            border: 1px solid #D5E0D9;
+            border-radius: 12px;
+            padding: 0.85rem 0.95rem 0.95rem;
+            margin: 0 0 0.55rem 0;
+        }
+        .mb-panel-label, .mb-panel-label {
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #6B7C72;
+            margin: 0 0 0.55rem 0;
+        }
+        .mb-console-title {
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #6B7C72;
+            margin: 0 0 0.35rem 0;
+        }
+        /* Dual-pane columns look like app panels */
+        div[data-testid="stHorizontalBlock"]:has(.mb-console-title) > div[data-testid="stColumn"] {
+            background: #FFFFFF;
+            border: 1px solid #D5E0D9;
+            border-radius: 14px;
+            padding: 0.85rem 0.95rem 1rem;
+        }
+        div[data-testid="stHorizontalBlock"]:has(.mb-board) > div[data-testid="stColumn"] {
+            background: #FFFFFF;
+            border: 1px solid #D5E0D9;
+            border-radius: 14px;
+            padding: 0.85rem 0.95rem 1rem;
+        }
+        /* LOG form primary = big commit */
+        div[data-testid="stForm"] div[data-testid="stButton"] > button[kind="primary"],
+        div[data-testid="stForm"] button[data-testid="baseButton-primaryFormSubmit"] {
+            min-height: 3.25rem !important;
+            font-size: 1.1rem !important;
+            font-weight: 800 !important;
+            letter-spacing: 0.06em !important;
+            text-transform: uppercase !important;
+            background: #1B4332 !important;
+            border-color: #1B4332 !important;
+        }
+        /* Soft page wash */
+        [data-testid="stAppViewContainer"] > .main {
+            background: #F3F6F4;
+        }
+        [data-testid="stMainBlockContainer"] {
+            background: transparent;
+        }
+
+        /* Situation board */
+        .mb-board {
+            background: #0F2419;
+            border: 1px solid #1B4332;
+            border-radius: 12px;
+            padding: 0.85rem 0.9rem 0.95rem;
+            margin: 0 0 0.55rem 0;
+            color: #F2F7F4;
+        }
+        .mb-board-label {
+            font-size: 0.68rem;
+            font-weight: 700;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #95D5B2;
+            margin: 0 0 0.35rem 0;
+        }
+        .mb-board-sit {
+            font-family: "IBM Plex Mono", ui-monospace, monospace;
+            font-size: 1.55rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
+            line-height: 1.2;
+            margin: 0;
+            color: #FFFFFF;
+        }
+        .mb-board-sub {
+            margin: 0.35rem 0 0 0;
+            font-size: 0.88rem;
+            color: #B7C9BE;
+            font-weight: 500;
+        }
+
+        /* Drive chip */
+        .mb-drive {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+            padding: 0.55rem 0.7rem;
+            margin: 0 0 0.45rem 0;
+            background: #F3F7F4;
+            border: 1px solid #D5E0D9;
+            border-radius: 10px;
+            font-weight: 700;
+            font-size: 0.95rem;
+            color: #1B4332;
+        }
+        .mb-drive.open {
+            border-color: #40916C;
+            background: #E7F5EC;
+        }
+        .mb-drive .mb-drive-state {
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            color: #6B7C72;
+        }
+        .mb-drive.open .mb-drive-state { color: #2D6A4F; }
+
+        /* Last play card */
+        .mb-last {
+            background: #F7FAF8;
+            border: 1px solid #D5E0D9;
+            border-radius: 10px;
+            padding: 0.65rem 0.75rem;
+            margin: 0.15rem 0 0.35rem 0;
+        }
+        .mb-last-call {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #14201a;
+            margin: 0 0 0.2rem 0;
+        }
+        .mb-last-meta, .mb-last-meta {
+            font-family: "IBM Plex Mono", ui-monospace, monospace;
+            font-size: 0.88rem;
+            font-weight: 600;
+            color: #2D6A4F;
+            margin: 0;
+        }
+        .mb-last-phrase {
+            margin: 0.35rem 0 0 0;
+            font-size: 0.8rem;
+            color: #6B7C72;
+        }
+        .mb-empty {
+            color: #8A9A91;
+            font-size: 0.88rem;
+            margin: 0.25rem 0;
+        }
+
+        /* Controls */
+        div[data-testid="stButton"] > button {
+            min-height: 2.55rem !important;
+            font-size: 0.95rem !important;
+            font-weight: 650 !important;
+            border-radius: 10px !important;
+            border: 1px solid #C9D6CE !important;
+            letter-spacing: 0.01em;
+        }
+        div[data-testid="stButton"] > button[kind="primary"],
+        div[data-testid="stButton"] > button[data-testid="baseButton-primary"] {
+            background: #1B4332 !important;
+            color: #FFFFFF !important;
+            border-color: #1B4332 !important;
+            min-height: 3.1rem !important;
+            font-size: 1.05rem !important;
+            font-weight: 700 !important;
+            letter-spacing: 0.04em;
+        }
+        div[data-testid="stButton"] > button[kind="primary"]:hover,
+        div[data-testid="stButton"] > button[data-testid="baseButton-primary"]:hover {
+            background: #2D6A4F !important;
+            border-color: #2D6A4F !important;
+        }
+        div[data-testid="stTextInput"] input {
+            min-height: 3.15rem !important;
+            font-size: 1.12rem !important;
+            font-weight: 600 !important;
+            border-radius: 10px !important;
+            border: 1.5px solid #B7C9BE !important;
+            background: #FFFFFF !important;
+        }
+        div[data-testid="stTextInput"] input:focus {
+            border-color: #1B4332 !important;
+            box-shadow: 0 0 0 2px rgba(27, 67, 50, 0.18) !important;
+        }
+        div[data-testid="stSelectbox"] div[data-baseweb="select"] > div,
+        div[data-testid="stNumberInput"] input {
+            min-height: 2.45rem !important;
+            font-size: 0.95rem !important;
+            border-radius: 8px !important;
+        }
+        div[data-testid="stExpander"] {
+            background: #F7FAF8 !important;
+            border: 1px solid #D5E0D9 !important;
+            border-radius: 10px !important;
+        }
+        div[data-testid="stExpander"] details summary p {
+            font-weight: 600 !important;
+            color: #1B4332 !important;
+        }
+        .main-dual-rail {
+            border-left: none !important;
+            padding-left: 0 !important;
+        }
+        /* Soften default Live Track title when app bar present */
+        .live-title { display: none !important; }
+        hr { border: none !important; border-top: 1px solid #E2EBE5 !important; margin: 0.55rem 0 !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_main_app_bar(
+    opponent: str,
+    *,
+    half: int = 1,
+    pending_n: int = 0,
+    drive_id: int | None = None,
+    play_n: int | None = None,
+) -> None:
+    """Top chrome for Main booth — match context at a glance."""
+    half_lbl = f"H{int(half)}"
+    drive_bits = []
+    if drive_id is not None:
+        drive_bits.append(f"D{int(drive_id)}")
+    if play_n is not None:
+        drive_bits.append(f"P{int(play_n)}")
+    drive_pill = " · ".join(drive_bits) if drive_bits else "READY"
+    film_cls = "mb-pill warn" if pending_n else "mb-pill ok"
+    film_txt = f"FILM {pending_n}" if pending_n else "FILM OK"
+    st.markdown(
+        f"""
+        <div class="mb-appbar">
+          <div class="mb-appbar-brand">
+            <div class="mb-name">Live Track · Main</div>
+            <div class="mb-match">vs {opponent}</div>
+          </div>
+          <div class="mb-appbar-meta">
+            <span class="mb-pill">{half_lbl}</span>
+            <span class="mb-pill">{drive_pill}</span>
+            <span class="{film_cls}">{film_txt}</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _render_main_dual_rail(
+    opponent: str,
+    live_logs: pd.DataFrame | None,
+    *,
+    pending_n: int = 0,
+    can_control_snap: bool = True,
+) -> None:
+    """Main layout C — right pane: scoreboard situation, drive, last play."""
+    if "lt_ball_yard" not in st.session_state:
+        st.session_state.lt_ball_yard = zone_default_ball_yard(
+            st.session_state.get("lt_zone") or "midfield"
+        )
+
+    # Scoreboard first (session values), then edit controls
+    ball_yard = int(st.session_state.get("lt_ball_yard") or 45)
+    field_zone = ball_yard_to_zone(ball_yard)
+    st.session_state.lt_zone = field_zone
+    down = int(st.session_state.get("lt_down") or 1)
+    distance_yards = int(st.session_state.get("lt_dist_y") or 10)
+    dist_bucket = _yards_to_distance_bucket(distance_yards)
+    sit = situation_label(down, dist_bucket, field_zone, ball_yard=ball_yard)
+    spot = format_ball_spot(ball_yard)
+    zone_lbl = ZONE_LABELS.get(field_zone, field_zone)
+
+    st.markdown(
+        f"""
+        <div class="mb-board">
+          <div class="mb-board-label">On the field</div>
+          <p class="mb-board-sit">{sit}</p>
+          <p class="mb-board-sub">{spot} · {zone_lbl} · to-go {distance_yards}</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown('<div class="mb-panel-label">Adjust</div>', unsafe_allow_html=True)
+    s1, s2 = st.columns(2)
+    with s1:
+        st.selectbox("Down", [1, 2, 3, 4], key="lt_down")
+    with s2:
+        st.number_input(
+            "To go",
+            min_value=1,
+            max_value=99,
+            step=1,
+            key="lt_dist_y",
+        )
+    st.number_input(
+        "Ball (from own GL)",
+        min_value=1,
+        max_value=99,
+        step=1,
+        key="lt_ball_yard",
+        help="Own 10 = 10 · Midfield = 50 · Opp 25 = 75",
+    )
+    if st.button("Reset · 1st & 10", key="lt_rail_1st10", use_container_width=True):
+        by = int(st.session_state.get("lt_ball_yard") or ball_yard)
+        st.session_state.lt_situation_pending = {
+            "down": 1,
+            "distance_yards": 10,
+            "field_zone": ball_yard_to_zone(by),
+            "ball_yard": by,
+            "note": "Manual reset → 1st & 10",
+        }
+        st.rerun()
+
+    dstate = load_drive_state()
+    active_did = current_drive_id(opponent)
+    can_undo = bool(dstate.get("undo_stack"))
+    play_n = None
+    try:
+        from booth_snaps import load_booth_snap
+
+        snap = load_booth_snap()
+        if active_did is not None and snap.get("drive_id") == int(active_did):
+            play_n = int(snap.get("play_n") or 1)
+    except Exception:
+        pass
+
+    if active_did is not None:
+        drive_main = f"Drive #{active_did}" + (f" · Play #{play_n}" if play_n else "")
+        drive_state = "LIVE"
+        drive_cls = "mb-drive open"
+    else:
+        drive_main = "No drive open"
+        drive_state = "LOG STARTS ONE"
+        drive_cls = "mb-drive"
+    st.markdown(
+        f'<div class="{drive_cls}"><span>{drive_main}</span>'
+        f'<span class="mb-drive-state">{drive_state}</span></div>',
+        unsafe_allow_html=True,
+    )
+    b1, b2, b3 = st.columns(3)
+    if b1.button(
+        "Start",
+        use_container_width=True,
+        key="lt_start_drive",
+        disabled=active_did is not None,
+        help="Optional — first LOG also starts a drive.",
+    ):
+        st.success(f"Drive #{start_drive(opponent)} started.")
+        st.rerun()
+    if b2.button(
+        "End",
+        use_container_width=True,
+        key="lt_end_fill",
+        disabled=active_did is None,
+        help="Ends the drive. Taggers keep filming.",
+    ):
+        ended = end_drive()
+        if ended is not None:
+            st.session_state.ff_drive_filter = str(ended)
+            st.session_state["lt_end_drive_note"] = (
+                f"Drive #{ended} ended · taggers keep filming"
+            )
+        st.rerun()
+    if b3.button(
+        "Undo",
+        use_container_width=True,
+        key="lt_undo_drive",
+        disabled=not can_undo,
+    ):
+        entry = undo_drive_action()
+        if entry:
+            st.success(f"Undid {entry.get('action')}.")
+        st.rerun()
+    end_note = st.session_state.pop("lt_end_drive_note", None)
+    if end_note:
+        st.caption(end_note)
+
+    if pending_n:
+        st.markdown(
+            f'<span class="mb-pill warn">Film pending · {pending_n}</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            '<span class="mb-pill ok">Film clear</span>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown(
+        '<div class="mb-panel-label" style="margin-top:0.75rem">Last play</div>',
+        unsafe_allow_html=True,
+    )
+    last_phrase = str(st.session_state.get("ql_last_phrase") or "").strip()
+    last_row = None
+    if live_logs is not None and not live_logs.empty:
+        try:
+            sub = live_logs.copy()
+            if "opponent" in sub.columns:
+                sub = sub[
+                    sub["opponent"].astype(str).str.strip().str.lower()
+                    == str(opponent).strip().lower()
+                ]
+            if not sub.empty:
+                last_row = sub.reset_index(drop=True).iloc[-1]
+        except Exception:
+            last_row = None
+    if last_row is not None:
+        call = str(
+            last_row.get("play_call")
+            or last_row.get("play_call")
+            or last_row.get("call")
+            or "—"
+        )
+        yds = last_row.get("yards_gained")
+        if yds is None or (isinstance(yds, float) and pd.isna(yds)):
+            yds = last_row.get("yards_gained")
+        try:
+            yds_s = f"{int(yds):+d}" if yds is not None and str(yds).strip() != "" else "—"
+        except (TypeError, ValueError):
+            yds_s = "—"
+        front = str(last_row.get("def_front") or "").strip()
+        cov = str(last_row.get("coverage") or "").strip()
+        look = f"{front} / {cov}" if front or cov else "—"
+        phrase_html = (
+            f'<p class="mb-last-phrase">{last_phrase[:90]}</p>' if last_phrase else ""
+        )
+        st.markdown(
+            f"""
+            <div class="mb-last">
+              <p class="mb-last-call">{call}</p>
+              <p class="mb-last-meta">{yds_s} yd · {look}</p>
+              {phrase_html}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    elif last_phrase:
+        st.markdown(
+            f'<div class="mb-last"><p class="mb-last-phrase">{last_phrase[:90]}</p></div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown('<p class="mb-empty">No plays logged yet</p>', unsafe_allow_html=True)
+
+    if can_control_snap and active_did is not None:
+        with st.expander("Catch-up / shared Play #", expanded=False):
+            _render_shared_snap_bar(opponent, can_control=True, key_prefix="main")
+
+
 def _live_track_log_screen(
     opponent: str,
     offense_df: pd.DataFrame,
@@ -11746,8 +13331,12 @@ def _live_track_log_screen(
     live_logs: pd.DataFrame,
     *,
     quick: bool = True,
+    dual_pane: bool = False,
 ) -> None:
-    """Booth logger — one-handed Quick Log (pace) or Full tags."""
+    """Booth logger — one-handed Quick Log (pace) or Full tags.
+
+    dual_pane=True (layout C): phrase/confirm only — situation lives on the right rail.
+    """
     from mesh_engine import load_game_plan, pin_names
 
     _apply_pending_live_tags()
@@ -11818,9 +13407,11 @@ def _live_track_log_screen(
             cov_opts=cov_opts,
             plan_pins=plan_pins,
             booth_favs=booth_favs,
+            hide_situation=bool(dual_pane),
         )
-        with st.expander("Tonight’s log", expanded=False):
-            _render_live_log_tail(opponent, live_logs)
+        if not dual_pane:
+            with st.expander("Tonight’s log", expanded=False):
+                _render_live_log_tail(opponent, live_logs)
         return
 
     sit_note = st.session_state.pop("lt_situation_note", None)

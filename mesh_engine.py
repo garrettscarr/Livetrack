@@ -66,13 +66,17 @@ def load_scout(
         df = df[df["opponent"].astype(str).str.strip().str.lower() == opponent.strip().lower()]
     if season and str(season).strip().lower() != "all" and "season" in df.columns:
         want = str(season).strip().lower()
+        # Coerce to python strings — Arrow large_string breaks bool OR masks
+        season_s = df["season"].astype(object)
         if want in {"current", ""} or want in _current_season_aliases():
-            mask = df["season"].map(_is_current_season_value)
+            mask = season_s.map(_is_current_season_value).fillna(False).astype(bool)
             # Legacy rows with no season stamp count as current
-            missing = df["season"].isna() | (df["season"].astype(str).str.strip() == "")
-            df = df[mask | missing]
+            stripped = season_s.where(season_s.notna(), "").astype(str).str.strip()
+            missing = season_s.isna() | (stripped == "") | (stripped.str.lower() == "nan")
+            missing = missing.fillna(False).astype(bool)
+            df = df[mask.to_numpy() | missing.to_numpy()]
         else:
-            s = df["season"].fillna("").astype(str).str.strip().str.lower()
+            s = season_s.fillna("").astype(str).str.strip().str.lower()
             df = df[s == want]
     return df
 
@@ -293,6 +297,527 @@ def load_scout_opponent_offense() -> pd.DataFrame:
 
 def load_scout_opponent_defense() -> pd.DataFrame:
     return load_scout("opponent_defense")
+
+
+def scout_favorite_looks(
+    opponent: str | None,
+    *,
+    n: int = 6,
+) -> dict[str, list[str]]:
+    """
+    Most-used fronts / coverages vs tonight's opponent (scout opponent_defense).
+
+    Used to keep tagger chips short — favorites only.
+    """
+    empty: dict[str, list[str]] = {"fronts": [], "coverages": []}
+    opp = str(opponent or "").strip()
+    if not opp:
+        return empty
+    try:
+        df = load_scout("opponent_defense", opponent=opp)
+    except Exception:
+        return empty
+    if df is None or getattr(df, "empty", True):
+        return empty
+    fronts = [r["name"] for r in _top_counts(df["def_front"], n=n) if r.get("name")]
+    covs = [r["name"] for r in _top_counts(df["coverage"], n=n) if r.get("name")]
+    return {"fronts": fronts, "coverages": covs}
+
+
+# --- Scout matchup report (upload × our EPA) ---------------------------------
+
+_COV_ALIASES: dict[str, set[str]] = {
+    "0": {"0", "cover 0", "0 switch", "cover 0 switch"},
+    "1": {"1", "cover 1", "cover 1 press man", "cover 1 man"},
+    "2": {"2", "cover 2", "cover 2 man", "2 man"},
+    "3": {"3", "cover 3", "3 lock", "cover 3 lock"},
+    "4": {"4", "cover 4", "quarters"},
+}
+
+
+def _canon_cov_token(value) -> str:
+    import re
+
+    s = str(value or "").strip().lower()
+    if not s or s in {"nan", "none", "unknown"}:
+        return ""
+    s = re.sub(r"^cover\s+", "", s)
+    m = re.match(r"^(\d+)", s)
+    return m.group(1) if m else s
+
+
+def booth_front_tag(value, *, mode: str = "as_scouted") -> str:
+    """
+    Map a scout/film front to the booth tag used for matching.
+
+    mode='even_42': numbered specialty fronts (31/13/22…) → Even (4-2 base).
+    mode='as_scouted': keep scout labels (case-normalized).
+    """
+    import re
+
+    s = str(value or "").strip().lower()
+    if not s or s in {"nan", "none", "unknown"}:
+        return ""
+    if mode != "even_42":
+        return s
+    if s in {"bear", "odd", "even"}:
+        return s
+    if re.fullmatch(r"\d+", s):
+        return "even"
+    return s
+
+
+def _look_mask(
+    series: pd.Series,
+    name: str,
+    *,
+    kind: str,
+    booth_mode: str = "as_scouted",
+) -> pd.Series:
+    """Boolean mask: our tagged column matches a scout look (with aliases)."""
+    if kind == "front":
+        want = booth_front_tag(name, mode=booth_mode)
+        if not want:
+            return pd.Series(False, index=series.index)
+        vals = series.map(lambda v: booth_front_tag(v, mode=booth_mode))
+        return vals == want
+    token = _canon_cov_token(name)
+    aliases = _COV_ALIASES.get(token, {token} if token else set())
+    if not aliases:
+        return pd.Series(False, index=series.index)
+    vals = series.map(_canon_cov_token)
+    return vals.isin(aliases)
+
+
+def _our_stats_vs_look(
+    offense_df: pd.DataFrame | None,
+    col: str,
+    name: str,
+    *,
+    min_plays: int = 3,
+    booth_mode: str = "as_scouted",
+    positive_calls_only: bool = False,
+) -> dict:
+    """Our season EPA / success when we faced this defensive look."""
+    out = {
+        "our_plays": 0,
+        "avg_epa": None,
+        "success_rate": None,
+        "thin": True,
+        "best_calls": [],
+    }
+    if offense_df is None or getattr(offense_df, "empty", True):
+        return out
+    if col not in offense_df.columns or not str(name or "").strip():
+        return out
+    kind = (
+        "front"
+        if col == "def_front"
+        else "coverage"
+        if col == "coverage"
+        else "exact"
+    )
+    if kind in {"front", "coverage"}:
+        mask = _look_mask(
+            offense_df[col], name, kind=kind, booth_mode=booth_mode
+        )
+    else:
+        want = str(name).strip().lower()
+        mask = offense_df[col].astype(str).str.strip().str.lower() == want
+    sub = offense_df.loc[mask]
+    out["our_plays"] = int(len(sub))
+    if sub.empty:
+        return out
+    if "epa" in sub.columns:
+        out["avg_epa"] = round(float(sub["epa"].mean()), 3)
+    if "is_success" in sub.columns and len(sub) > 0:
+        try:
+            out["success_rate"] = round(float(sub["is_success"].mean()), 3)
+        except Exception:
+            out["success_rate"] = None
+    out["thin"] = len(sub) < int(min_plays)
+    if (
+        "play_call" in sub.columns
+        and "epa" in sub.columns
+        and len(sub) >= max(2, min_plays - 1)
+    ):
+        try:
+            tagged = sub
+            if "play_tagged" in sub.columns:
+                t = sub[sub["play_tagged"].fillna(0).astype(int) == 1]
+                if len(t) >= 2:
+                    tagged = t
+            g = (
+                tagged.groupby(tagged["play_call"].astype(str))
+                .agg(plays=("epa", "count"), avg_epa=("epa", "mean"))
+                .query("plays >= 2")
+                .sort_values("avg_epa", ascending=False)
+                .head(5)
+            )
+            calls = [
+                {
+                    "call": str(idx),
+                    "plays": int(row["plays"]),
+                    "avg_epa": round(float(row["avg_epa"]), 3),
+                }
+                for idx, row in g.iterrows()
+            ]
+            if positive_calls_only:
+                calls = [c for c in calls if c["avg_epa"] > 0]
+            out["best_calls"] = calls[:3]
+        except Exception:
+            out["best_calls"] = []
+    return out
+
+
+def _verdict_for_look(our: dict, scout_plays: int, scout_total: int) -> str:
+    """edge / trap / neutral / unknown — for coach-facing report."""
+    if our.get("thin") or our.get("avg_epa") is None:
+        return "unknown"
+    epa = float(our["avg_epa"])
+    share = (scout_plays / scout_total) if scout_total else 0
+    if epa >= 0.05:
+        return "edge"
+    if epa <= -0.05 and share >= 0.08:
+        return "trap"
+    if epa <= -0.05:
+        return "caution"
+    return "neutral"
+
+
+def _filter_offense_seasons(
+    offense_df: pd.DataFrame | None,
+    seasons: list[str] | None,
+) -> pd.DataFrame | None:
+    if offense_df is None or getattr(offense_df, "empty", True):
+        return offense_df
+    if not seasons:
+        return offense_df
+    want = {str(s).strip().lower() for s in seasons if str(s).strip()}
+    if not want or "all" in want:
+        return offense_df
+    if "season" not in offense_df.columns:
+        return offense_df
+    s = offense_df["season"].astype(str).str.strip().str.lower()
+    return offense_df.loc[s.isin(want)].copy()
+
+
+def build_scout_matchup_report(
+    opponent: str,
+    offense_df: pd.DataFrame | None,
+    *,
+    top_n: int = 8,
+    min_our_plays: int = 3,
+    scout_season: str = "current",
+    scout_df: pd.DataFrame | None = None,
+    booth_front_mode: str = "even_42",
+    our_seasons: list[str] | None = None,
+) -> dict:
+    """
+    Opponent defense tendencies from scout × our EPA vs those looks.
+
+    booth_front_mode:
+      - 'even_42' (default): numbered scout fronts → Even for matching (4-2 booth)
+      - 'as_scouted': match exact scout front labels
+    Pass scout_df to use an in-memory upload without reading the DB.
+    """
+    opp = str(opponent or "").strip()
+    empty = {
+        "opponent": opp,
+        "scout_snaps": 0,
+        "booth_front_mode": booth_front_mode,
+        "fronts": [],
+        "fronts_detail": [],
+        "coverages": [],
+        "def_calls": [],
+        "edges": [],
+        "traps": [],
+        "summary": "No scout defense data for this opponent.",
+        "notes": [],
+    }
+    if not opp and scout_df is None:
+        return empty
+
+    if scout_df is not None:
+        scout = scout_df.copy()
+    else:
+        if not opp:
+            return empty
+        try:
+            scout = load_scout(
+                "opponent_defense", opponent=opp, season=scout_season
+            )
+        except Exception:
+            return empty
+    if scout is None or getattr(scout, "empty", True):
+        return empty
+
+    our = _filter_offense_seasons(offense_df, our_seasons)
+    notes: list[str] = []
+    # Coverage tags are sparse in recent seasons — fall back for cov EPA
+    our_cov = our
+    if our is not None and not getattr(our, "empty", True) and "coverage" in our.columns:
+        cov_tagged = our["coverage"].notna() & (
+            our["coverage"].astype(str).str.strip().str.lower().isin({"", "nan", "none"}) == False
+        )
+        if int(cov_tagged.sum()) < 30 and offense_df is not None and not getattr(offense_df, "empty", True):
+            our_cov = offense_df
+            notes.append(
+                "Coverage EPA uses all stored seasons (selected seasons lack coverage tags)."
+            )
+    total = int(len(scout))
+    mode = (
+        booth_front_mode
+        if booth_front_mode in {"even_42", "as_scouted"}
+        else "even_42"
+    )
+
+    fronts_detail_raw = (
+        _top_counts(scout["def_front"], n=top_n)
+        if "def_front" in scout.columns
+        else []
+    )
+    if mode == "even_42" and "def_front" in scout.columns:
+        booth_series = scout["def_front"].map(
+            lambda v: booth_front_tag(v, mode=mode)
+        )
+        fronts_raw = _top_counts(booth_series, n=top_n)
+    else:
+        fronts_raw = fronts_detail_raw
+    covs_raw = (
+        _top_counts(scout["coverage"], n=top_n)
+        if "coverage" in scout.columns
+        else []
+    )
+    calls_raw = (
+        _top_counts(scout["def_call"], n=top_n)
+        if "def_call" in scout.columns
+        else []
+    )
+
+    def _enrich(
+        items: list[dict],
+        col: str,
+        *,
+        front_mode: str | None = None,
+        film_only: bool = False,
+        sample: pd.DataFrame | None = None,
+    ) -> list[dict]:
+        rows: list[dict] = []
+        bm = front_mode if front_mode is not None else mode
+        sample_df = our if sample is None else sample
+        for it in items:
+            name = str(it.get("name") or "")
+            if not name or name.lower() in {"nan", "none", ""}:
+                continue
+            scout_n = int(it.get("plays") or 0)
+            pct = round(100.0 * scout_n / total, 1) if total else 0.0
+            if film_only:
+                booth = booth_front_tag(name, mode="even_42")
+                rows.append(
+                    {
+                        "look": name,
+                        "booth_tag": booth.title() if booth else "—",
+                        "scout_plays": scout_n,
+                        "scout_pct": pct,
+                        "our_plays": 0,
+                        "avg_epa": None,
+                        "success_rate": None,
+                        "verdict": "film",
+                        "best_calls": [],
+                        "thin": True,
+                    }
+                )
+                continue
+            our_stats = _our_stats_vs_look(
+                sample_df,
+                col,
+                name,
+                min_plays=min_our_plays,
+                booth_mode=bm if col == "def_front" else "as_scouted",
+                positive_calls_only=True,
+            )
+            verdict = _verdict_for_look(our_stats, scout_n, total)
+            display = name
+            if col == "def_front" and mode == "even_42" and bm == mode:
+                display = (
+                    name.title()
+                    if name.lower() in {"even", "odd", "bear"}
+                    else name
+                )
+            rows.append(
+                {
+                    "look": display,
+                    "scout_plays": scout_n,
+                    "scout_pct": pct,
+                    "our_plays": our_stats["our_plays"],
+                    "avg_epa": our_stats["avg_epa"],
+                    "success_rate": our_stats["success_rate"],
+                    "verdict": verdict,
+                    "best_calls": our_stats.get("best_calls") or [],
+                    "thin": bool(our_stats.get("thin")),
+                }
+            )
+        return rows
+
+    fronts = _enrich(fronts_raw, "def_front", front_mode=mode)
+    fronts_detail = _enrich(
+        fronts_detail_raw,
+        "def_front",
+        front_mode="as_scouted",
+        film_only=(mode == "even_42"),
+    )
+    coverages = _enrich(covs_raw, "coverage", sample=our_cov)
+    def_calls = _enrich(calls_raw, "def_call", sample=our_cov)
+
+    pool = list(fronts) + list(coverages)
+    edges = [r for r in pool if r.get("verdict") == "edge" and not r.get("thin")]
+    traps = [
+        r
+        for r in pool
+        if r.get("verdict") in {"trap", "caution"} and not r.get("thin")
+    ]
+    edges.sort(
+        key=lambda r: (float(r.get("scout_pct") or 0) * float(r.get("avg_epa") or 0)),
+        reverse=True,
+    )
+    traps.sort(
+        key=lambda r: (
+            float(r.get("scout_pct") or 0) * abs(float(r.get("avg_epa") or 0))
+        ),
+        reverse=True,
+    )
+
+    top_f = fronts[0]["look"] if fronts else "—"
+    top_c = coverages[0]["look"] if coverages else "—"
+    if mode == "even_42":
+        notes.append(
+            "Booth mode: 4-2 — numbered scout fronts mapped to Even for EPA match."
+        )
+    if our_seasons:
+        notes.append("Our sample seasons: " + ", ".join(str(s) for s in our_seasons))
+    our_n = (
+        int(len(our))
+        if our is not None and not getattr(our, "empty", True)
+        else 0
+    )
+    summary = (
+        f"vs {opp or 'upload'}: scout {total} D snaps · lean {top_f} / {top_c} · "
+        f"{len(edges)} edge · {len(traps)} trap/caution · our n={our_n:,}"
+    )
+    return {
+        "opponent": opp or "Opponent",
+        "scout_snaps": total,
+        "booth_front_mode": mode,
+        "our_plays_sampled": our_n,
+        "our_seasons": list(our_seasons or []),
+        "fronts": fronts,
+        "fronts_detail": fronts_detail,
+        "coverages": coverages,
+        "def_calls": def_calls,
+        "edges": edges[:6],
+        "traps": traps[:6],
+        "summary": summary,
+        "notes": notes,
+    }
+
+
+def scout_matchup_report_markdown(report: dict) -> str:
+    """Plain markdown for download / locker-room print."""
+    opp = report.get("opponent") or "Opponent"
+    lines = [
+        f"# Scout matchup · vs {opp}",
+        "",
+        str(report.get("summary") or ""),
+        "",
+        f"Scout defense snaps: **{report.get('scout_snaps', 0)}**",
+        f"Our snaps matched: **{report.get('our_plays_sampled', '—')}**",
+        "",
+    ]
+    for note in report.get("notes") or []:
+        lines.append(f"> {note}")
+    if report.get("notes"):
+        lines.append("")
+
+    def _row(r: dict) -> str:
+        epa = r.get("avg_epa")
+        suc = r.get("success_rate")
+        epa_s = f"{epa:+.3f}" if epa is not None else "—"
+        suc_s = f"{100 * suc:.0f}%" if suc is not None else "—"
+        return (
+            f"| {r.get('look')} | {r.get('scout_pct')}% | {r.get('our_plays')} | "
+            f"{epa_s} | {suc_s} | {r.get('verdict')} |"
+        )
+
+    mode = report.get("booth_front_mode") or "as_scouted"
+    if mode == "even_42":
+        lines.extend(
+            [
+                "## Booth fronts × our success",
+                "",
+                "| Front (booth) | Scout % | Our plays | Our EPA | Success | Verdict |",
+                "| --- | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for r in report.get("fronts") or []:
+            lines.append(_row(r))
+        if report.get("fronts_detail"):
+            lines.extend(
+                [
+                    "",
+                    "## Scout front detail (film only)",
+                    "",
+                    "| Scout front | Scout % | Booth tag |",
+                    "| --- | ---: | --- |",
+                ]
+            )
+            for r in report["fronts_detail"]:
+                lines.append(
+                    f"| {r.get('look')} | {r.get('scout_pct')}% | "
+                    f"{r.get('booth_tag') or '—'} |"
+                )
+    else:
+        lines.extend(
+            [
+                "## Their fronts × our success",
+                "",
+                "| Front | Scout % | Our plays | Our EPA | Success | Verdict |",
+                "| --- | ---: | ---: | ---: | ---: | --- |",
+            ]
+        )
+        for r in report.get("fronts") or []:
+            lines.append(_row(r))
+
+    lines.extend(["", "## Their coverages × our success", ""])
+    lines.append("| Coverage | Scout % | Our plays | Our EPA | Success | Verdict |")
+    lines.append("| --- | ---: | ---: | ---: | ---: | --- |")
+    for r in report.get("coverages") or []:
+        lines.append(_row(r))
+    if report.get("edges"):
+        lines.extend(["", "## Edges (we good vs looks they run)", ""])
+        for r in report["edges"]:
+            epa = r.get("avg_epa")
+            epa_s = f"{epa:+.3f}" if epa is not None else "—"
+            lines.append(
+                f"- **{r['look']}** · scout {r['scout_pct']}% · "
+                f"our EPA {epa_s} (n={r['our_plays']})"
+            )
+            for c in r.get("best_calls") or []:
+                lines.append(
+                    f"  - Feature: {c['call']} ({c['avg_epa']:+.3f}, n={c['plays']})"
+                )
+    if report.get("traps"):
+        lines.extend(["", "## Traps / caution (they run it · we struggle)", ""])
+        for r in report["traps"]:
+            epa = r.get("avg_epa")
+            epa_s = f"{epa:+.3f}" if epa is not None else "—"
+            lines.append(
+                f"- **{r['look']}** · scout {r['scout_pct']}% · our EPA {epa_s} "
+                f"(n={r['our_plays']})"
+            )
+    lines.append("")
+    return "\n".join(lines)
+
 
 
 _LIVE_LOG_CACHE: tuple[float, int, pd.DataFrame] | None = None
