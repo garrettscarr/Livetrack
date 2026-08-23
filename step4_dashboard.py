@@ -5699,6 +5699,9 @@ DEFAULT_FILM_COVERAGES = [
     "Cover 1",
 ]
 
+# Two-person booth: skip active lineup + player EPA boards (bring back when a 3rd tags).
+BOOTH_TRACK_LINEUP = False
+
 
 def _load_learned_tags() -> dict[str, list[str]]:
     if not LIVE_TAGS_FILE.exists():
@@ -8135,15 +8138,13 @@ def _render_current_snap_tagger(
             draft = str(st.session_state.get(draft_f_key) or "").strip()
             if draft:
                 current = draft
-            ordered = list(scout_fronts) if scout_fronts else list(DEFAULT_FILM_FRONTS)
-            src = "scout" if scout_fronts else "defaults"
-            top, rest = ordered[:3], ordered[3:]
+            # Booth-simple: Even / Odd / Bear only (no scout numbered fronts)
             _chip_row(
-                f"Front · {src} top 3",
-                top,
+                "Front",
+                list(DEFAULT_FILM_FRONTS),
                 "def_front",
                 current,
-                more=rest,
+                more=None,
                 batch=batch_look,
             )
         elif fid == FOCUS_COVERAGE:
@@ -8794,10 +8795,13 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             opp_choices = ["Unknown"]
         half_now = int(st.session_state.get("lt_half") or 1)
         sheet_now = str(st.session_state.get("lt_main_sheet") or "Log")
-        setup_open = sheet_now == "Lineup"
+        if not BOOTH_TRACK_LINEUP and sheet_now == "Lineup":
+            st.session_state.lt_main_sheet = "Log"
+            sheet_now = "Log"
+        setup_open = BOOTH_TRACK_LINEUP and sheet_now == "Lineup"
         with st.expander(
             f"Game setup · vs {cur or default_opp} · H{half_now}"
-            + (f" · {sheet_now}" if sheet_now != "Log" else ""),
+            + (f" · {sheet_now}" if sheet_now != "Log" and BOOTH_TRACK_LINEUP else ""),
             expanded=setup_open,
         ):
             opponent = st.selectbox(
@@ -8806,18 +8810,25 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
                 key="lt_page_opponent",
             )
             st.radio("Half", [1, 2], horizontal=True, key="lt_half")
-            sheet = st.radio(
-                "Sheet",
-                ["Log", "Lineup"],
-                horizontal=True,
-                key="lt_main_sheet",
-            )
+            if BOOTH_TRACK_LINEUP:
+                sheet = st.radio(
+                    "Sheet",
+                    ["Log", "Lineup"],
+                    horizontal=True,
+                    key="lt_main_sheet",
+                )
+            else:
+                st.session_state.lt_main_sheet = "Log"
+                sheet = "Log"
             if booth_station == "full":
                 st.markdown("---")
                 st.caption("Start new game")
                 _render_start_new_game_panel(season_opps)
         opponent = str(st.session_state.get("lt_page_opponent") or opponent)
         sheet = str(st.session_state.get("lt_main_sheet") or "Log")
+        if not BOOTH_TRACK_LINEUP:
+            sheet = "Log"
+            st.session_state.lt_main_sheet = "Log"
 
     live_logs = load_live_log()
     st.session_state.lt_unit = "Offense"
@@ -8893,7 +8904,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             play_n=play_n_bar,
         )
 
-    if sheet == "Lineup" and booth_station == "full":
+    if sheet == "Lineup" and booth_station == "full" and BOOTH_TRACK_LINEUP:
         # Compact drive bar still available on Lineup sheet
         dstate = load_drive_state()
         active_did = current_drive_id(opponent)
@@ -12294,7 +12305,11 @@ def _render_phrase_confirm_card(
         "Other",
     ]
     cur_res = str(draft.get("result") or "Gain")
-    t1, t2, t3 = st.columns([1.2, 1, 1.4])
+    if BOOTH_TRACK_LINEUP:
+        t1, t2, t3 = st.columns([1.2, 1, 1.4])
+    else:
+        t1, t2 = st.columns([1.2, 1])
+        t3 = None
     with t1:
         result = st.selectbox(
             "Result",
@@ -12309,18 +12324,21 @@ def _render_phrase_confirm_card(
             step=1,
             key=f"ql_cf_yards_{gen}",
         )
-    with t3:
-        bp_cur = str(draft.get("ball_player") or "")
-        if bp_cur and bp_cur not in ball_opts:
-            ball_opts = [""] + [bp_cur] + [n for n in ball_opts if n]
-        bp_idx = ball_opts.index(bp_cur) if bp_cur in ball_opts else 0
-        ball_player = st.selectbox(
-            "Ball to",
-            ball_opts,
-            index=bp_idx,
-            format_func=lambda n: n or "(none)",
-            key=f"ql_cf_ball_{gen}",
-        )
+    if BOOTH_TRACK_LINEUP and t3 is not None:
+        with t3:
+            bp_cur = str(draft.get("ball_player") or "")
+            if bp_cur and bp_cur not in ball_opts:
+                ball_opts = [""] + [bp_cur] + [n for n in ball_opts if n]
+            bp_idx = ball_opts.index(bp_cur) if bp_cur in ball_opts else 0
+            ball_player = st.selectbox(
+                "Ball to",
+                ball_opts,
+                index=bp_idx,
+                format_func=lambda n: n or "(none)",
+                key=f"ql_cf_ball_{gen}",
+            )
+    else:
+        ball_player = str(draft.get("ball_player") or "")
 
     # Full call editor — only mount widgets when opened (Streamlit always runs expanders)
     need_edit = bool(draft.get("play_is_new"))
@@ -12390,29 +12408,32 @@ def _render_phrase_confirm_card(
                 key=f"ql_cf_ptype_{gen}",
             )
         with c2:
-            pp_cur = str(draft.get("pass_player") or "")
-            is_pass_snap = (
-                str(draft.get("outcome_lane") or "") == "pass"
-                or str(draft.get("play_type") or "") == "pass"
-                or str(draft.get("result") or "") == "Incomplete"
-                or str(draft.get("touch_role") or "") == "target"
-            )
-            if not pp_cur and is_pass_snap:
-                pp_cur = lineup_slot_player("QB")
-            if not is_pass_snap:
+            if BOOTH_TRACK_LINEUP:
                 pp_cur = str(draft.get("pass_player") or "")
-            if pp_cur and pp_cur not in ball_opts:
-                ball_opts_p = [""] + [pp_cur] + [n for n in ball_opts if n]
+                is_pass_snap = (
+                    str(draft.get("outcome_lane") or "") == "pass"
+                    or str(draft.get("play_type") or "") == "pass"
+                    or str(draft.get("result") or "") == "Incomplete"
+                    or str(draft.get("touch_role") or "") == "target"
+                )
+                if not pp_cur and is_pass_snap:
+                    pp_cur = lineup_slot_player("QB")
+                if not is_pass_snap:
+                    pp_cur = str(draft.get("pass_player") or "")
+                if pp_cur and pp_cur not in ball_opts:
+                    ball_opts_p = [""] + [pp_cur] + [n for n in ball_opts if n]
+                else:
+                    ball_opts_p = list(ball_opts)
+                pp_idx = ball_opts_p.index(pp_cur) if pp_cur in ball_opts_p else 0
+                pass_player = st.selectbox(
+                    "Passer",
+                    ball_opts_p,
+                    index=pp_idx,
+                    format_func=lambda n: n or "(none / not a pass)",
+                    key=f"ql_cf_passer_{gen}",
+                )
             else:
-                ball_opts_p = list(ball_opts)
-            pp_idx = ball_opts_p.index(pp_cur) if pp_cur in ball_opts_p else 0
-            pass_player = st.selectbox(
-                "Passer",
-                ball_opts_p,
-                index=pp_idx,
-                format_func=lambda n: n or "(none / not a pass)",
-                key=f"ql_cf_passer_{gen}",
-            )
+                pass_player = str(draft.get("pass_player") or "")
             st.caption("Defense optional — taggers usually own film")
 
             def _choice_opts(cur: str, options: list[str]) -> list[str]:
@@ -13742,7 +13763,7 @@ def _live_track_log_screen(
         st.success(" · ".join(warns))
 
     on_field = get_on_field()
-    if not on_field:
+    if BOOTH_TRACK_LINEUP and not on_field:
         st.caption("No lineup — open **Lineup** → Load starters.")
 
     half = int(st.session_state.get("lt_half") or 1)
@@ -14080,92 +14101,93 @@ def _live_track_field_screen(opponent: str, live_logs: pd.DataFrame) -> None:
             if _is_ol_slot(slot["id"]):
                 _render_formation_slot(slot, roster, slots, side)
 
-    with st.expander("On-field +/- · Skill stats · OL grade", expanded=False):
-        t_pm, t_touch, t_ol = st.tabs(["On-field +/-", "Skill stats", "OL grade"])
-        with t_pm:
-            board = player_plus_minus_table(live_logs, opponent, by_position=True)
-            if board.empty:
-                st.caption("No +/- yet — log plays with a lineup set.")
-            else:
-                # Skill-focused board; OL has its own tab
-                skill_board = board[~board["active_pos"].isin(OL_LOG_POSITIONS)].copy()
-                show = (skill_board if not skill_board.empty else board).rename(
-                    columns={
-                        "player": "Player",
-                        "active_pos": "At",
-                        "snaps": "Snaps",
-                        "plus_minus": "+/-",
-                        "net_yards": "Net yds",
-                        "good": "Good",
-                        "bad": "Bad",
-                    }
-                )
-                st.dataframe(show, hide_index=True, use_container_width=True, height=min(38 + 32 * len(show), 280))
-        with t_touch:
-            touches = player_skill_stats_table(live_logs, opponent)
-            if touches.empty:
-                st.caption(
-                    "No skill stats yet — set the QB in lineup, say “complete to luke for 10” "
-                    "or “luke carry for 10”, or pick Ball to / Passer on confirm."
-                )
-            else:
-                show_t = touches.rename(
-                    columns={
-                        "player": "Player",
-                        "cmp": "Cmp",
-                        "att": "Att",
-                        "pass_yds": "Pass",
-                        "pass_td": "P TD",
-                        "ints": "INT",
-                        "sacks": "Sk",
-                        "carries": "Rush",
-                        "rush_yds": "Ru Yds",
-                        "rush_td": "Ru TD",
-                        "targets": "Tgt",
-                        "receptions": "Rec",
-                        "rec_yds": "Rec Yds",
-                        "rec_td": "Rec TD",
-                        "touches": "Tch",
-                        "yards": "Yds",
-                        "tds": "TD",
-                        "avg_value": "Avg val",
-                        "total_value": "Total val",
-                    }
-                )
-                st.dataframe(show_t, hide_index=True, use_container_width=True, height=min(38 + 32 * len(show_t), 320))
-                st.caption(
-                    "Pass from on-field QB (or “Garrett to Luke”). Rush/Rec from ball-to phrases. "
-                    "Value ≈ live EPA proxy — for per-player formula work."
-                )
-        with t_ol:
-            ol_board = ol_grade_table(live_logs, opponent)
-            if ol_board.empty:
-                st.caption(
-                    "No OL grade yet — Load starters (with OL filled) so the line is logged on snaps."
-                )
-            else:
-                show_ol = ol_board.rename(
-                    columns={
-                        "player": "Player",
-                        "pos": "Pos",
-                        "snaps": "Snaps",
-                        "grade": "Grade",
-                        "avg": "Avg",
-                        "big_runs": "10+ runs",
-                        "sacks_tfl": "Sack/TFL",
-                        "tds": "TD",
-                    }
-                )
-                st.dataframe(
-                    show_ol,
-                    hide_index=True,
-                    use_container_width=True,
-                    height=min(38 + 32 * len(show_ol), 280),
-                )
-                st.caption(
-                    "Overall line grade: + for 5/10/20+ yard runs & TD · − for sack/TFL. "
-                    "Same grade applied to each OL on that snap."
-                )
+    if BOOTH_TRACK_LINEUP:
+        with st.expander("On-field +/- · Skill stats · OL grade", expanded=False):
+            t_pm, t_touch, t_ol = st.tabs(["On-field +/-", "Skill stats", "OL grade"])
+            with t_pm:
+                board = player_plus_minus_table(live_logs, opponent, by_position=True)
+                if board.empty:
+                    st.caption("No +/- yet — log plays with a lineup set.")
+                else:
+                    # Skill-focused board; OL has its own tab
+                    skill_board = board[~board["active_pos"].isin(OL_LOG_POSITIONS)].copy()
+                    show = (skill_board if not skill_board.empty else board).rename(
+                        columns={
+                            "player": "Player",
+                            "active_pos": "At",
+                            "snaps": "Snaps",
+                            "plus_minus": "+/-",
+                            "net_yards": "Net yds",
+                            "good": "Good",
+                            "bad": "Bad",
+                        }
+                    )
+                    st.dataframe(show, hide_index=True, use_container_width=True, height=min(38 + 32 * len(show), 280))
+            with t_touch:
+                touches = player_skill_stats_table(live_logs, opponent)
+                if touches.empty:
+                    st.caption(
+                        "No skill stats yet — set the QB in lineup, say “complete to luke for 10” "
+                        "or “luke carry for 10”, or pick Ball to / Passer on confirm."
+                    )
+                else:
+                    show_t = touches.rename(
+                        columns={
+                            "player": "Player",
+                            "cmp": "Cmp",
+                            "att": "Att",
+                            "pass_yds": "Pass",
+                            "pass_td": "P TD",
+                            "ints": "INT",
+                            "sacks": "Sk",
+                            "carries": "Rush",
+                            "rush_yds": "Ru Yds",
+                            "rush_td": "Ru TD",
+                            "targets": "Tgt",
+                            "receptions": "Rec",
+                            "rec_yds": "Rec Yds",
+                            "rec_td": "Rec TD",
+                            "touches": "Tch",
+                            "yards": "Yds",
+                            "tds": "TD",
+                            "avg_value": "Avg val",
+                            "total_value": "Total val",
+                        }
+                    )
+                    st.dataframe(show_t, hide_index=True, use_container_width=True, height=min(38 + 32 * len(show_t), 320))
+                    st.caption(
+                        "Pass from on-field QB (or “Garrett to Luke”). Rush/Rec from ball-to phrases. "
+                        "Value ≈ live EPA proxy — for per-player formula work."
+                    )
+            with t_ol:
+                ol_board = ol_grade_table(live_logs, opponent)
+                if ol_board.empty:
+                    st.caption(
+                        "No OL grade yet — Load starters (with OL filled) so the line is logged on snaps."
+                    )
+                else:
+                    show_ol = ol_board.rename(
+                        columns={
+                            "player": "Player",
+                            "pos": "Pos",
+                            "snaps": "Snaps",
+                            "grade": "Grade",
+                            "avg": "Avg",
+                            "big_runs": "10+ runs",
+                            "sacks_tfl": "Sack/TFL",
+                            "tds": "TD",
+                        }
+                    )
+                    st.dataframe(
+                        show_ol,
+                        hide_index=True,
+                        use_container_width=True,
+                        height=min(38 + 32 * len(show_ol), 280),
+                    )
+                    st.caption(
+                        "Overall line grade: + for 5/10/20+ yard runs & TD · − for sack/TFL. "
+                        "Same grade applied to each OL on that snap."
+                    )
 
 
 def _ht_call_card(row: dict, kind: str) -> str:
