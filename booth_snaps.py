@@ -1,10 +1,10 @@
 """
 Shared booth snap pointer: Drive # + Play # for parallel tagging.
 
-Main advances the pointer after each LOG (and resets on Start drive).
-Taggers follow that pointer (or jump locally to catch up) and upsert
-film/call fields onto the same drive_id + play_n row — no waiting for
-Main to create the row first.
+Main owns booth_snap.json (advances after each LOG; resets on Start drive).
+Taggers keep their own play index, sync only when a new drive opens, and
+upsert film fields onto the same drive_id + play_n row so packs merge when
+both sides have tagged that play — neither waits on the other's pace.
 """
 
 from __future__ import annotations

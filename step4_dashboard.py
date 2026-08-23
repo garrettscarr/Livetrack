@@ -4135,6 +4135,17 @@ def delete_live_log_at(index: int) -> bool:
 
 def delete_last_live_log(opponent: str | None = None) -> bool:
     """Remove the most recent play (optionally limited to tonight's opponent)."""
+    return delete_last_live_log_info(opponent)[0]
+
+
+def delete_last_live_log_info(
+    opponent: str | None = None,
+) -> tuple[bool, int | None, int | None]:
+    """
+    Remove the most recent play for opponent.
+    Returns (ok, drive_id, play_n) of the deleted row when known.
+    """
+    meta: dict = {"drive_id": None, "play_n": None}
 
     def _drop_last(existing: pd.DataFrame):
         if opponent and "opponent" in existing.columns:
@@ -4145,9 +4156,21 @@ def delete_last_live_log(opponent: str | None = None) -> bool:
             drop_idx = int(hits[-1])
         else:
             drop_idx = int(existing.index[-1])
+        row = existing.loc[drop_idx]
+        try:
+            if row.get("drive_id") is not None and str(row.get("drive_id")).strip() != "":
+                meta["drive_id"] = int(float(row.get("drive_id")))
+        except (TypeError, ValueError):
+            meta["drive_id"] = None
+        try:
+            if row.get("play_n") is not None and str(row.get("play_n")).strip() != "":
+                meta["play_n"] = int(float(row.get("play_n")))
+        except (TypeError, ValueError):
+            meta["play_n"] = None
         return existing.drop(index=drop_idx).reset_index(drop=True)
 
-    return _mutate_live_log(_drop_last)
+    ok = _mutate_live_log(_drop_last)
+    return bool(ok), meta.get("drive_id"), meta.get("play_n")
 
 
 def _live_log_row_label(row: pd.Series, idx: int) -> str:
@@ -4184,7 +4207,22 @@ def _render_live_log_delete_controls(opponent: str, key_prefix: str = "lt") -> N
     st.markdown("#### Fix a mistake")
     u1, u2 = st.columns([1, 2])
     if u1.button("Undo last play", use_container_width=True, key=f"{key_prefix}_undo_last"):
-        if delete_last_live_log(opponent):
+        ok, did, pn = delete_last_live_log_info(opponent)
+        if ok:
+            # Rewind shared pointer so Main/taggers land on the open slot again
+            if did is not None and pn is not None:
+                try:
+                    from booth_snaps import set_booth_snap_play
+
+                    half = int(st.session_state.get("lt_half") or 1)
+                    set_booth_snap_play(
+                        int(did),
+                        max(1, int(pn)),
+                        opponent=opponent,
+                        half=half,
+                    )
+                except Exception:
+                    pass
             st.success("Deleted last play.")
             st.rerun()
         else:
@@ -7396,7 +7434,8 @@ def _render_shared_snap_bar(
 ) -> tuple[int | None, int]:
     """
     Shared Drive # · Play # bar.
-    minimal=True (taggers): follow live only + optional catch-up.
+    minimal=True (taggers): independent play index — only join Main on a new drive.
+    Full/Main: can follow or set the shared booth_snap pointer.
     """
     from booth_snaps import (
         load_booth_snap,
@@ -7416,10 +7455,38 @@ def _render_shared_snap_bar(
         did = shared.get("drive_id")
 
     shared_pn = int(shared.get("play_n") or 1)
-    follow = st.session_state.get(f"{key_prefix}_follow", True)
-    if follow or f"{key_prefix}_view_drive" not in st.session_state:
-        st.session_state[f"{key_prefix}_view_drive"] = did
-        st.session_state[f"{key_prefix}_view_play"] = shared_pn
+    tagger_mode = bool(minimal and not can_control)
+    bound_key = f"{key_prefix}_bound_drive"
+    follow = st.session_state.get(f"{key_prefix}_follow", not tagger_mode)
+
+    if tagger_mode:
+        # Independent pace: only reset when Main opens a different drive
+        prev_did = st.session_state.get(bound_key)
+        if did is None:
+            st.session_state.pop(bound_key, None)
+            st.session_state[f"{key_prefix}_view_drive"] = None
+            if f"{key_prefix}_view_play" not in st.session_state:
+                st.session_state[f"{key_prefix}_view_play"] = 1
+        elif prev_did != did:
+            st.session_state[bound_key] = int(did)
+            st.session_state[f"{key_prefix}_view_drive"] = int(did)
+            # Join Main's open slot on a new drive; pace independently after that
+            st.session_state[f"{key_prefix}_view_play"] = int(shared_pn)
+            st.session_state[f"{key_prefix}_follow"] = False
+            st.session_state.pop("tagger_done_play", None)
+        elif f"{key_prefix}_view_play" not in st.session_state:
+            st.session_state[f"{key_prefix}_view_drive"] = int(did)
+            st.session_state[f"{key_prefix}_view_play"] = int(shared_pn)
+            st.session_state[f"{key_prefix}_follow"] = False
+        # Optional: user hit "Sync to Main" → follow for one sync then stay independent
+        if follow:
+            st.session_state[f"{key_prefix}_view_drive"] = did
+            st.session_state[f"{key_prefix}_view_play"] = shared_pn
+            st.session_state[f"{key_prefix}_follow"] = False
+    else:
+        if follow or f"{key_prefix}_view_drive" not in st.session_state:
+            st.session_state[f"{key_prefix}_view_drive"] = did
+            st.session_state[f"{key_prefix}_view_play"] = shared_pn
 
     view_did = st.session_state.get(f"{key_prefix}_view_drive")
     view_pn = int(st.session_state.get(f"{key_prefix}_view_play") or shared_pn)
@@ -7432,6 +7499,23 @@ def _render_shared_snap_bar(
     if minimal:
         if did is None:
             st.caption("Waiting for Main to start a drive…")
+        elif tagger_mode:
+            lag = int(view_pn) - int(shared_pn)
+            if lag == 0:
+                pace = "same play as Main"
+            elif lag < 0:
+                pace = f"Main on #{shared_pn} · you behind"
+            else:
+                pace = f"Main on #{shared_pn} · you ahead"
+            st.caption(f"Your play · {pace} · merges by Drive+Play #")
+            if int(view_pn) != int(shared_pn):
+                if st.button(
+                    f"Jump to Main · Play #{shared_pn}",
+                    use_container_width=True,
+                    key=f"{key_prefix}_sync_main",
+                ):
+                    st.session_state[f"{key_prefix}_follow"] = True
+                    st.rerun()
         elif follow:
             st.caption("Following live")
         else:
@@ -7601,13 +7685,97 @@ def _tagger_status_bits(row: dict, focuses: list[str], *, need_end_yard: bool) -
 
 
 def _tagger_advance_after_save(play_n: int, key_prefix: str = "tag") -> None:
-    """Mark pack done; stay on this play until Main advances the shared pointer."""
-    st.session_state[f"{key_prefix}_follow"] = True
-    st.session_state["tagger_done_play"] = int(play_n)
-    st.session_state["tagger_flash"] = (
-        f"✓ Play #{int(play_n)} complete — waiting for Main"
-    )
+    """Pack done — advance THIS tagger only; Main keeps its own play pointer."""
+    nxt = int(play_n) + 1
+    st.session_state[f"{key_prefix}_follow"] = False
+    st.session_state[f"{key_prefix}_view_play"] = nxt
+    st.session_state.pop("tagger_done_play", None)
+    st.session_state["tagger_flash"] = f"✓ Play #{int(play_n)} saved — on Play #{nxt}"
     st.session_state["tagger_flash_strong"] = True
+
+
+def _tagger_focus_clear_updates(focuses: list[str], *, need_end_yard: bool) -> dict:
+    """Blank the fields this tagger owns (does not wipe Main call/result)."""
+    from booth_stations import FOCUS_SNAPS
+
+    updates: dict = {}
+    for fid in focuses:
+        if fid == FOCUS_SNAPS:
+            continue
+        col = _tagger_focus_to_col(fid)
+        if col:
+            updates[col] = ""
+    if need_end_yard:
+        updates["end_ball_yard"] = ""
+    updates["film_pending"] = "Yes"
+    return updates
+
+
+def _tagger_row_has_tags(row: dict, focuses: list[str], *, need_end_yard: bool) -> bool:
+    if any(_tagger_field_filled(row, f) for f in focuses if f != "snaps"):
+        return True
+    if need_end_yard:
+        end = row.get("end_ball_yard")
+        if end is not None and str(end).strip() != "":
+            return True
+    return False
+
+
+def _tagger_undo_tags(
+    *,
+    opponent: str,
+    half: int,
+    drive_id: int,
+    play_n: int,
+    focuses: list[str],
+    key_prefix: str = "tag",
+) -> None:
+    """
+    Undo this tagger's last mistake:
+    - If current play has tags → clear them and stay.
+    - Else if play > 1 → step back one play and clear that play's tags.
+    Never deletes Main's LOG fields or advances/rewinds the shared pointer.
+    """
+    from booth_stations import FOCUS_COVERAGE, FOCUS_FRONT
+    from booth_snaps import find_snap_index
+    from mesh_engine import load_live_log
+
+    need_end = FOCUS_FRONT in focuses and FOCUS_COVERAGE in focuses
+    target_pn = int(play_n)
+    logs = load_live_log()
+    idx = find_snap_index(logs, int(drive_id), target_pn)
+    row = {}
+    if idx is not None and logs is not None and not logs.empty:
+        row = logs.reset_index(drop=True).loc[idx].to_dict()
+
+    if not _tagger_row_has_tags(row, focuses, need_end_yard=need_end) and target_pn > 1:
+        target_pn = target_pn - 1
+        idx = find_snap_index(logs, int(drive_id), target_pn)
+        row = {}
+        if idx is not None and logs is not None and not logs.empty:
+            row = logs.reset_index(drop=True).loc[idx].to_dict()
+
+    if idx is None or not _tagger_row_has_tags(row, focuses, need_end_yard=need_end):
+        st.session_state["tagger_flash"] = "Nothing to undo"
+        st.session_state[f"{key_prefix}_view_play"] = target_pn
+        st.rerun()
+        return
+
+    # Force-clear (upsert merge intentionally ignores blanks to protect parallel tags)
+    clear = _tagger_focus_clear_updates(focuses, need_end_yard=need_end)
+    ok = update_live_log_at(int(idx), clear)
+    st.session_state.pop(f"tg_draft_front_{drive_id}_{target_pn}", None)
+    st.session_state.pop(f"tg_draft_cov_{drive_id}_{target_pn}", None)
+    st.session_state.pop(f"tg_edit_look_{drive_id}_{target_pn}", None)
+    st.session_state.pop("tagger_done_play", None)
+    st.session_state[f"{key_prefix}_follow"] = False
+    st.session_state[f"{key_prefix}_view_play"] = int(target_pn)
+    if ok:
+        st.session_state["tagger_flash"] = f"Undid tags on Play #{int(target_pn)}"
+        st.session_state["tagger_flash_strong"] = True
+    else:
+        st.session_state["tagger_flash"] = "Undo failed"
+    st.rerun()
 
 
 def _tagger_pulse_done() -> None:
@@ -7743,7 +7911,7 @@ def _render_current_snap_tagger(
     drive_id: int | None,
     play_n: int,
 ) -> None:
-    """Tagger editor: tap chip = save; Same as last; wait for Main after pack done."""
+    """Tagger editor: tap chip = save; Same as last; advances on own pace."""
     from booth_stations import (
         FOCUS_BLITZ,
         FOCUS_COVERAGE,
@@ -7777,6 +7945,23 @@ def _render_current_snap_tagger(
     title = " · ".join(FOCUS_LABELS.get(f, f) for f in focuses) or focus_summary(focuses)
     st.markdown(f'<p class="live-title">{title}</p>', unsafe_allow_html=True)
 
+    undo_col, _ = st.columns([1, 2])
+    with undo_col:
+        if st.button(
+            "Undo tags",
+            use_container_width=True,
+            key=f"tg_undo_{drive_id}_{play_n}",
+            help="Clear your tags on this play (or the previous play if this one is empty).",
+        ):
+            _tagger_undo_tags(
+                opponent=opponent,
+                half=half,
+                drive_id=int(drive_id),
+                play_n=int(play_n),
+                focuses=focuses,
+                key_prefix="tag",
+            )
+
     # Start LOS from Main (once logged / stubbed)
     start_ball = row.get("ball_yard")
     try:
@@ -7793,7 +7978,7 @@ def _render_current_snap_tagger(
             unsafe_allow_html=True,
         )
     else:
-        st.caption("Start yard — waiting for Main")
+        st.caption("Start yard — waiting for Main (optional; you can still tag ahead)")
 
     status = _tagger_status_bits(row, focuses, need_end_yard=need_end_yard)
     if status:
@@ -7812,18 +7997,6 @@ def _render_current_snap_tagger(
             _tagger_pulse_done()
         else:
             st.caption(str(flash))
-
-    if st.session_state.get("tagger_done_play") == int(play_n) and _tagger_pack_complete(
-        row, focuses
-    ):
-        # Layout 4 — soft lock while waiting for Main
-        st.markdown(
-            f'<div class="tg-wait-lock"><h3>Play #{int(play_n)} done</h3>'
-            f"<p>Waiting for Main…</p>"
-            f"<p style='margin:0;opacity:0.75'>{status}</p></div>",
-            unsafe_allow_html=True,
-        )
-        return
 
     ensure_default_film_tags()
     full = logs if logs is not None and not logs.empty else pd.DataFrame()
@@ -8551,10 +8724,6 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             view_did, view_pn = _render_shared_snap_bar(
                 opponent, can_control=False, key_prefix="tag", minimal=True
             )
-            # Clear done banner once Main advances past this play
-            done_pn = st.session_state.get("tagger_done_play")
-            if done_pn is not None and int(view_pn) != int(done_pn):
-                st.session_state.pop("tagger_done_play", None)
             _render_current_snap_tagger(
                 opponent,
                 offense_df,
