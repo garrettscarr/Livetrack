@@ -215,12 +215,31 @@ def inject_styles() -> None:
         h1, h2, h3, h4, .stMarkdown {
             color: #14201a !important;
         }
-        [data-testid="stMarkdownContainer"] p,
+        /* Exclude .mb-board — dark green situation board needs light text */
+        [data-testid="stMarkdownContainer"] p:not(.mb-board-sit):not(.mb-board-sub),
         [data-testid="stMarkdownContainer"] li,
         [data-testid="stWidgetLabel"] p,
         [data-testid="stWidgetLabel"],
         label[data-testid="stWidgetLabel"] {
             color: #14201a !important;
+        }
+        [data-testid="stMarkdownContainer"] .mb-board,
+        [data-testid="stMarkdownContainer"] .mb-board p,
+        [data-testid="stMarkdownContainer"] .mb-board .mb-board-label {
+            color: #F2F7F4 !important;
+            -webkit-text-fill-color: #F2F7F4 !important;
+        }
+        [data-testid="stMarkdownContainer"] .mb-board .mb-board-label {
+            color: #95D5B2 !important;
+            -webkit-text-fill-color: #95D5B2 !important;
+        }
+        [data-testid="stMarkdownContainer"] .mb-board p.mb-board-sit {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+        [data-testid="stMarkdownContainer"] .mb-board p.mb-board-sub {
+            color: #C5D5CC !important;
+            -webkit-text-fill-color: #C5D5CC !important;
         }
         div[data-testid="stMetric"] {
             background: #F4F7F5;
@@ -854,6 +873,31 @@ def inject_styles() -> None:
         .stTabs [aria-selected="true"] * {
             color: #FFFFFF !important;
             -webkit-text-fill-color: #FFFFFF !important;
+        }
+        /* Dark situation board — light text (overrides markdown p dark) */
+        .mb-board,
+        .mb-board *,
+        [data-testid="stMarkdownContainer"] .mb-board,
+        [data-testid="stMarkdownContainer"] .mb-board * {
+            color: #F2F7F4 !important;
+            -webkit-text-fill-color: #F2F7F4 !important;
+        }
+        .mb-board-label,
+        [data-testid="stMarkdownContainer"] .mb-board-label {
+            color: #95D5B2 !important;
+            -webkit-text-fill-color: #95D5B2 !important;
+        }
+        p.mb-board-sit,
+        .mb-board-sit,
+        [data-testid="stMarkdownContainer"] p.mb-board-sit {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+        p.mb-board-sub,
+        .mb-board-sub,
+        [data-testid="stMarkdownContainer"] p.mb-board-sub {
+            color: #C5D5CC !important;
+            -webkit-text-fill-color: #C5D5CC !important;
         }
         </style>
         """,
@@ -13031,19 +13075,27 @@ def _inject_main_booth_css() -> None:
 
         /* Situation board */
         .mb-board {
-            background: #0F2419;
+            background: #0F2419 !important;
             border: 1px solid #1B4332;
             border-radius: 12px;
             padding: 0.85rem 0.9rem 0.95rem;
             margin: 0 0 0.55rem 0;
-            color: #F2F7F4;
+            color: #F2F7F4 !important;
+        }
+        .mb-board,
+        .mb-board p,
+        .mb-board span,
+        .mb-board div {
+            color: #F2F7F4 !important;
+            -webkit-text-fill-color: #F2F7F4 !important;
         }
         .mb-board-label {
             font-size: 0.68rem;
             font-weight: 700;
             letter-spacing: 0.14em;
             text-transform: uppercase;
-            color: #95D5B2;
+            color: #95D5B2 !important;
+            -webkit-text-fill-color: #95D5B2 !important;
             margin: 0 0 0.35rem 0;
         }
         .mb-board-sit {
@@ -13053,13 +13105,30 @@ def _inject_main_booth_css() -> None:
             letter-spacing: -0.02em;
             line-height: 1.2;
             margin: 0;
-            color: #FFFFFF;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
         }
         .mb-board-sub {
             margin: 0.35rem 0 0 0;
             font-size: 0.88rem;
-            color: #B7C9BE;
+            color: #C5D5CC !important;
+            -webkit-text-fill-color: #C5D5CC !important;
             font-weight: 500;
+        }
+        /* Beat stMarkdownContainer p { dark } when board is embedded in markdown */
+        [data-testid="stMarkdownContainer"] .mb-board p.mb-board-sit,
+        [data-testid="stMarkdownContainer"] p.mb-board-sit {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+        [data-testid="stMarkdownContainer"] .mb-board p.mb-board-sub,
+        [data-testid="stMarkdownContainer"] p.mb-board-sub {
+            color: #C5D5CC !important;
+            -webkit-text-fill-color: #C5D5CC !important;
+        }
+        [data-testid="stMarkdownContainer"] .mb-board .mb-board-label {
+            color: #95D5B2 !important;
+            -webkit-text-fill-color: #95D5B2 !important;
         }
 
         /* Drive chip */
@@ -13214,6 +13283,31 @@ def _inject_main_booth_css() -> None:
             color: #FFFFFF !important;
             -webkit-text-fill-color: #FFFFFF !important;
         }
+        /* Situation board on dark green — light text wins over markdown p dark */
+        .mb-board,
+        .mb-board *,
+        [data-testid="stMarkdownContainer"] .mb-board,
+        [data-testid="stMarkdownContainer"] .mb-board * {
+            color: #F2F7F4 !important;
+            -webkit-text-fill-color: #F2F7F4 !important;
+        }
+        .mb-board-label,
+        [data-testid="stMarkdownContainer"] .mb-board-label {
+            color: #95D5B2 !important;
+            -webkit-text-fill-color: #95D5B2 !important;
+        }
+        p.mb-board-sit,
+        .mb-board-sit,
+        [data-testid="stMarkdownContainer"] p.mb-board-sit {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+        p.mb-board-sub,
+        .mb-board-sub,
+        [data-testid="stMarkdownContainer"] p.mb-board-sub {
+            color: #C5D5CC !important;
+            -webkit-text-fill-color: #C5D5CC !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -13282,10 +13376,10 @@ def _render_main_dual_rail(
 
     st.markdown(
         f"""
-        <div class="mb-board">
-          <div class="mb-board-label">On the field</div>
-          <p class="mb-board-sit">{sit}</p>
-          <p class="mb-board-sub">{spot} · {zone_lbl} · to-go {distance_yards}</p>
+        <div class="mb-board" style="color:#F2F7F4 !important;-webkit-text-fill-color:#F2F7F4 !important;">
+          <div class="mb-board-label" style="color:#95D5B2 !important;-webkit-text-fill-color:#95D5B2 !important;">On the field</div>
+          <p class="mb-board-sit" style="color:#FFFFFF !important;-webkit-text-fill-color:#FFFFFF !important;">{sit}</p>
+          <p class="mb-board-sub" style="color:#C5D5CC !important;-webkit-text-fill-color:#C5D5CC !important;">{spot} · {zone_lbl} · to-go {distance_yards}</p>
         </div>
         """,
         unsafe_allow_html=True,
