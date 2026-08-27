@@ -754,6 +754,40 @@ def inject_styles() -> None:
         .ht-player small { color: #5c6b62 !important; }
         .ht-player .pm-up { color: #1B4332 !important; font-weight: 800; }
         .ht-player .pm-down { color: #dc2626 !important; font-weight: 800; }
+        /* Coach halftime — iPad / locker room, one scroll */
+        .ht-coach-wrap { margin: 0.5rem 0 1.25rem 0; max-width: 920px; }
+        .ht-coach-script {
+            background: #1B4332;
+            color: #F4F7F5 !important;
+            border-radius: 14px;
+            padding: 1rem 1.15rem 0.85rem 1.15rem;
+            margin: 0.75rem 0 1.1rem 0;
+        }
+        .ht-coach-script .ht-sec {
+            color: #A7F3D0 !important;
+            margin: 0 0 0.55rem 0;
+            font-size: 0.82rem;
+        }
+        .ht-coach-script ol {
+            margin: 0;
+            padding-left: 1.25rem;
+            font-size: 1.12rem;
+            line-height: 1.45;
+            font-weight: 700;
+            color: #FFFFFF !important;
+        }
+        .ht-coach-script li { margin-bottom: 0.35rem; color: #FFFFFF !important; }
+        .ht-coach-block {
+            background: #FFFFFF;
+            border: 1px solid #D8E2DC;
+            border-radius: 12px;
+            padding: 0.85rem 1rem;
+            margin-bottom: 0.85rem;
+        }
+        .ht-coach-block .ht-col-title { font-size: 1.15rem; margin-bottom: 0.55rem; }
+        .ht-coach-wrap .ht-card .call { font-size: 1.2rem; }
+        .ht-coach-wrap .ht-chip { font-size: 0.95rem; padding: 0.35rem 0.75rem; }
+        .ht-coach-wrap .ht-stat .n { font-size: 2rem; }
         /* Keep expanders / plotly readable (no white-on-white) */
         [data-testid="stExpander"] {
             background-color: #F4F7F5 !important;
@@ -5407,6 +5441,54 @@ def player_plus_minus_table(
     ).reset_index(drop=True)
 
 
+def player_board_for_halftime(
+    live_logs: pd.DataFrame,
+    opponent: str | None = None,
+) -> pd.DataFrame:
+    """+/- from lineup when tracked; else skill tags (ball/pass player)."""
+    board = player_plus_minus_table(live_logs, opponent, by_position=True)
+    if not board.empty:
+        return board
+    touches = player_skill_stats_table(live_logs, opponent)
+    if touches.empty:
+        return board
+    rows: list[dict] = []
+    for _, r in touches.iterrows():
+        name = str(r.get("player") or "").strip()
+        if not name:
+            continue
+        snaps = max(
+            int(r.get("touches") or 0),
+            int(r.get("att") or 0),
+            int(r.get("carries") or 0),
+            int(r.get("targets") or 0),
+        )
+        if snaps < 1:
+            continue
+        pos = "QB" if int(r.get("att") or 0) > 0 else "skill"
+        if int(r.get("carries") or 0) > int(r.get("targets") or 0):
+            pos = "RB"
+        elif int(r.get("targets") or 0) > 0:
+            pos = "WR"
+        rows.append(
+            {
+                "player": name,
+                "active_pos": pos,
+                "snaps": snaps,
+                "plus_minus": round(float(r.get("total_value") or 0), 2),
+                "net_yards": round(float(r.get("yards") or 0), 0),
+                "good": int(r.get("tds") or 0),
+                "bad": 0,
+            }
+        )
+    if not rows:
+        return board
+    out = pd.DataFrame(rows)
+    return out.sort_values(
+        ["plus_minus", "snaps"], ascending=[False, False]
+    ).reset_index(drop=True)
+
+
 def lineup_slot_player(slot_id: str = "QB", slots: dict[str, str] | None = None) -> str:
     """Player currently in a formation slot (default QB)."""
     try:
@@ -8950,36 +9032,40 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             st.session_state.lt_main_sheet = "Log"
             sheet_now = "Log"
         setup_open = BOOTH_TRACK_LINEUP and sheet_now == "Lineup"
-        with st.expander(
-            f"Game setup · vs {cur or default_opp} · H{half_now}"
-            + (f" · {sheet_now}" if sheet_now != "Log" and BOOTH_TRACK_LINEUP else ""),
-            expanded=setup_open,
-        ):
-            opponent = st.selectbox(
-                "Tonight's opponent",
-                opp_choices,
-                key="lt_page_opponent",
-            )
-            st.radio("Half", [1, 2], horizontal=True, key="lt_half")
-            if BOOTH_TRACK_LINEUP:
-                sheet = st.radio(
-                    "Sheet",
-                    ["Log", "Lineup"],
-                    horizontal=True,
-                    key="lt_main_sheet",
+        if booth_station == "full":
+            st.session_state.lt_main_sheet = "Log"
+            sheet = "Log"
+        else:
+            with st.expander(
+                f"Game setup · vs {cur or default_opp} · H{half_now}"
+                + (f" · {sheet_now}" if sheet_now != "Log" and BOOTH_TRACK_LINEUP else ""),
+                expanded=setup_open,
+            ):
+                opponent = st.selectbox(
+                    "Tonight's opponent",
+                    opp_choices,
+                    key="lt_page_opponent",
                 )
-            else:
-                st.session_state.lt_main_sheet = "Log"
-                sheet = "Log"
-            if booth_station == "full":
-                st.markdown("---")
-                st.caption("Start new game")
-                _render_start_new_game_panel(season_opps)
+                st.radio("Half", [1, 2], horizontal=True, key="lt_half")
+                if BOOTH_TRACK_LINEUP:
+                    sheet = st.radio(
+                        "Sheet",
+                        ["Log", "Lineup"],
+                        horizontal=True,
+                        key="lt_main_sheet",
+                    )
+                else:
+                    st.session_state.lt_main_sheet = "Log"
+                    sheet = "Log"
         opponent = str(st.session_state.get("lt_page_opponent") or opponent)
-        sheet = str(st.session_state.get("lt_main_sheet") or "Log")
-        if not BOOTH_TRACK_LINEUP:
+        if booth_station == "full":
             sheet = "Log"
             st.session_state.lt_main_sheet = "Log"
+        else:
+            sheet = str(st.session_state.get("lt_main_sheet") or "Log")
+            if not BOOTH_TRACK_LINEUP:
+                sheet = "Log"
+                st.session_state.lt_main_sheet = "Log"
 
     live_logs = load_live_log()
     st.session_state.lt_unit = "Offense"
@@ -9054,6 +9140,29 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             drive_id=drive_id_bar,
             play_n=play_n_bar,
         )
+        try:
+            from mesh_engine import load_game_state
+
+            gstate = load_game_state()
+            same_opp = (
+                gstate.get("opponent")
+                and str(gstate.get("opponent")).strip().lower()
+                == str(opponent).strip().lower()
+            )
+            phase = gstate.get("phase") if same_opp else "1st"
+        except Exception:
+            phase = "1st"
+        with st.container():
+            st.markdown('<div class="mb-quick-row">', unsafe_allow_html=True)
+            _render_main_quick_controls(
+                str(opponent),
+                live_logs,
+                season_opps=season_opps,
+                pending_n=int(pending_n or 0),
+                phase=str(phase or "1st"),
+            )
+            st.markdown("</div>", unsafe_allow_html=True)
+        _render_main_play_drift_banner(str(opponent), live_logs)
 
     if sheet == "Lineup" and booth_station == "full" and BOOTH_TRACK_LINEUP:
         # Compact drive bar still available on Lineup sheet
@@ -9105,47 +9214,24 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             _live_track_fill_film(opponent, offense_df, live_logs, focuses=focuses)
         return
 
-    # Log vs Fill Film — only Full can switch; snap taggers stay on Log
+    # Log vs Fill Film — app bar FILM button is primary; radio only when on Film
     if "lt_play_sheet" not in st.session_state:
         st.session_state.lt_play_sheet = "Log"
     if tagger:
         st.session_state.lt_play_sheet = "Log"
-
-    mode_opts = ["Log"]
-    if booth_station == "full" and (
-        pending_n or st.session_state.get("lt_play_sheet") == "Fill Film"
-    ):
-        mode_opts.append(f"Film ({pending_n})" if pending_n else "Film")
-
-    label_to_mode = {"Log": "Log"}
-    for o in mode_opts:
-        if o.startswith("Film"):
-            label_to_mode[o] = "Fill Film"
-    cur_mode = st.session_state.get("lt_play_sheet") or "Log"
-    default_label = next(
-        (k for k, v in label_to_mode.items() if v == cur_mode),
-        mode_opts[0],
-    )
-    # Film mode buried — keep Log hot path clean unless pending or already on Film
-    if booth_station == "full" and len(mode_opts) > 1:
-        if cur_mode == "Fill Film":
-            chosen = st.radio(
-                "Mode",
-                mode_opts,
-                index=mode_opts.index(default_label) if default_label in mode_opts else 0,
-                horizontal=True,
-                key="lt_play_sheet_label",
-                label_visibility="collapsed",
-            )
-            st.session_state.lt_play_sheet = label_to_mode.get(chosen, "Log")
-        else:
-            with st.expander(f"Film inbox ({pending_n})", expanded=False):
-                if st.button("Open Fill Film", key="lt_open_film", use_container_width=True):
-                    st.session_state.lt_play_sheet = "Fill Film"
-                    st.rerun()
-            st.session_state.lt_play_sheet = "Log"
-    else:
-        st.session_state.lt_play_sheet = "Log"
+    elif booth_station == "full" and st.session_state.get("lt_play_sheet") == "Fill Film":
+        film_label = f"Film ({pending_n})" if pending_n else "Film"
+        chosen = st.radio(
+            "Mode",
+            ["Log", film_label],
+            index=1,
+            horizontal=True,
+            key="lt_play_sheet_label",
+            label_visibility="collapsed",
+        )
+        st.session_state.lt_play_sheet = (
+            "Fill Film" if str(chosen).startswith("Film") else "Log"
+        )
 
     if st.session_state.get("lt_play_sheet") == "Fill Film" and booth_station == "full":
         _live_track_fill_film(opponent, offense_df, live_logs, focuses=None)
@@ -9238,7 +9324,8 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         _main_log_fragment()
 
     if booth_station == "full":
-        with st.expander("Halftime / end 1st half", expanded=False):
+        ht_open = bool(st.session_state.get("ht_auto_open", False))
+        with st.expander("Halftime / end 1st half", expanded=ht_open):
             _end_first_half_action(opponent, live_logs, key_prefix="lt")
         with st.expander("Drive repair (resume / reassign)", expanded=False):
             drive_choices = known_drive_ids(live_logs) or [1]
@@ -9249,7 +9336,8 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
                 st.success(f"Back on drive #{int(resume_pick)}.")
                 st.rerun()
     elif tagger and has_snaps_focus(focuses):
-        with st.expander("Halftime / end 1st half", expanded=False):
+        ht_open = bool(st.session_state.get("ht_auto_open", False))
+        with st.expander("Halftime / end 1st half", expanded=ht_open):
             _end_first_half_action(opponent, live_logs, key_prefix="lt")
 
 
@@ -12432,12 +12520,39 @@ def _ql_last_snap_dict() -> dict:
     }
 
 
+def _ql_strip_pass_from_call(play_call: str, pass_tag: str) -> str:
+    """Run base when only a compound play_call + pass_tag were stored (RPO follow-up Gas)."""
+    call = _ql_norm(play_call)
+    pt = _ql_norm(pass_tag)
+    if not call:
+        return ""
+    if not pt:
+        return call
+    cl, pl = call.lower(), pt.lower()
+    if cl == pl:
+        return ""
+    if cl.endswith(" " + pl):
+        return _ql_norm(call[: -(len(pt) + 1)])
+    if cl.endswith(pl) and len(call) > len(pt):
+        return _ql_norm(call[: -len(pt)].strip())
+    parts = call.split()
+    pt_parts = pt.split()
+    if len(parts) > len(pt_parts) and " ".join(parts[-len(pt_parts) :]).lower() == pl:
+        return " ".join(parts[: -len(pt_parts)])
+    return call
+
+
 def _ql_gas_base_label(snap: dict) -> str:
     form = compose_formation_label(
         str(snap.get("formation") or ""),
         str(snap.get("variant") or ""),
     )
     run = _ql_norm(snap.get("run_tag") or "")
+    if not run:
+        run = _ql_strip_pass_from_call(
+            str(snap.get("play_call") or ""),
+            str(snap.get("pass_tag") or ""),
+        )
     call = _ql_norm(snap.get("play_call") or "")
     if form and run:
         return f"{form} · {run}"
@@ -12473,13 +12588,16 @@ def _ql_open_gas_draft(*, booth_favs: dict | None = None) -> dict | None:
     if not (snap.get("formation") or snap.get("run_tag") or snap.get("play_call")):
         return None
     run_tag = snap.get("run_tag") or ""
-    # If last call was only a compound play_call, keep it as run base when no run_tag
-    if not run_tag and snap.get("play_call") and not snap.get("pass_tag"):
-        run_tag = snap.get("play_call") or ""
-    elif not run_tag and snap.get("play_call") and snap.get("pass_tag"):
-        # Strip prior pass from display call if possible
-        run_tag = snap.get("run_tag") or ""
+    if not run_tag and snap.get("play_call"):
+        if snap.get("pass_tag"):
+            run_tag = _ql_strip_pass_from_call(
+                str(snap.get("play_call") or ""),
+                str(snap.get("pass_tag") or ""),
+            )
+        else:
+            run_tag = snap.get("play_call") or ""
     base = _ql_gas_base_label({**snap, "run_tag": run_tag})
+    prev_pass = _ql_norm(snap.get("pass_tag") or "")
     down = int(st.session_state.get("lt_down") or 1)
     dist = int(st.session_state.get("lt_dist_y") or 10)
     ball = int(st.session_state.get("lt_ball_yard") or 45)
@@ -12512,6 +12630,7 @@ def _ql_open_gas_draft(*, booth_favs: dict | None = None) -> dict | None:
         "has_outcome": False,
         "gas": True,
         "gas_base": base,
+        "gas_prev_pass": prev_pass,
     }
     return draft
 
@@ -12533,12 +12652,19 @@ def _render_gas_card(
 
     gen = int(st.session_state.get("ql_gas_gen") or 0)
     base = str(draft.get("gas_base") or _ql_gas_base_label(draft))
+    prev_pass = _ql_norm(draft.get("gas_prev_pass") or "")
     st.markdown("#### GAS · hurry-up")
     st.markdown(
         f'<div class="tg-look-collapsed">Same look · <b>{base}</b></div>',
         unsafe_allow_html=True,
     )
-    st.caption("Tap the pass tag to add (or Same call). Then set result / yards.")
+    if prev_pass:
+        st.caption(
+            f"Last snap had pass tag **{prev_pass}** — pick a new pass tag to add "
+            f"(e.g. {base.split('·')[-1].strip() if '·' in base else base} → + Bear)."
+        )
+    else:
+        st.caption("Tap the pass tag to add (or Same call). Then set result / yards.")
 
     pass_opts = _ql_gas_pass_options(booth_favs)
     cur_pass = _ql_norm(
@@ -12783,6 +12909,15 @@ def _render_phrase_confirm_card(
             )
     else:
         ball_player = str(draft.get("ball_player") or "")
+
+    pass_player = str(draft.get("pass_player") or "")
+    touch_role = str(draft.get("touch_role") or "")
+    if not BOOTH_TRACK_LINEUP:
+        ball_player, pass_player, touch_role = _render_confirm_ball_chips(draft, gen)
+        draft = dict(st.session_state.get("ql_confirm_draft") or draft)
+        if touch_role:
+            draft["touch_role"] = touch_role
+            st.session_state.ql_confirm_draft = draft
 
     # Full call editor — only mount widgets when opened (Streamlit always runs expanders)
     need_edit = bool(draft.get("play_is_new"))
@@ -13693,6 +13828,23 @@ def _inject_main_booth_css() -> None:
             color: #95D5B2;
             border-color: #40916C;
         }
+        .mb-quick-row {
+            margin: -0.2rem 0 0.55rem 0;
+            padding: 0.35rem 0.5rem 0.55rem 0.5rem;
+            background: #F4F7F5;
+            border: 1px solid #D8E2DC;
+            border-radius: 10px;
+        }
+        .mb-drift-banner {
+            background: #FFF8E7;
+            border: 1px solid #f59e0b;
+            border-radius: 10px;
+            padding: 0.55rem 0.75rem;
+            margin: 0 0 0.55rem 0;
+            color: #92400e !important;
+            font-size: 0.92rem;
+            font-weight: 600;
+        }
 
         /* Panels */
         .mb-panel {
@@ -13998,6 +14150,316 @@ def _inject_main_booth_css() -> None:
     )
 
 
+def _half2_mistag_indices(live_logs: pd.DataFrame, opponent: str) -> list[int]:
+    """Rows tagged half=2 for this opponent (HT report uses half=1 only)."""
+    if live_logs is None or live_logs.empty or "half" not in live_logs.columns:
+        return []
+    opp = opponent.strip().lower()
+    out: list[int] = []
+    for i in live_logs.index:
+        row = live_logs.loc[i]
+        if "opponent" in live_logs.columns:
+            if str(row.get("opponent") or "").strip().lower() != opp:
+                continue
+        if str(row.get("half") or "").strip() in {"2", "2.0"}:
+            out.append(int(i))
+    return out
+
+
+def _move_all_h2_to_h1(live_logs: pd.DataFrame, opponent: str) -> int:
+    moved = 0
+    for i in _half2_mistag_indices(live_logs, opponent):
+        if update_live_log_at(int(i), {"half": 1}):
+            moved += 1
+    return moved
+
+
+def _execute_end_first_half(opponent: str, live_logs: pd.DataFrame) -> None:
+    """Close 1st half and open coach halftime report."""
+    from mesh_engine import (
+        end_first_half,
+        filter_live_logs,
+        load_game_plan,
+    )
+
+    plan = load_game_plan(opponent)
+    half1 = filter_live_logs(live_logs, opponent=opponent, half=1)
+    board_logs = half1 if not half1.empty else filter_live_logs(live_logs, opponent=opponent)
+    board = player_board_for_halftime(board_logs, opponent)
+    result = end_first_half(opponent, live_logs, plan, player_board=board)
+    st.session_state.lt_half_pending = 2
+    st.session_state.ig_mode = "Halftime"
+    st.session_state.ht_coach_mode = True
+    st.session_state.ht_auto_open = True
+    st.session_state.ht_last_report = result["report"]
+    st.session_state.ht_last_md = result["markdown"]
+
+
+def _main_play_drift(opponent: str, live_logs: pd.DataFrame) -> dict | None:
+    """Detect when film/log rows exist ahead of Main's shared play pointer."""
+    try:
+        from booth_snaps import load_booth_snap, max_play_n_for_drive
+    except Exception:
+        return None
+    did = current_drive_id(opponent)
+    if did is None:
+        return None
+    snap = load_booth_snap()
+    main_pn = int(snap.get("play_n") or 1) if snap.get("drive_id") == int(did) else 1
+    max_n = max_play_n_for_drive(live_logs, int(did))
+    if max_n > main_pn:
+        return {
+            "drive_id": int(did),
+            "main_pn": main_pn,
+            "ahead_pn": max_n,
+            "kind": "ahead",
+        }
+    if max_n == main_pn and live_logs is not None and not live_logs.empty:
+        from booth_snaps import find_snap_index
+
+        idx = find_snap_index(live_logs, int(did), main_pn)
+        if idx is not None:
+            row = live_logs.loc[idx]
+            has_film = any(
+                str(row.get(c) or "").strip()
+                for c in ("def_front", "coverage", "blitz", "ball_player", "pass_player")
+            )
+            has_main = bool(str(row.get("formation") or "").strip()) or bool(
+                str(row.get("play_call") or "").strip()
+            )
+            if has_film and not has_main:
+                return {
+                    "drive_id": int(did),
+                    "main_pn": main_pn,
+                    "ahead_pn": main_pn,
+                    "kind": "film_waiting",
+                }
+    return None
+
+
+def _render_main_play_drift_banner(opponent: str, live_logs: pd.DataFrame) -> None:
+    drift = _main_play_drift(opponent, live_logs)
+    if not drift:
+        return
+    did = drift["drive_id"]
+    main_pn = drift["main_pn"]
+    ahead_pn = drift["ahead_pn"]
+    if drift["kind"] == "film_waiting":
+        msg = f"Play #{main_pn} has film tags waiting for Main to LOG."
+        jump_pn = main_pn
+    else:
+        msg = f"Film logged through Play #{ahead_pn} · Main pointer on #{main_pn}."
+        jump_pn = ahead_pn
+    st.markdown(f'<div class="mb-drift-banner">{msg}</div>', unsafe_allow_html=True)
+    if st.button(
+        f"Jump to Play #{jump_pn}",
+        type="primary",
+        use_container_width=True,
+        key=f"lt_drift_jump_{did}_{jump_pn}",
+    ):
+        try:
+            from booth_snaps import set_booth_snap_play
+
+            set_booth_snap_play(
+                int(did),
+                int(jump_pn),
+                opponent=opponent,
+                half=int(st.session_state.get("lt_half") or 1),
+            )
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Could not move pointer: {exc}")
+
+
+def _render_main_quick_controls(
+    opponent: str,
+    live_logs: pd.DataFrame,
+    *,
+    season_opps: list[str],
+    pending_n: int,
+    phase: str = "1st",
+) -> None:
+    """Sticky half / opponent / film / end-half row under the app bar."""
+    opp_choices = list(season_opps) if season_opps else []
+    cur = str(st.session_state.get("lt_page_opponent") or opponent or "").strip()
+    if cur and cur not in opp_choices:
+        opp_choices = [cur] + opp_choices
+    if not opp_choices:
+        opp_choices = ["Unknown"]
+
+    h2_idxs = _half2_mistag_indices(live_logs, opponent)
+    if h2_idxs and phase == "1st":
+        st.warning(
+            f"**{len(h2_idxs)}** play(s) tagged **2nd half** — HT report uses 1st half only."
+        )
+        if st.button(
+            f"Move all H2 → H1 ({len(h2_idxs)})",
+            key="lt_bar_fix_h2",
+            use_container_width=True,
+        ):
+            n = _move_all_h2_to_h1(live_logs, opponent)
+            st.success(f"Moved {n} play(s) to 1st half.")
+            st.rerun()
+
+    in_film = st.session_state.get("lt_play_sheet") == "Fill Film"
+    c1, c2, c3, c4, c5 = st.columns([1.0, 1.55, 0.95, 1.05, 0.85])
+    with c1:
+        st.radio("Half", [1, 2], horizontal=True, key="lt_half", label_visibility="collapsed")
+    with c2:
+        st.selectbox(
+            "Opponent",
+            opp_choices,
+            key="lt_page_opponent",
+            label_visibility="collapsed",
+        )
+    with c3:
+        if in_film:
+            if st.button("← LOG", use_container_width=True, key="lt_bar_back_log"):
+                st.session_state.lt_play_sheet = "Log"
+                st.rerun()
+        elif pending_n > 0:
+            if st.button(
+                f"FILM · {pending_n}",
+                type="primary",
+                use_container_width=True,
+                key="lt_bar_open_film",
+            ):
+                st.session_state.lt_play_sheet = "Fill Film"
+                st.rerun()
+        else:
+            st.button("FILM OK", disabled=True, use_container_width=True, key="lt_bar_film_ok")
+    with c4:
+        if phase in {"halftime", "2nd"}:
+            if st.button("HT report", use_container_width=True, key="lt_bar_ht_open"):
+                st.session_state.ht_auto_open = True
+                st.rerun()
+        else:
+            if st.button(
+                "End Half",
+                type="secondary",
+                use_container_width=True,
+                key="lt_bar_end_half",
+            ):
+                st.session_state.lt_end_half_request = True
+                st.rerun()
+    with c5:
+        with st.popover("Setup"):
+            _render_start_new_game_panel(season_opps)
+
+
+def _confirm_infer_pass_run(draft: dict, gen: int) -> bool | None:
+    """Pass/run for confirm-card ball chips."""
+    pick = st.session_state.get(f"ql_cf_pass_run_{gen}")
+    if pick == "pass":
+        return True
+    if pick == "run":
+        return False
+    row = {
+        "play_type": draft.get("play_type"),
+        "result": draft.get("result"),
+        "run_tag": draft.get("run_tag"),
+        "pass_tag": draft.get("pass_tag"),
+    }
+    return _tagger_infer_pass_run(row, 0, 0)
+
+
+def _render_confirm_ball_chips(draft: dict, gen: int) -> tuple[str, str, str]:
+    """QB / carrier chips on Main confirm when lineup tracking is off."""
+    if BOOTH_TRACK_LINEUP:
+        return (
+            str(draft.get("ball_player") or ""),
+            str(draft.get("pass_player") or ""),
+            str(draft.get("touch_role") or ""),
+        )
+
+    draft = dict(st.session_state.get("ql_confirm_draft") or draft)
+    ball_player = str(draft.get("ball_player") or "")
+    pass_player = str(draft.get("pass_player") or "")
+    touch_role = str(draft.get("touch_role") or "")
+
+    st.caption("Ball carrier · optional if tagger already set")
+    is_pass = _confirm_infer_pass_run(draft, gen)
+    if is_pass is None:
+        p1, p2 = st.columns(2)
+        with p1:
+            if st.button(
+                "Pass",
+                key=f"ql_cf_pr_pass_{gen}",
+                use_container_width=True,
+                type="primary",
+            ):
+                st.session_state[f"ql_cf_pass_run_{gen}"] = "pass"
+                st.rerun()
+        with p2:
+            if st.button(
+                "Run",
+                key=f"ql_cf_pr_run_{gen}",
+                use_container_width=True,
+                type="secondary",
+            ):
+                st.session_state[f"ql_cf_pass_run_{gen}"] = "run"
+                st.rerun()
+    elif is_pass:
+        qbs = _tagger_roster_names({"QB"})
+        targets = _tagger_roster_names({"WR", "TE", "RB"})
+        if qbs:
+            st.caption("QB")
+            cols = st.columns(min(4, len(qbs[:8])))
+            for i, name in enumerate(qbs[:8]):
+                with cols[i % len(cols)]:
+                    active = pass_player.lower() == name.lower()
+                    if st.button(
+                        name,
+                        key=f"ql_cf_pp_{gen}_{i}",
+                        use_container_width=True,
+                        type="primary" if active else "secondary",
+                    ):
+                        draft["pass_player"] = name
+                        st.session_state.ql_confirm_draft = draft
+                        st.rerun()
+        if targets:
+            st.caption("Target")
+            cols = st.columns(min(4, len(targets[:8])))
+            for i, name in enumerate(targets[:8]):
+                with cols[i % len(cols)]:
+                    active = ball_player.lower() == name.lower()
+                    if st.button(
+                        name,
+                        key=f"ql_cf_bp_{gen}_{i}",
+                        use_container_width=True,
+                        type="primary" if active else "secondary",
+                    ):
+                        draft["ball_player"] = name
+                        draft["touch_role"] = "target"
+                        st.session_state.ql_confirm_draft = draft
+                        st.rerun()
+    else:
+        carriers = _tagger_roster_names({"RB", "QB", "WR", "TE"})
+        if carriers:
+            st.caption("Carrier")
+            cols = st.columns(min(4, len(carriers[:8])))
+            for i, name in enumerate(carriers[:8]):
+                with cols[i % len(cols)]:
+                    active = ball_player.lower() == name.lower()
+                    if st.button(
+                        name,
+                        key=f"ql_cf_carry_{gen}_{i}",
+                        use_container_width=True,
+                        type="primary" if active else "secondary",
+                    ):
+                        draft["ball_player"] = name
+                        draft["touch_role"] = "carry"
+                        st.session_state.ql_confirm_draft = draft
+                        st.rerun()
+
+    draft = st.session_state.get("ql_confirm_draft") or draft
+    return (
+        str(draft.get("ball_player") or ""),
+        str(draft.get("pass_player") or ""),
+        str(draft.get("touch_role") or ""),
+    )
+
+
 def _render_main_app_bar(
     opponent: str,
     *,
@@ -14165,10 +14627,14 @@ def _render_main_dual_rail(
         st.caption(end_note)
 
     if pending_n:
-        st.markdown(
-            f'<span class="mb-pill warn">Film pending · {pending_n}</span>',
-            unsafe_allow_html=True,
-        )
+        if st.button(
+            f"Open Fill Film · {pending_n} pending",
+            type="primary",
+            use_container_width=True,
+            key="lt_rail_open_film",
+        ):
+            st.session_state.lt_play_sheet = "Fill Film"
+            st.rerun()
     else:
         st.markdown(
             '<span class="mb-pill ok">Film clear</span>',
@@ -15494,6 +15960,207 @@ def _ht_priority_actions(report: dict, limit: int = 6) -> tuple[list[str], list[
     return feature[:limit], shelve[:limit]
 
 
+def _ht_coach_script(report: dict) -> list[str]:
+    """Five talking points for a 5–10 min locker-room read."""
+    bullets: list[str] = []
+    feature, shelve = _ht_priority_actions(report, limit=2)
+    if feature:
+        bullets.append(f"Run: {', '.join(feature[:2])}")
+    if shelve:
+        bullets.append(f"Kill: {', '.join(shelve[:2])}")
+
+    cov = ((report.get("coverage_tendencies") or {}).get("offense") or {})
+    mix = cov.get("mix") or []
+    if mix:
+        top = mix[0]
+        cov_name = str(top.get("coverage") or "").strip()
+        pct = top.get("pct", 0)
+        if cov_name:
+            bullets.append(f"Expect Cover {cov_name} ({pct}%)")
+
+    blitz = ((report.get("blitz") or {}).get("offense") or {})
+    if not blitz.get("plays"):
+        blitz = (report.get("blitz") or {}).get("overall") or {}
+    by_dd = blitz.get("by_down_distance") or []
+    third = next(
+        (
+            r
+            for r in by_dd
+            if "3" in str(r.get("down_distance") or "")
+            and int(r.get("plays") or 0) >= 2
+        ),
+        None,
+    )
+    if third and int(third.get("blitz_pct") or 0) >= 20:
+        bullets.append(f"Blitz on 3rd: {third.get('blitz_pct')}%")
+    elif blitz.get("plays") and int(blitz.get("blitz_pct") or 0) >= 25:
+        bullets.append(f"Pressure rate: {blitz.get('blitz_pct')}%")
+
+    players = report.get("players") or []
+    ups = [p for p in players if p.get("band") == "up" and float(p.get("plus_minus") or 0) > 0]
+    if ups:
+        p0 = ups[0]
+        bullets.append(
+            f"Feed {p0.get('player')} ({float(p0.get('plus_minus', 0)):+.1f}, "
+            f"{p0.get('snaps', 0)} touches)"
+        )
+
+    standouts = report.get("standout_looks") or []
+    for row in standouts:
+        msg = str(row.get("message") or "").strip()
+        if msg and msg not in bullets:
+            bullets.append(msg[:100])
+            break
+
+    form_rows = (report.get("formations") or {}).get("offense") or []
+    form_up, _ = _ht_top_bottom(form_rows, 1)
+    if len(bullets) < 5 and form_up:
+        lab = str(form_up[0].get("label") or "")
+        if lab and not any(lab in b for b in bullets):
+            bullets.append(f"Formation working: {lab}")
+
+    return bullets[:5]
+
+
+def _render_halftime_coach_mode(
+    report: dict,
+    markdown: str,
+    *,
+    key_prefix: str = "ht",
+    live_logs: pd.DataFrame | None = None,
+) -> None:
+    """Single-scroll coach view — no tabs, hide empty sections."""
+    s = report.get("summary", {})
+    opp = report.get("opponent", "")
+    feature, shelve = _ht_priority_actions(report, limit=4)
+    form_rows = (report.get("formations") or {}).get("offense") or []
+    play_overall = ((report.get("play_calls") or {}).get("overall") or {}).get("offense") or []
+    players = report.get("players") or []
+    standouts = report.get("standout_looks") or []
+    cov = ((report.get("coverage_tendencies") or {}).get("offense") or {})
+    mix = cov.get("mix") or []
+    blitz = ((report.get("blitz") or {}).get("offense") or {})
+    if not blitz.get("plays"):
+        blitz = (report.get("blitz") or {}).get("overall") or {}
+
+    st.markdown('<div class="ht-coach-wrap">', unsafe_allow_html=True)
+    script = _ht_coach_script(report)
+    if script:
+        items = "".join(f"<li>{b}</li>" for b in script)
+        st.markdown(
+            f'<div class="ht-coach-script"><div class="ht-sec">2nd half script</div>'
+            f"<ol>{items}</ol></div>",
+            unsafe_allow_html=True,
+        )
+
+    xp_html = _ht_xp_strip_html(report)
+    if xp_html:
+        st.markdown(xp_html, unsafe_allow_html=True)
+
+    if feature or shelve:
+        st.markdown('<div class="ht-coach-block">', unsafe_allow_html=True)
+        st.markdown('<div class="ht-col-title">Feature / Shelve</div>', unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            if feature:
+                st.markdown(
+                    "".join(_ht_call_card({"call": c}, "lean") for c in feature),
+                    unsafe_allow_html=True,
+                )
+        with c2:
+            if shelve:
+                st.markdown(
+                    "".join(_ht_call_card({"call": c}, "kill") for c in shelve),
+                    unsafe_allow_html=True,
+                )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    look_bits: list[str] = []
+    if mix:
+        summary = " · ".join(
+            f"{r.get('coverage')} {r.get('pct')}%" for r in mix[:4]
+        )
+        look_bits.append(f"<div class='ht-blurb'>Coverage mix: {summary}</div>")
+    blurb = _ht_blitz_blurb(report)
+    if blurb:
+        look_bits.append(f"<div class='ht-blurb'>{blurb}</div>")
+    cov_dd = _ht_coverage_top_by_dim(cov.get("by_down_distance") or [], "down_distance", limit=4)
+    if cov_dd is not None and not cov_dd.empty:
+        top_row = cov_dd.iloc[0]
+        look_bits.append(
+            f"<div class='ht-blurb'>3rd/4th look: <b>{top_row.get('They play', '')}</b> "
+            f"({top_row.get('%', '')}%)</div>"
+        )
+    if look_bits:
+        st.markdown('<div class="ht-coach-block">', unsafe_allow_html=True)
+        st.markdown('<div class="ht-col-title">Their look</div>', unsafe_allow_html=True)
+        st.markdown("".join(look_bits), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    form_up, form_dn = _ht_top_bottom(form_rows, 3)
+    play_up, play_dn = _ht_top_bottom(play_overall, 3)
+    if form_up or form_dn or play_up or play_dn:
+        st.markdown('<div class="ht-coach-block">', unsafe_allow_html=True)
+        st.markdown('<div class="ht-col-title">Hot / cold calls</div>', unsafe_allow_html=True)
+        if form_up or form_dn:
+            st.markdown(
+                _ht_chips(form_up, "up") + _ht_chips(form_dn, "down"),
+                unsafe_allow_html=True,
+            )
+        if play_up or play_dn:
+            st.markdown(
+                _ht_chips(play_up, "up") + _ht_chips(play_dn, "down"),
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    ups = [p for p in players if p.get("band") == "up"]
+    downs = [p for p in players if p.get("band") == "down"]
+    if ups or downs:
+        st.markdown('<div class="ht-coach-block">', unsafe_allow_html=True)
+        st.markdown('<div class="ht-col-title">Players</div>', unsafe_allow_html=True)
+        if ups:
+            st.markdown(
+                "".join(
+                    f'<div class="ht-player"><span>{p.get("player")} '
+                    f'<small>@{p.get("active_pos", "")}</small></span>'
+                    f'<span class="pm-up">{float(p.get("plus_minus", 0)):+.1f}</span></div>'
+                    for p in ups
+                ),
+                unsafe_allow_html=True,
+            )
+        if downs:
+            st.markdown(
+                "".join(
+                    f'<div class="ht-player"><span>{p.get("player")} '
+                    f'<small>@{p.get("active_pos", "")}</small></span>'
+                    f'<span class="pm-down">{float(p.get("plus_minus", 0)):+.1f}</span></div>'
+                    for p in downs
+                ),
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    if standouts:
+        st.markdown('<div class="ht-coach-block">', unsafe_allow_html=True)
+        st.markdown('<div class="ht-col-title">Standout looks</div>', unsafe_allow_html=True)
+        for row in standouts[:3]:
+            st.markdown(f"- {row.get('message', '')}")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    with st.expander("Download / print full report", expanded=False):
+        st.download_button(
+            "Download printable (.md)",
+            data=markdown,
+            file_name=f"halftime_vs_{opp}.md",
+            mime="text/markdown",
+            use_container_width=True,
+            key=f"{key_prefix}_coach_dl",
+        )
+
+
 def _ht_tendency_dim_table(
     rows: list[dict],
     *,
@@ -15564,6 +16231,9 @@ def _render_halftime_report_body(
     live_logs: pd.DataFrame | None = None,
 ) -> None:
     """Locker-room first: plan + their looks, then our calls / situations / players."""
+    if st.session_state.pop("ht_auto_open", False):
+        st.session_state.ht_coach_mode = True
+
     s = report.get("summary", {})
     opp = report.get("opponent", "")
     blitz_pct = s.get("blitz_pct", 0)
@@ -15581,6 +16251,24 @@ def _render_halftime_report_body(
     )
     if s.get("scope") == "all_logged_tonight":
         st.caption("Using all tonight’s snaps (no half=1 tags).")
+
+    coach_default = bool(st.session_state.get("ht_coach_mode", True))
+    view = st.radio(
+        "View",
+        ["Coach", "Full boards"],
+        horizontal=True,
+        index=0 if coach_default else 1,
+        key=f"{key_prefix}_ht_view",
+    )
+    st.session_state.ht_coach_mode = view == "Coach"
+    if st.session_state.ht_coach_mode:
+        _render_halftime_coach_mode(
+            report,
+            markdown,
+            key_prefix=f"{key_prefix}_coach",
+            live_logs=live_logs,
+        )
+        return
 
     form_rows = (report.get("formations") or {}).get("offense") or []
     combo_rows = (report.get("formation_play") or {}).get("offense") or []
@@ -16013,9 +16701,7 @@ def _render_halftime_report_body(
 def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: str = "ht") -> None:
     """Primary control: close 1st half and generate the adjustment report."""
     from mesh_engine import (
-        end_first_half,
         filter_live_logs,
-        load_game_plan,
         load_game_state,
         save_game_state,
     )
@@ -16034,14 +16720,21 @@ def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: s
     if phase in {"halftime", "2nd"}:
         st.success(
             f"1st half closed vs {state.get('opponent')} at {state.get('halftime_at')}. "
-            f"Report is below — expand **Halftime / end 1st half** on Live Track, or regenerate."
+            f"Coach report is below — tap **HT report** in the bar or expand Halftime."
         )
     else:
+        scope_note = ""
+        if n_half1 == 0 and n_all > 0:
+            scope_note = " No half=1 tags — HT will use all tonight’s snaps."
         st.warning(
             f"1st-half log: **{n_half1}** plays tagged half=1"
             + (f" ({n_all} total tonight)" if n_all != n_half1 else "")
-            + ". End the half when you’re ready for adjustments."
+            + scope_note
+            + " End the half when you’re ready for adjustments."
         )
+
+    h2_idxs = _half2_mistag_indices(live_logs, opponent)
+    end_requested = bool(st.session_state.pop("lt_end_half_request", False))
 
     b1, b2 = st.columns([2, 1])
     gen = b1.button(
@@ -16049,7 +16742,7 @@ def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: s
         type="primary",
         use_container_width=True,
         key=f"{key_prefix}_btn_end_first_half",
-    )
+    ) or end_requested
     if b2.button("Reset to 1st half", use_container_width=True, key=f"{key_prefix}_btn_reset_first_half"):
         save_game_state(
             {"opponent": opponent, "phase": "1st", "halftime_at": None, "report_path": None}
@@ -16060,22 +16753,52 @@ def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: s
         st.session_state.ig_mode = "1st Half"
         st.rerun()
 
-    if gen:
-        plan = load_game_plan(opponent)
-        board_logs = half1 if not half1.empty else filter_live_logs(live_logs, opponent=opponent)
-        board = player_plus_minus_table(board_logs, opponent, by_position=True)
-        result = end_first_half(opponent, live_logs, plan, player_board=board)
-        st.session_state.lt_half_pending = 2
-        st.session_state.ig_mode = "Halftime"
-        st.session_state.ht_last_report = result["report"]
-        st.session_state.ht_last_md = result["markdown"]
+    if gen and phase not in {"halftime", "2nd"}:
+        if h2_idxs and not st.session_state.pop("lt_end_half_force", False):
+            st.warning(
+                f"**{len(h2_idxs)}** play(s) still tagged **2nd half**. "
+                "Halftime report only uses 1st-half snaps."
+            )
+            f1, f2 = st.columns(2)
+            if f1.button(
+                f"Move H2 → H1 ({len(h2_idxs)}) then generate",
+                type="primary",
+                use_container_width=True,
+                key=f"{key_prefix}_gen_after_h2_fix",
+            ):
+                n = _move_all_h2_to_h1(live_logs, opponent)
+                from mesh_engine import load_live_log
+
+                live_logs = load_live_log()
+                st.success(f"Moved {n} play(s) to 1st half.")
+                _execute_end_first_half(opponent, live_logs)
+                st.success(
+                    "1st half ended — coach halftime report is open below. "
+                    "Read the 5-bullet script, then flip to Full boards if you want detail."
+                )
+                st.rerun()
+            if f2.button(
+                "Generate anyway",
+                use_container_width=True,
+                key=f"{key_prefix}_gen_ignore_h2",
+            ):
+                st.session_state.lt_end_half_force = True
+                st.session_state.lt_end_half_request = True
+                st.rerun()
+            return
+        _execute_end_first_half(opponent, live_logs)
         st.success(
-            "1st half ended — halftime report ready. "
-            "Expand **Halftime / end 1st half** below or refresh the report there."
+            "1st half ended — coach halftime report is open below. "
+            "Read the 5-bullet script, then flip to Full boards if you want detail."
         )
         st.rerun()
 
-    # Show latest report when half is closed (handy from Live Track)
+    if gen:
+        # Regenerate when half already closed
+        _execute_end_first_half(opponent, live_logs)
+        st.success("Halftime report regenerated.")
+        st.rerun()
+
     if phase in {"halftime", "2nd"}:
         md = st.session_state.get("ht_last_md")
         if not md:
@@ -16091,7 +16814,13 @@ def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: s
                 except Exception:
                     md = None
         if md:
-            with st.expander("Halftime report", expanded=(key_prefix == "lt")):
+            with st.expander(
+                "Halftime report",
+                expanded=(
+                    key_prefix == "lt"
+                    or bool(st.session_state.get("ht_auto_open", False))
+                ),
+            ):
                 report = st.session_state.get("ht_last_report")
                 stale = (
                     not isinstance(report, dict)
@@ -16116,7 +16845,7 @@ def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: s
                         board_logs = (
                             half1 if not half1.empty else filter_live_logs(live_logs, opponent=opponent)
                         )
-                        board = player_plus_minus_table(board_logs, opponent, by_position=True)
+                        board = player_board_for_halftime(board_logs, opponent)
                         from mesh_engine import build_halftime_report, format_halftime_report_markdown
 
                         report = build_halftime_report(
@@ -16192,7 +16921,7 @@ def _halftime_panel(
         # Rebuild from current logs (includes formation / blitz / coverage / situation)
         half1 = filter_live_logs(live_logs, opponent=opponent, half=1)
         board_logs = half1 if not half1.empty else filter_live_logs(live_logs, opponent=opponent)
-        board = player_plus_minus_table(board_logs, opponent, by_position=True)
+        board = player_board_for_halftime(board_logs, opponent)
         report = build_halftime_report(opponent, live_logs, plan, player_board=board)
         markdown = format_halftime_report_markdown(report)
         st.session_state.ht_last_report = report
