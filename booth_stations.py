@@ -22,6 +22,7 @@ FOCUS_FRONT = "front"
 FOCUS_COVERAGE = "coverage"
 FOCUS_BLITZ = "blitz"
 FOCUS_MOTION = "motion"
+FOCUS_BALL = "ball"
 
 ALL_FOCUSES: tuple[str, ...] = (
     FOCUS_SNAPS,
@@ -29,6 +30,7 @@ ALL_FOCUSES: tuple[str, ...] = (
     FOCUS_COVERAGE,
     FOCUS_BLITZ,
     FOCUS_MOTION,
+    FOCUS_BALL,
 )
 
 FOCUS_LABELS: dict[str, str] = {
@@ -37,14 +39,16 @@ FOCUS_LABELS: dict[str, str] = {
     FOCUS_COVERAGE: "Coverage",
     FOCUS_BLITZ: "Blitz",
     FOCUS_MOTION: "Motion",
+    FOCUS_BALL: "Ball carrier",
 }
 
 FOCUS_HELP: dict[str, str] = {
-    FOCUS_SNAPS: "Formation, play, result (Main)",
-    FOCUS_FRONT: "Pre-snap — Even / Odd / …",
+    FOCUS_SNAPS: "Down, distance, formation, call, result, yards (Main)",
+    FOCUS_FRONT: "Pre-snap — Even / Odd / Bear",
     FOCUS_COVERAGE: "Pre-snap — Cover 2 / 3 / 4 / …",
     FOCUS_BLITZ: "Post-snap — Yes or No",
     FOCUS_MOTION: "Post-snap — motion / shift",
+    FOCUS_BALL: "Pass → QB + WR · Run → ball carrier",
 }
 
 # Timing buckets so packs balance load across the snap
@@ -55,23 +59,23 @@ FILM_FOCUSES: frozenset[str] = frozenset(
     {FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_MOTION}
 )
 
-# Normal booth with 1 extra phone: Front + Coverage (no headset → no play call)
+# Normal booth with 1 extra phone: film + ball carrier (Main logs the call)
 TAGGER_PACKS: tuple[dict, ...] = (
     {
-        "id": "front_coverage",
-        "label": "Front + Coverage",
-        "subtitle": "Pre-snap looks · End yard for auto gain · (1 tagger)",
-        "focuses": (FOCUS_FRONT, FOCUS_COVERAGE),
+        "id": "film_ball",
+        "label": "Film + Ball",
+        "subtitle": "Front · Coverage · Blitz · ball carrier (1 tagger)",
+        "focuses": (FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_BALL),
         "slot": 1,
     },
 )
 
-# Optional 2nd helper phone if you ever need post-snap overflow
+# Optional 2nd helper phone — motion only
 TAGGER_PACK_THIRD: dict = {
-    "id": "blitz_motion",
-    "label": "Blitz + Motion (2nd phone)",
-    "subtitle": "Post-snap only — only if you add a second tagger",
-    "focuses": (FOCUS_BLITZ, FOCUS_MOTION),
+    "id": "motion_only",
+    "label": "Motion (2nd phone)",
+    "subtitle": "Post-snap motion only — if you add a second tagger",
+    "focuses": (FOCUS_MOTION,),
     "slot": 2,
 }
 
@@ -79,13 +83,14 @@ TAGGER_JOBS: tuple[str, ...] = (
     FOCUS_FRONT,
     FOCUS_COVERAGE,
     FOCUS_BLITZ,
+    FOCUS_BALL,
     FOCUS_MOTION,
 )
 
 TAGGER_SPLIT_HELP = (
-    "1 tagger (recommended): Front + Coverage + end yard line. "
-    "Main (headset) logs the call; app computes yards from start→end. "
-    "Optional 2nd phone for Blitz + Motion."
+    "1 tagger: Front, Coverage, Blitz, then ball carrier "
+    "(Pass → tag QB + WR · Run → tag carrier). "
+    "Main (headset) logs down, distance, formation, call, result, and yards."
 )
 
 STATION_LABELS: dict[str, str] = {
@@ -136,18 +141,23 @@ def normalize_focuses(raw) -> list[str]:
         "cov": FOCUS_COVERAGE,
         "blitz": FOCUS_BLITZ,
         "motion": FOCUS_MOTION,
+        "ball": FOCUS_BALL,
+        "carrier": FOCUS_BALL,
+        "ball_carrier": FOCUS_BALL,
         # Pack shortcuts
         "front_coverage": "__pack_front_coverage__",
+        "film_ball": "__pack_film_ball__",
         "front_blitz": "__pack_front_blitz__",
         "coverage_motion": "__pack_coverage_motion__",
         "coverage_blitz": "__pack_coverage_blitz__",
         "blitz_motion": "__pack_blitz_motion__",
-        "pack1": "__pack_front_coverage__",
+        "pack1": "__pack_film_ball__",
         "pack2": "__pack_blitz_motion__",
         "pack3": "__pack_coverage_blitz__",
     }
     pack_map = {
         "__pack_front_coverage__": [FOCUS_FRONT, FOCUS_COVERAGE],
+        "__pack_film_ball__": [FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_BALL],
         "__pack_front_blitz__": [FOCUS_FRONT, FOCUS_BLITZ],
         "__pack_coverage_motion__": [FOCUS_COVERAGE, FOCUS_MOTION],
         "__pack_coverage_blitz__": [FOCUS_COVERAGE, FOCUS_BLITZ],
@@ -166,6 +176,7 @@ def normalize_focuses(raw) -> list[str]:
             FOCUS_COVERAGE,
             FOCUS_BLITZ,
             FOCUS_MOTION,
+            FOCUS_BALL,
         } and key not in out:
             out.append(key)
     return out
@@ -189,7 +200,9 @@ def default_focuses_for_station(station: BoothStation) -> list[str]:
     if station == "call":
         return [FOCUS_SNAPS]
     if station == "defense":
-        return [FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ]
+        return [FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_BALL]
+    if station == "tag":
+        return list(TAGGER_PACKS[0]["focuses"])
     return []
 
 

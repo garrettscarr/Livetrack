@@ -7638,9 +7638,80 @@ def _tagger_focus_to_col(fid: str) -> str:
     }.get(fid, fid)
 
 
-def _tagger_field_filled(row: dict, fid: str) -> bool:
-    from booth_stations import FOCUS_BLITZ
+def _tagger_roster_names(*pos_groups: set[str]) -> list[str]:
+    """Roster names filtered by position groups (QB, WR, …)."""
+    roster = load_roster()
+    names: list[str] = []
+    for p in roster:
+        name = str(p.get("name") or "").strip()
+        if not name:
+            continue
+        pos = str(p.get("position") or p.get("pos") or "").strip().upper()
+        if pos_groups:
+            ok = any(
+                pos == g or pos.startswith(g)
+                for group in pos_groups
+                for g in group
+            )
+            if not ok:
+                continue
+        names.append(name)
+    return sorted(set(names), key=str.upper)
 
+
+def _tagger_play_type_key(drive_id: int, play_n: int) -> str:
+    return f"tg_play_type_{drive_id}_{play_n}"
+
+
+def _tagger_infer_pass_run(row: dict, drive_id: int, play_n: int) -> bool | None:
+    """True=pass, False=run, None=tagger must pick."""
+    ptype = str(row.get("play_type") or "").strip().lower()
+    if ptype == "pass":
+        return True
+    if ptype == "run":
+        return False
+    result = str(row.get("result") or "").strip().lower()
+    if result in {"incomplete", "inc", "sack / tfl", "sack", "tfl"}:
+        return True
+    if result in {"punt", "field goal", "fg"}:
+        return None
+    run_tag = str(row.get("run_tag") or "").strip()
+    pass_tag = str(row.get("pass_tag") or "").strip()
+    if pass_tag and not run_tag:
+        return True
+    if run_tag and not pass_tag:
+        return False
+    draft = st.session_state.get(_tagger_play_type_key(drive_id, play_n))
+    if draft == "pass":
+        return True
+    if draft == "run":
+        return False
+    return None
+
+
+def _tagger_ball_fields_complete(row: dict, *, is_pass: bool | None) -> bool:
+    if is_pass is None:
+        return False
+    pp = str(row.get("pass_player") or "").strip()
+    bp = str(row.get("ball_player") or "").strip()
+    if is_pass:
+        if not pp:
+            return False
+        result = str(row.get("result") or "").strip().lower()
+        if result in {"incomplete", "inc"}:
+            return True
+        return bool(bp)
+    return bool(bp)
+
+
+def _tagger_field_filled(row: dict, fid: str) -> bool:
+    from booth_stations import FOCUS_BALL, FOCUS_BLITZ
+
+    if fid == FOCUS_BALL:
+        return _tagger_ball_fields_complete(
+            row,
+            is_pass=_tagger_infer_pass_run(row, int(row.get("drive_id") or 0), int(row.get("play_n") or 1)),
+        )
     col = _tagger_focus_to_col(fid)
     val = str(row.get(col) or "").strip()
     if fid == FOCUS_BLITZ:
@@ -7649,24 +7720,33 @@ def _tagger_field_filled(row: dict, fid: str) -> bool:
 
 
 def _tagger_pack_complete(row: dict, focuses: list[str]) -> bool:
-    from booth_stations import FOCUS_COVERAGE, FOCUS_FRONT
+    from booth_stations import FOCUS_BALL
 
     needed = [f for f in focuses if f != "snaps"]
     if not needed:
         return False
-    if not all(_tagger_field_filled(row, f) for f in needed):
-        return False
-    # 1-tagger Front+Coverage pack also needs end yard (auto gain)
-    if FOCUS_FRONT in focuses and FOCUS_COVERAGE in focuses:
-        end = row.get("end_ball_yard")
-        if end is None or str(end).strip() == "":
+    for fid in needed:
+        if fid == FOCUS_BALL:
+            drive_id = int(row.get("drive_id") or 0)
+            play_n = int(row.get("play_n") or 1)
+            if not _tagger_ball_fields_complete(
+                row, is_pass=_tagger_infer_pass_run(row, drive_id, play_n)
+            ):
+                return False
+        elif not _tagger_field_filled(row, fid):
             return False
     return True
 
 
-def _tagger_status_bits(row: dict, focuses: list[str], *, need_end_yard: bool) -> str:
-    """Compact Front ✓ · Cov · End strip."""
-    from booth_stations import FOCUS_BLITZ, FOCUS_COVERAGE, FOCUS_FRONT, FOCUS_MOTION
+def _tagger_status_bits(
+    row: dict,
+    focuses: list[str],
+    *,
+    drive_id: int,
+    play_n: int,
+) -> str:
+    """Compact Front ✓ · Cov · Blitz · QB · WR strip."""
+    from booth_stations import FOCUS_BALL, FOCUS_BLITZ, FOCUS_COVERAGE, FOCUS_FRONT, FOCUS_MOTION
 
     bits: list[str] = []
     checks = [
@@ -7680,11 +7760,49 @@ def _tagger_status_bits(row: dict, focuses: list[str], *, need_end_yard: bool) -
             continue
         ok = _tagger_field_filled(row, fid)
         bits.append(f"{label} ✓" if ok else label)
-    if need_end_yard:
-        end = row.get("end_ball_yard")
-        end_ok = end is not None and str(end).strip() != ""
-        bits.append("End ✓" if end_ok else "End")
+    if FOCUS_BALL in focuses:
+        is_pass = _tagger_infer_pass_run(row, drive_id, play_n)
+        pp = str(row.get("pass_player") or "").strip()
+        bp = str(row.get("ball_player") or "").strip()
+        if is_pass is True:
+            bits.append("QB ✓" if pp else "QB")
+            bits.append("WR ✓" if bp else "WR")
+        elif is_pass is False:
+            bits.append("Carrier ✓" if bp else "Carrier")
+        else:
+            bits.append("Pass/Run?")
     return " · ".join(bits) if bits else ""
+
+
+def _tagger_focus_clear_updates(focuses: list[str]) -> dict:
+    """Blank the fields this tagger owns (does not wipe Main call/result)."""
+    from booth_stations import FOCUS_BALL, FOCUS_SNAPS
+
+    updates: dict = {}
+    for fid in focuses:
+        if fid == FOCUS_SNAPS:
+            continue
+        if fid == FOCUS_BALL:
+            updates["ball_player"] = ""
+            updates["pass_player"] = ""
+            updates["touch_role"] = ""
+            continue
+        col = _tagger_focus_to_col(fid)
+        if col:
+            updates[col] = ""
+    updates["film_pending"] = "Yes"
+    return updates
+
+
+def _tagger_row_has_tags(row: dict, focuses: list[str]) -> bool:
+    from booth_stations import FOCUS_BALL, FOCUS_SNAPS
+
+    if any(_tagger_field_filled(row, f) for f in focuses if f not in {FOCUS_SNAPS, FOCUS_BALL}):
+        return True
+    if FOCUS_BALL in focuses:
+        if str(row.get("ball_player") or "").strip() or str(row.get("pass_player") or "").strip():
+            return True
+    return False
 
 
 def _tagger_advance_after_save(play_n: int, key_prefix: str = "tag") -> None:
@@ -7695,33 +7813,6 @@ def _tagger_advance_after_save(play_n: int, key_prefix: str = "tag") -> None:
     st.session_state.pop("tagger_done_play", None)
     st.session_state["tagger_flash"] = f"✓ Play #{int(play_n)} saved — on Play #{nxt}"
     st.session_state["tagger_flash_strong"] = True
-
-
-def _tagger_focus_clear_updates(focuses: list[str], *, need_end_yard: bool) -> dict:
-    """Blank the fields this tagger owns (does not wipe Main call/result)."""
-    from booth_stations import FOCUS_SNAPS
-
-    updates: dict = {}
-    for fid in focuses:
-        if fid == FOCUS_SNAPS:
-            continue
-        col = _tagger_focus_to_col(fid)
-        if col:
-            updates[col] = ""
-    if need_end_yard:
-        updates["end_ball_yard"] = ""
-    updates["film_pending"] = "Yes"
-    return updates
-
-
-def _tagger_row_has_tags(row: dict, focuses: list[str], *, need_end_yard: bool) -> bool:
-    if any(_tagger_field_filled(row, f) for f in focuses if f != "snaps"):
-        return True
-    if need_end_yard:
-        end = row.get("end_ball_yard")
-        if end is not None and str(end).strip() != "":
-            return True
-    return False
 
 
 def _tagger_undo_tags(
@@ -7739,11 +7830,9 @@ def _tagger_undo_tags(
     - Else if play > 1 → step back one play and clear that play's tags.
     Never deletes Main's LOG fields or advances/rewinds the shared pointer.
     """
-    from booth_stations import FOCUS_COVERAGE, FOCUS_FRONT
     from booth_snaps import find_snap_index
     from mesh_engine import load_live_log
 
-    need_end = FOCUS_FRONT in focuses and FOCUS_COVERAGE in focuses
     target_pn = int(play_n)
     logs = load_live_log()
     idx = find_snap_index(logs, int(drive_id), target_pn)
@@ -7751,25 +7840,26 @@ def _tagger_undo_tags(
     if idx is not None and logs is not None and not logs.empty:
         row = logs.reset_index(drop=True).loc[idx].to_dict()
 
-    if not _tagger_row_has_tags(row, focuses, need_end_yard=need_end) and target_pn > 1:
+    if not _tagger_row_has_tags(row, focuses) and target_pn > 1:
         target_pn = target_pn - 1
         idx = find_snap_index(logs, int(drive_id), target_pn)
         row = {}
         if idx is not None and logs is not None and not logs.empty:
             row = logs.reset_index(drop=True).loc[idx].to_dict()
 
-    if idx is None or not _tagger_row_has_tags(row, focuses, need_end_yard=need_end):
+    if idx is None or not _tagger_row_has_tags(row, focuses):
         st.session_state["tagger_flash"] = "Nothing to undo"
         st.session_state[f"{key_prefix}_view_play"] = target_pn
         st.rerun()
         return
 
     # Force-clear (upsert merge intentionally ignores blanks to protect parallel tags)
-    clear = _tagger_focus_clear_updates(focuses, need_end_yard=need_end)
+    clear = _tagger_focus_clear_updates(focuses)
     ok = update_live_log_at(int(idx), clear)
     st.session_state.pop(f"tg_draft_front_{drive_id}_{target_pn}", None)
     st.session_state.pop(f"tg_draft_cov_{drive_id}_{target_pn}", None)
     st.session_state.pop(f"tg_edit_look_{drive_id}_{target_pn}", None)
+    st.session_state.pop(_tagger_play_type_key(drive_id, target_pn), None)
     st.session_state.pop("tagger_done_play", None)
     st.session_state[f"{key_prefix}_follow"] = False
     st.session_state[f"{key_prefix}_view_play"] = int(target_pn)
@@ -7795,23 +7885,8 @@ def _tagger_pulse_done() -> None:
 
 
 def _tagger_recalc_yards_from_end(row: dict) -> dict:
-    """If Main already logged result + start ball, apply end → yards_gained."""
-    raw_end = row.get("end_ball_yard")
-    raw_start = row.get("ball_yard")
-    if raw_end is None or str(raw_end).strip() == "":
-        return {}
-    if raw_start is None or str(raw_start).strip() == "":
-        return {}
-    result_l = str(row.get("result") or "").strip().lower()
-    if result_l in {"incomplete", "inc", "turnover", "int", "fumble"}:
-        return {"yards_gained": 0}
-    if not result_l:
-        # Main hasn't logged outcome yet — end spot waits for commit
-        return {}
-    auto = yards_from_ball_span(raw_start, raw_end)
-    if auto is None:
-        return {}
-    return {"yards_gained": int(auto)}
+    """Deprecated — Main logs yards; tagger no longer tags end spot."""
+    return {}
 
 
 def _tagger_instant_save(
@@ -7862,13 +7937,6 @@ def _tagger_instant_save(
         fid = col_to_focus.get(col)
         if fid:
             st.session_state[f"tag_last_{fid}"] = val
-    if "end_ball_yard" in clean:
-        try:
-            end_i = int(clean["end_ball_yard"])
-            st.session_state["tag_last_end_side"] = "Own" if end_i <= 50 else "Opp"
-            st.session_state["tag_last_end_yard"] = end_i if end_i <= 50 else 100 - end_i
-        except (TypeError, ValueError):
-            pass
 
     # Clear look drafts after a committed look save
     if "def_front" in clean or "coverage" in clean:
@@ -7877,26 +7945,12 @@ def _tagger_instant_save(
 
     logs = load_live_log()
     idx = find_snap_index(logs, int(drive_id), int(play_n))
-    row = {}
+    row = {"drive_id": int(drive_id), "play_n": int(play_n)}
     if idx is not None and logs is not None and not logs.empty:
         row = logs.reset_index(drop=True).loc[idx].to_dict()
+        row.setdefault("drive_id", int(drive_id))
+        row.setdefault("play_n", int(play_n))
     row.update(clean)
-
-    if "end_ball_yard" in clean:
-        yard_fix = _tagger_recalc_yards_from_end(row)
-        if yard_fix:
-            _booth_upsert_snap(
-                drive_id=int(drive_id),
-                play_n=int(play_n),
-                updates=yard_fix,
-                opponent=opponent,
-                half=half,
-            )
-            row.update(yard_fix)
-            st.session_state["tagger_flash"] = (
-                f"End {format_ball_spot(clean['end_ball_yard'])} → "
-                f"{int(yard_fix['yards_gained']):+d} yds"
-            )
 
     if _tagger_pack_complete(row, focuses):
         _tagger_advance_after_save(play_n, key_prefix=key_prefix)
@@ -7916,6 +7970,7 @@ def _render_current_snap_tagger(
 ) -> None:
     """Tagger editor: tap chip = save; Same as last; advances on own pace."""
     from booth_stations import (
+        FOCUS_BALL,
         FOCUS_BLITZ,
         FOCUS_COVERAGE,
         FOCUS_FRONT,
@@ -7937,14 +7992,14 @@ def _render_current_snap_tagger(
     half = int(st.session_state.get("lt_half") or 1)
     logs = load_live_log()
     idx = find_snap_index(logs, int(drive_id), int(play_n))
-    row = {}
+    row = {"drive_id": int(drive_id), "play_n": int(play_n)}
     if idx is not None and logs is not None and not logs.empty:
-        row = logs.reset_index(drop=True).loc[idx].to_dict()
+        row = {**row, **logs.reset_index(drop=True).loc[idx].to_dict()}
 
     pre = [f for f in focuses if f in PRE_SNAP_FOCUSES]
     post = [f for f in focuses if f in POST_SNAP_FOCUSES]
-    need_end_yard = FOCUS_FRONT in focuses and FOCUS_COVERAGE in focuses
-    batch_look = need_end_yard  # Front+Coverage pack → one write when both set
+    batch_look = FOCUS_FRONT in focuses and FOCUS_COVERAGE in focuses
+    need_ball = FOCUS_BALL in focuses
     title = " · ".join(FOCUS_LABELS.get(f, f) for f in focuses) or focus_summary(focuses)
     st.markdown(f'<p class="live-title">{title}</p>', unsafe_allow_html=True)
 
@@ -7983,7 +8038,9 @@ def _render_current_snap_tagger(
     else:
         st.caption("Start yard — waiting for Main (optional; you can still tag ahead)")
 
-    status = _tagger_status_bits(row, focuses, need_end_yard=need_end_yard)
+    status = _tagger_status_bits(
+        row, focuses, drive_id=int(drive_id), play_n=int(play_n)
+    )
     if status:
         done = _tagger_pack_complete(row, focuses)
         cls = "tg-status done" if done else "tg-status"
@@ -8011,11 +8068,11 @@ def _render_current_snap_tagger(
     draft_c_key = f"tg_draft_cov_{drive_id}_{play_n}"
     edit_look_key = f"tg_edit_look_{drive_id}_{play_n}"
 
-    # SAME LOOK only (end almost never repeats) — layout 4
+    # SAME LOOK — film only (ball carrier changes every snap)
     look_bits = []
     look_updates: dict = {}
     for fid in focuses:
-        if fid == FOCUS_SNAPS:
+        if fid in {FOCUS_SNAPS, FOCUS_BALL}:
             continue
         raw = st.session_state.get(f"tag_last_{fid}")
         if raw is None or (isinstance(raw, str) and not str(raw).strip()):
@@ -8204,10 +8261,55 @@ def _render_current_snap_tagger(
 
     front_saved = str(row.get("def_front") or "").strip()
     cov_saved = str(row.get("coverage") or "").strip()
-    look_complete = bool(front_saved and cov_saved) if need_end_yard else False
+    look_complete = bool(front_saved and cov_saved) if batch_look else False
     editing_look = bool(st.session_state.get(edit_look_key))
 
-    # Layout 4 — collapse look when Front+Cov set; keep End pinned
+    def _player_chip_row(
+        label: str,
+        names: list[str],
+        field: str,
+        current: str,
+        *,
+        extra: dict | None = None,
+    ) -> None:
+        st.caption(f"{label} · tap to save")
+        if not names:
+            st.caption("Add players under **Database → Players**.")
+            return
+        show = names[:12]
+        cols = st.columns(min(3, max(len(show), 1)))
+        for i, name in enumerate(show):
+            with cols[i % len(cols)]:
+                active = str(current or "").strip().lower() == name.lower()
+                if st.button(
+                    name,
+                    key=f"tg_pl_{field}_{drive_id}_{play_n}_{i}",
+                    use_container_width=True,
+                    type="primary" if active else "secondary",
+                ):
+                    updates = {field: name}
+                    if extra:
+                        updates.update(extra)
+                    _save_look_fields(updates)
+        rest = [n for n in names if n not in show]
+        if rest:
+            with st.expander("More players…", expanded=False):
+                mcols = st.columns(min(3, max(len(rest[:12]), 1)))
+                for i, name in enumerate(rest[:12]):
+                    with mcols[i % len(mcols)]:
+                        active = str(current or "").strip().lower() == name.lower()
+                        if st.button(
+                            name,
+                            key=f"tg_pl_more_{field}_{drive_id}_{play_n}_{i}",
+                            use_container_width=True,
+                            type="primary" if active else "secondary",
+                        ):
+                            updates = {field: name}
+                            if extra:
+                                updates.update(extra)
+                            _save_look_fields(updates)
+
+    # Collapse look when Front+Cov set
     if look_complete and not editing_look:
         st.markdown(
             f'<div class="tg-look-collapsed">Look · {front_saved} / {cov_saved}</div>',
@@ -8230,93 +8332,63 @@ def _render_current_snap_tagger(
             for fid in post:
                 _render_field(fid)
 
-    if need_end_yard:
+    if need_ball:
         st.markdown('<div class="tg-end-pin">', unsafe_allow_html=True)
-        st.markdown("##### End of play")
-        st.caption("Tap side + yard · saves immediately · gain = end − start")
-        side_key = f"tg_end_side_{drive_id}_{play_n}"
-        if side_key not in st.session_state:
-            st.session_state[side_key] = st.session_state.get("tag_last_end_side") or "Own"
-        cur_end = row.get("end_ball_yard")
-        try:
-            cur_end_i = (
-                int(cur_end)
-                if cur_end is not None and str(cur_end).strip() != ""
-                else None
-            )
-        except (TypeError, ValueError):
-            cur_end_i = None
-        if cur_end_i is not None:
-            st.session_state[side_key] = "Own" if cur_end_i <= 50 else "Opp"
-
-        s1, s2 = st.columns(2)
-        with s1:
-            if st.button(
-                "Own",
-                key=f"tg_side_own_{drive_id}_{play_n}",
-                use_container_width=True,
-                type="primary" if st.session_state[side_key] == "Own" else "secondary",
-            ):
-                st.session_state[side_key] = "Own"
-                st.rerun()
-        with s2:
-            if st.button(
-                "Opp",
-                key=f"tg_side_opp_{drive_id}_{play_n}",
-                use_container_width=True,
-                type="primary" if st.session_state[side_key] == "Opp" else "secondary",
-            ):
-                st.session_state[side_key] = "Opp"
-                st.rerun()
-
-        end_side = st.session_state[side_key]
-        yard_opts = [5, 10, 15, 20, 25, 30, 35, 40, 45, 50]
-        cur_yd = None
-        if cur_end_i is not None:
-            cur_yd = cur_end_i if cur_end_i <= 50 else 100 - cur_end_i
-        ycols = st.columns(5)
-        for i, yd in enumerate(yard_opts):
-            with ycols[i % 5]:
-                active = False
-                if cur_end_i is not None and cur_yd == yd:
-                    saved_side = "Own" if cur_end_i <= 50 else "Opp"
-                    active = saved_side == end_side
+        st.markdown("##### Ball carrier")
+        is_pass = _tagger_infer_pass_run(row, int(drive_id), int(play_n))
+        ptype_key = _tagger_play_type_key(int(drive_id), int(play_n))
+        main_hint = str(row.get("play_call") or row.get("result") or "").strip()
+        if is_pass is None:
+            st.caption("Pass or run? · tap what you saw")
+            p1, p2 = st.columns(2)
+            with p1:
                 if st.button(
-                    str(yd),
-                    key=f"tg_yd_{drive_id}_{play_n}_{yd}",
+                    "Pass",
+                    key=f"tg_type_pass_{drive_id}_{play_n}",
                     use_container_width=True,
-                    type="primary" if active else "secondary",
+                    type="primary",
                 ):
-                    end_ball = side_yard_to_ball_yard(end_side, int(yd))
-                    _save_look_fields({"end_ball_yard": end_ball})
-
-        z1, z2 = st.columns(2)
-        with z1:
-            same_disabled = start_i is None
-            if st.button(
-                "Same as start (0)",
-                use_container_width=True,
-                key=f"tg_end_same_{drive_id}_{play_n}",
-                disabled=same_disabled,
-                help="No gain — end = start",
-            ):
-                _save_look_fields({"end_ball_yard": int(start_i)})
-        with z2:
-            if st.button(
-                "Inc → 0",
-                use_container_width=True,
-                key=f"tg_end_inc_{drive_id}_{play_n}",
-                disabled=same_disabled,
-                help="Incomplete / no gain — end = start",
-            ):
-                _save_look_fields({"end_ball_yard": int(start_i)})
-        if start_i is None:
-            st.caption("Same as start / Inc need Main’s start yard")
-        elif cur_end_i is not None:
-            g = yards_from_ball_span(start_i, cur_end_i)
-            if g is not None:
-                st.caption(
-                    f"{format_ball_spot(start_i)} → {format_ball_spot(cur_end_i)} = {g:+d}"
+                    st.session_state[ptype_key] = "pass"
+                    st.rerun()
+            with p2:
+                if st.button(
+                    "Run",
+                    key=f"tg_type_run_{drive_id}_{play_n}",
+                    use_container_width=True,
+                    type="secondary",
+                ):
+                    st.session_state[ptype_key] = "run"
+                    st.rerun()
+        else:
+            kind = "Pass" if is_pass else "Run"
+            if main_hint:
+                st.caption(f"{kind} · Main: {main_hint}")
+            else:
+                st.caption(kind)
+            if is_pass:
+                qbs = _tagger_roster_names({"QB"})
+                targets = _tagger_roster_names({"WR", "TE", "RB"})
+                _player_chip_row(
+                    "Tag QB",
+                    qbs,
+                    "pass_player",
+                    str(row.get("pass_player") or ""),
+                )
+                _player_chip_row(
+                    "Tag WR / target",
+                    targets,
+                    "ball_player",
+                    str(row.get("ball_player") or ""),
+                    extra={"touch_role": "target"},
+                )
+            else:
+                carriers = _tagger_roster_names({"RB", "QB", "WR", "TE"})
+                _player_chip_row(
+                    "Tag ball carrier",
+                    carriers,
+                    "ball_player",
+                    str(row.get("ball_player") or ""),
+                    extra={"touch_role": "carry"},
                 )
         st.markdown("</div>", unsafe_allow_html=True)
 
@@ -11193,34 +11265,24 @@ def _commit_live_play(
         ball = zone_default_ball_yard(field_zone)
     field_zone = ball_yard_to_zone(ball)
 
-    # Prefer tagger end-yard for gain when present (Incomplete stays 0)
-    end_from_tagger = None
+    # Main logs yards directly — tagger tags ball carrier, not end spot
+    result_l = str(result or "").strip().lower()
+
+    stub_bp = ""
+    stub_pp = ""
+    stub_role = ""
     try:
         if find_snap_index is not None and logs_now is not None and not logs_now.empty:
             _pre_idx = find_snap_index(logs_now, drive_id, play_n)
             if _pre_idx is not None:
                 _pre = logs_now.reset_index(drop=True).loc[int(_pre_idx)].to_dict()
-                raw_end = _pre.get("end_ball_yard")
-                if raw_end is not None and str(raw_end).strip() != "":
-                    end_from_tagger = int(raw_end)
+                stub_bp = str(_pre.get("ball_player") or "").strip()
+                stub_pp = str(_pre.get("pass_player") or "").strip()
+                stub_role = str(_pre.get("touch_role") or "").strip()
     except Exception:
-        end_from_tagger = None
-    result_l = str(result or "").strip().lower()
-    if end_from_tagger is not None and result_l not in {
-        "incomplete",
-        "inc",
-        "turnover",
-        "int",
-        "fumble",
-    }:
-        auto_yds = yards_from_ball_span(ball, end_from_tagger)
-        if auto_yds is not None:
-            yards_gained = int(auto_yds)
-            warnings.append(
-                f"Yards from tagger end ({format_ball_spot(end_from_tagger)}) → {yards_gained:+d}"
-            )
+        pass
 
-    bp = str(ball_player or "").strip()
+    bp = str(ball_player or "").strip() or stub_bp
     # Dual-tag RPO concepts → logged type is run or pass from outcome / touch
     ptype = resolve_logged_play_type(
         run_tag=run_tag,
@@ -11230,22 +11292,28 @@ def _commit_live_play(
         touch_role=str(touch_role or ""),
         phrase=str(phrase or ""),
     )
-    role = str(touch_role or "").strip() or infer_touch_role(
-        ptype, result, bp, phrase=str(phrase or ""), touch_role=str(touch_role or "")
+    role = (
+        str(touch_role or "").strip()
+        or stub_role
+        or infer_touch_role(
+            ptype, result, bp, phrase=str(phrase or ""), touch_role=str(touch_role or "")
+        )
     )
     if run_tag and pass_tag and role in {"carry", "target"}:
         ptype = "run" if role == "carry" else "pass"
 
     on_now = get_on_field()
     slots_now = get_formation_slots()
-    pp = resolve_pass_player(
-        pass_player=str(pass_player or ""),
-        play_type=ptype,
-        touch_role=role,
-        result=result,
-        phrase=str(phrase or ""),
-        slots=slots_now,
-    )
+    pp = str(pass_player or "").strip() or stub_pp
+    if not pp:
+        pp = resolve_pass_player(
+            pass_player="",
+            play_type=ptype,
+            touch_role=role,
+            result=result,
+            phrase=str(phrase or ""),
+            slots=slots_now,
+        )
     new_row = {
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "opponent": opponent,
@@ -11256,7 +11324,7 @@ def _commit_live_play(
         "distance_yards": int(distance_yards),
         "field_zone": field_zone,
         "ball_yard": int(ball),
-        "end_ball_yard": end_from_tagger if end_from_tagger is not None else "",
+        "end_ball_yard": "",
         "situation": situation_label(
             int(down), dist_bucket, field_zone, ball_yard=ball
         ),
@@ -11317,9 +11385,6 @@ def _commit_live_play(
             "field_zone",
             "ball_yard",
             "situation",
-            "ball_player",
-            "touch_role",
-            "pass_player",
             "players_on",
             "lineup",
             "call",
@@ -11327,19 +11392,28 @@ def _commit_live_play(
         ):
             if k in new_row:
                 merged[k] = new_row[k]
+        # Ball carrier: tagger usually owns these; Main only wins if it logged a name
+        for k in ("ball_player", "pass_player", "touch_role"):
+            main_v = str(new_row.get(k) or "").strip()
+            stub_v = str(existing.get(k) or "").strip()
+            if main_v:
+                merged[k] = new_row[k]
+            elif stub_v:
+                merged[k] = existing.get(k)
         # Preserve non-empty film from stub
         for k in ("def_front", "coverage", "blitz", "motion"):
             if str(existing.get(k) or "").strip() and not str(new_row.get(k) or "").strip():
                 merged[k] = existing.get(k)
         front = str(merged.get("def_front") or "").strip()
         cov = str(merged.get("coverage") or "").strip()
-        if front and cov:
+        blitz_v = str(merged.get("blitz") or "").strip().lower()
+        has_ball = bool(str(merged.get("ball_player") or "").strip()) or bool(
+            str(merged.get("pass_player") or "").strip()
+        )
+        if front and cov and blitz_v in {"yes", "no"} and has_ball:
             merged["film_pending"] = "No"
-        # Keep tagger end spot if Main didn't supply one
-        if str(existing.get("end_ball_yard") or "").strip() and not str(
-            new_row.get("end_ball_yard") or ""
-        ).strip():
-            merged["end_ball_yard"] = existing.get("end_ball_yard")
+        elif front and cov:
+            merged["film_pending"] = "No"
         update_live_log_at(int(idx), merged)
     else:
         append_live_log(new_row)
@@ -12294,10 +12368,20 @@ def _ql_commit_phrase_draft(
     _clear_phrase_confirm_widgets()
     st.session_state.ql_step = 0
     st.session_state.ql_clear_phrase_pending = True
-    # Sticky for "Same as last" on the next snap
+    # Sticky for "Same as last" / Gas on the next snap
     last_phrase = str(draft.get("phrase") or "").strip()
     if last_phrase:
         st.session_state.ql_last_phrase = last_phrase
+    st.session_state.ql_last_snap = {
+        "formation": formation,
+        "variant": variant,
+        "motion": motion,
+        "run_tag": run_tag,
+        "pass_tag": pass_tag,
+        "play_call": play_call,
+        "phrase": last_phrase,
+    }
+    st.session_state.pop("ql_gas_draft", None)
     for k in ("lt_gc_ball_player", "lt_gc_touch_role", "lt_gc_touch_slot"):
         st.session_state.pop(k, None)
     next_sit = st.session_state.get("lt_situation_pending") or {}
@@ -12320,6 +12404,287 @@ def _clear_phrase_confirm_widgets() -> None:
     for k in list(st.session_state.keys()):
         if str(k).startswith("ql_cf_"):
             st.session_state.pop(k, None)
+
+
+def _ql_last_snap_dict() -> dict:
+    """Last logged call pieces for Same / Gas. Falls back to sticky session tags."""
+    snap = st.session_state.get("ql_last_snap")
+    if isinstance(snap, dict) and (
+        snap.get("formation") or snap.get("run_tag") or snap.get("play_call")
+    ):
+        return {
+            "formation": _ql_norm(snap.get("formation") or ""),
+            "variant": _ql_norm(snap.get("variant") or ""),
+            "motion": _ql_norm(snap.get("motion") or ""),
+            "run_tag": _ql_norm(snap.get("run_tag") or ""),
+            "pass_tag": _ql_norm(snap.get("pass_tag") or ""),
+            "play_call": _ql_norm(snap.get("play_call") or ""),
+            "phrase": str(snap.get("phrase") or "").strip(),
+        }
+    return {
+        "formation": _ql_norm(st.session_state.get("ql_form") or ""),
+        "variant": _ql_norm(st.session_state.get("ql_variant") or ""),
+        "motion": _ql_norm(st.session_state.get("ql_motion") or ""),
+        "run_tag": _ql_norm(st.session_state.get("ql_run_tag") or ""),
+        "pass_tag": _ql_norm(st.session_state.get("ql_pass_tag") or ""),
+        "play_call": _ql_norm(st.session_state.get("ql_play") or ""),
+        "phrase": str(st.session_state.get("ql_last_phrase") or "").strip(),
+    }
+
+
+def _ql_gas_base_label(snap: dict) -> str:
+    form = compose_formation_label(
+        str(snap.get("formation") or ""),
+        str(snap.get("variant") or ""),
+    )
+    run = _ql_norm(snap.get("run_tag") or "")
+    call = _ql_norm(snap.get("play_call") or "")
+    if form and run:
+        return f"{form} · {run}"
+    if form and call:
+        return f"{form} · {call}"
+    return form or run or call or "last call"
+
+
+def _ql_gas_pass_options(booth_favs: dict) -> list[str]:
+    """Pass tags for hurry-up Gas (Bear, Seattle, …)."""
+    concepts = list(_derive_pass_concepts(booth_favs))
+    for c in DEFAULT_PASS_CONCEPTS:
+        if c not in concepts:
+            concepts.append(c)
+    # Recent sticky / learned pass tags
+    sticky = _ql_norm(st.session_state.get("ql_pass_tag") or "")
+    if sticky and sticky not in concepts:
+        concepts.insert(0, sticky)
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in concepts:
+        s = _ql_norm(c)
+        if not s or s.lower() in seen:
+            continue
+        seen.add(s.lower())
+        out.append(s)
+    return out[:16]
+
+
+def _ql_open_gas_draft(*, booth_favs: dict | None = None) -> dict | None:
+    """Build a Gas draft from last snap — same formation/run, pass tag TBD."""
+    snap = _ql_last_snap_dict()
+    if not (snap.get("formation") or snap.get("run_tag") or snap.get("play_call")):
+        return None
+    run_tag = snap.get("run_tag") or ""
+    # If last call was only a compound play_call, keep it as run base when no run_tag
+    if not run_tag and snap.get("play_call") and not snap.get("pass_tag"):
+        run_tag = snap.get("play_call") or ""
+    elif not run_tag and snap.get("play_call") and snap.get("pass_tag"):
+        # Strip prior pass from display call if possible
+        run_tag = snap.get("run_tag") or ""
+    base = _ql_gas_base_label({**snap, "run_tag": run_tag})
+    down = int(st.session_state.get("lt_down") or 1)
+    dist = int(st.session_state.get("lt_dist_y") or 10)
+    ball = int(st.session_state.get("lt_ball_yard") or 45)
+    draft = {
+        "phrase": f"GAS · {base}",
+        "formation": snap.get("formation") or "",
+        "variant": snap.get("variant") or "",
+        "motion": snap.get("motion") or "",
+        "play_call": _display_play_call(run_tag, "", snap.get("play_call") or ""),
+        "play_type": "run",
+        "run_tag": run_tag,
+        "pass_tag": "",
+        "outcome_lane": "",
+        "play_is_new": False,
+        "down": down,
+        "distance_yards": dist,
+        "ball_yard": ball,
+        "field_zone": ball_yard_to_zone(ball),
+        "result": "Gain",
+        "yards": 0,
+        "def_front": "",
+        "coverage": "",
+        "blitz": "",
+        "auto_first": False,
+        "film_pending": True,
+        "ball_player": "",
+        "touch_role": "",
+        "pass_player": "",
+        "new_play_guess": "",
+        "has_outcome": False,
+        "gas": True,
+        "gas_base": base,
+    }
+    return draft
+
+
+def _render_gas_card(
+    *,
+    opponent: str,
+    half: int,
+    unit: str,
+    booth_favs: dict,
+) -> bool:
+    """
+    Hurry-up Gas: keep last formation + run; only pick the added pass tag + G/L.
+    Returns True if the gas card is showing (replaces phrase box).
+    """
+    draft = st.session_state.get("ql_gas_draft")
+    if not isinstance(draft, dict) or not draft.get("gas"):
+        return False
+
+    gen = int(st.session_state.get("ql_gas_gen") or 0)
+    base = str(draft.get("gas_base") or _ql_gas_base_label(draft))
+    st.markdown("#### GAS · hurry-up")
+    st.markdown(
+        f'<div class="tg-look-collapsed">Same look · <b>{base}</b></div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Tap the pass tag to add (or Same call). Then set result / yards.")
+
+    pass_opts = _ql_gas_pass_options(booth_favs)
+    cur_pass = _ql_norm(
+        st.session_state.get(f"ql_gas_pass_{gen}")
+        if f"ql_gas_pass_{gen}" in st.session_state
+        else draft.get("pass_tag")
+        or ""
+    )
+
+    # Same call (no added pass) — still a Gas snap
+    c0 = st.columns(1)[0]
+    with c0:
+        same_active = not cur_pass
+        if st.button(
+            "Same call · no pass tag",
+            key=f"ql_gas_same_{gen}",
+            use_container_width=True,
+            type="primary" if same_active else "secondary",
+        ):
+            st.session_state[f"ql_gas_pass_{gen}"] = ""
+            draft["pass_tag"] = ""
+            draft["play_call"] = _display_play_call(
+                str(draft.get("run_tag") or ""), "", str(draft.get("play_call") or "")
+            )
+            draft["play_type"] = "run"
+            st.session_state.ql_gas_draft = draft
+            _ql_rerun()
+
+    if pass_opts:
+        st.caption("Add pass tag")
+        cols = st.columns(min(4, max(len(pass_opts), 1)))
+        for i, opt in enumerate(pass_opts):
+            with cols[i % len(cols)]:
+                active = cur_pass.lower() == opt.lower()
+                if st.button(
+                    opt,
+                    key=f"ql_gas_chip_{gen}_{i}",
+                    use_container_width=True,
+                    type="primary" if active else "secondary",
+                ):
+                    st.session_state[f"ql_gas_pass_{gen}"] = opt
+                    draft["pass_tag"] = opt
+                    draft["play_call"] = _display_play_call(
+                        str(draft.get("run_tag") or ""), opt, ""
+                    )
+                    draft["play_type"] = "pass"  # outcome may still flip via result
+                    draft["phrase"] = f"GAS · {base} + {opt}"
+                    st.session_state.ql_gas_draft = draft
+                    _ql_rerun()
+
+    typed = st.text_input(
+        "Or type pass tag",
+        value=cur_pass,
+        key=f"ql_gas_typed_{gen}",
+        placeholder="Bear · Seattle · …",
+        label_visibility="collapsed",
+    )
+    typed_n = _ql_norm(typed)
+    if typed_n and typed_n != cur_pass:
+        # Keep draft in sync when they type then LOG without chip tap
+        draft["pass_tag"] = typed_n
+        draft["play_call"] = _display_play_call(
+            str(draft.get("run_tag") or ""), typed_n, ""
+        )
+        draft["phrase"] = f"GAS · {base} + {typed_n}"
+        st.session_state[f"ql_gas_pass_{gen}"] = typed_n
+        st.session_state.ql_gas_draft = draft
+        cur_pass = typed_n
+
+    result_opts = [
+        "Gain",
+        "No gain",
+        "Incomplete",
+        "TD",
+        "Turnover",
+        "Penalty",
+        "Sack / TFL",
+        "Punt",
+        "Other",
+    ]
+    cur_res = str(draft.get("result") or "Gain")
+    r1, r2 = st.columns([1.2, 1])
+    with r1:
+        result = st.selectbox(
+            "Result",
+            result_opts,
+            index=result_opts.index(cur_res) if cur_res in result_opts else 0,
+            key=f"ql_gas_result_{gen}",
+        )
+    with r2:
+        yards = st.number_input(
+            "Yards",
+            value=int(draft.get("yards") or 0),
+            step=1,
+            key=f"ql_gas_yards_{gen}",
+        )
+
+    call_now = _display_play_call(
+        str(draft.get("run_tag") or ""),
+        cur_pass,
+        str(draft.get("play_call") or ""),
+    )
+    st.caption(
+        f"Will log · {compose_formation_label(draft.get('formation') or '', draft.get('variant') or '')} "
+        f"· {call_now or '—'} → {result} ({int(yards):+d})"
+    )
+
+    b1, b2 = st.columns([2.2, 1])
+    with b1:
+        if st.button("LOG GAS ▶", type="primary", use_container_width=True, key=f"ql_gas_log_{gen}"):
+            commit = dict(draft)
+            commit["pass_tag"] = cur_pass
+            commit["play_call"] = call_now
+            commit["result"] = result
+            commit["yards"] = int(yards)
+            commit["has_outcome"] = True
+            # Dual-tag RPO: keep run + pass; logged type from result later
+            if commit.get("run_tag") and cur_pass:
+                commit["play_type"] = "pass" if str(result).lower() in {
+                    "incomplete",
+                    "inc",
+                } else str(commit.get("play_type") or "run")
+            _ql_commit_phrase_draft(
+                commit,
+                opponent=opponent,
+                half=int(half),
+                unit=unit,
+                pass_tag=cur_pass,
+                result=result,
+                yards=int(yards),
+            )
+            st.session_state.pop("ql_gas_draft", None)
+            for k in list(st.session_state.keys()):
+                if str(k).startswith("ql_gas_") and k not in {"ql_gas_draft"}:
+                    # keep gen counter? clear widget keys
+                    if k != "ql_gas_gen":
+                        st.session_state.pop(k, None)
+            _ql_rerun()
+    with b2:
+        if st.button("Cancel", use_container_width=True, key=f"ql_gas_cancel_{gen}"):
+            st.session_state.pop("ql_gas_draft", None)
+            for k in list(st.session_state.keys()):
+                if str(k).startswith("ql_gas_") and k != "ql_gas_gen":
+                    st.session_state.pop(k, None)
+            _ql_rerun()
+    return True
 
 
 def _render_phrase_confirm_card(
@@ -12677,6 +13042,15 @@ def _render_quick_log_wizard(
     ):
         return
 
+    # Gas card — hurry-up: same formation/run, only add pass tag + G/L
+    if _render_gas_card(
+        opponent=opponent,
+        half=half,
+        unit=unit,
+        booth_favs=booth_favs,
+    ):
+        return
+
     if not hide_situation:
         st.markdown(
             f'<p class="live-situation">'
@@ -12736,14 +13110,55 @@ def _render_quick_log_wizard(
         return draft
 
     last_bits = str(st.session_state.get("ql_last_phrase") or "").strip()
-    if last_bits:
-        if st.button(
-            f"Same as last · {last_bits[:48]}{'…' if len(last_bits) > 48 else ''}",
-            key="ql_same_as_last",
-            use_container_width=True,
-        ):
-            st.session_state.ql_same_phrase_pending = True
-            _ql_rerun()
+    last_snap = _ql_last_snap_dict()
+    can_gas = bool(
+        last_snap.get("formation")
+        or last_snap.get("run_tag")
+        or last_snap.get("play_call")
+    )
+    if last_bits or can_gas:
+        if last_bits and can_gas:
+            c_same, c_gas = st.columns([2.2, 1])
+        elif can_gas:
+            c_same, c_gas = None, st.columns(1)[0]
+        else:
+            c_same, c_gas = st.columns(1)[0], None
+        if last_bits and c_same is not None:
+            with c_same:
+                if st.button(
+                    f"Same as last · {last_bits[:40]}{'…' if len(last_bits) > 40 else ''}",
+                    key="ql_same_as_last",
+                    use_container_width=True,
+                ):
+                    st.session_state.ql_same_phrase_pending = True
+                    _ql_rerun()
+        if can_gas and c_gas is not None:
+            with c_gas:
+                gas_lbl = _ql_gas_base_label(last_snap)
+                if st.button(
+                    "GAS ▶",
+                    type="primary",
+                    key="ql_gas_open",
+                    use_container_width=True,
+                    help=(
+                        f"Hurry-up: keep {gas_lbl}, only add a pass tag "
+                        "(e.g. Ireland → Ireland Bear)."
+                    ),
+                ):
+                    gas_draft = _ql_open_gas_draft(booth_favs=booth_favs)
+                    if gas_draft is None:
+                        st.session_state.lt_last_warnings = [
+                            "Nothing to Gas — log a snap first."
+                        ]
+                    else:
+                        st.session_state.ql_gas_gen = (
+                            int(st.session_state.get("ql_gas_gen") or 0) + 1
+                        )
+                        st.session_state.ql_gas_draft = gas_draft
+                        st.session_state.pop("ql_confirm_draft", None)
+                    _ql_rerun()
+            if not last_bits:
+                st.caption(f"Gas from · {_ql_gas_base_label(last_snap)}")
 
     # Enter submits LOG (form). Review / Clear are secondary submit buttons.
     with st.form("ql_phrase_form", clear_on_submit=False):
