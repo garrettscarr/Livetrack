@@ -8403,6 +8403,67 @@ def _resolve_booth_base_url() -> str:
     return ""
 
 
+def _invite_qr_png(url: str) -> bytes | None:
+    """PNG bytes for a QR that opens url. None if qrcode is unavailable."""
+    url = str(url or "").strip()
+    if not url:
+        return None
+    try:
+        import io
+
+        import qrcode
+
+        qr = qrcode.QRCode(
+            version=None,
+            error_correction=qrcode.constants.ERROR_CORRECT_M,
+            box_size=8,
+            border=2,
+        )
+        qr.add_data(url)
+        qr.make(fit=True)
+        img = qr.make_image(fill_color="#0F2419", back_color="#FFFFFF")
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception:
+        return None
+
+
+def _render_invite_link(
+    url: str,
+    *,
+    title: str,
+    subtitle: str = "",
+    key: str = "invite",
+) -> None:
+    """Title + scannable QR + copyable link for one booth invite."""
+    st.markdown(f"**{title}**")
+    if subtitle:
+        st.caption(subtitle)
+    if not url:
+        st.warning("No invite URL.")
+        return
+    c_qr, c_link = st.columns([1, 1.35])
+    with c_qr:
+        png = _invite_qr_png(url)
+        if png is not None:
+            st.image(png, width=200, caption="Scan with camera")
+        else:
+            # Offline-safe fallback: phone still gets a QR via public encoder
+            from urllib.parse import quote
+
+            enc = quote(url, safe="")
+            st.markdown(
+                f'<img src="https://api.qrserver.com/v1/create-qr-code/'
+                f'?size=200x200&margin=8&data={enc}" width="200" alt="Invite QR" />',
+                unsafe_allow_html=True,
+            )
+            st.caption("Scan with camera")
+    with c_link:
+        st.code(url, language=None)
+        st.caption("Or copy the link")
+
+
 def _import_booth_stations():
     """Load local booth_stations.py (avoids stale/shadowed Cloud imports)."""
     import importlib
@@ -8451,7 +8512,7 @@ def _render_home_page() -> None:
         f'<p class="live-title">{team} · Booth</p>',
         unsafe_allow_html=True,
     )
-    st.caption("Main device · share invite links with extra taggers")
+    st.caption("Main device · share invite QR codes with extra taggers")
 
     # Opponent / half snapshot
     try:
@@ -8499,13 +8560,16 @@ def _render_home_page() -> None:
 
     st.markdown("---")
     st.markdown("### Invite taggers")
-    st.caption(TAGGER_SPLIT_HELP)
+    st.caption(
+        TAGGER_SPLIT_HELP
+        + " Point their camera at the QR — no typing."
+    )
 
     base = _resolve_booth_base_url()
     with st.expander("Set booth website URL", expanded=not bool(base)):
         st.caption(
             "Paste your Streamlit Cloud link once (e.g. https://your-app.streamlit.app). "
-            "Saved for invite links on this Home page."
+            "Saved so invite QR codes open the right site."
         )
         url_in = st.text_input(
             "Booth URL",
@@ -8522,28 +8586,43 @@ def _render_home_page() -> None:
 
     base = _resolve_booth_base_url()
     if not base:
-        st.warning("Set the booth website URL above so invite links work.")
+        st.warning("Set the booth website URL above so invite QR codes work.")
         return
 
-    st.markdown("**Send one link (1 tagger)**")
+    st.markdown("**Scan one QR (1 tagger)**")
     for pack in TAGGER_PACKS:
         foc = list(pack["focuses"])
         link = tagger_invite_url(base, foc)
-        st.markdown(f"**Phone {pack['slot']}: {pack['label']}**")
-        st.caption(pack["subtitle"])
-        st.code(link, language=None)
+        _render_invite_link(
+            link,
+            title=f"Phone {pack['slot']}: {pack['label']}",
+            subtitle=pack["subtitle"],
+            key=f"pack_{pack['slot']}",
+        )
 
     with st.expander("2nd phone (optional)"):
         foc = list(TAGGER_PACK_THIRD["focuses"])
-        st.caption(TAGGER_PACK_THIRD["subtitle"])
-        st.code(tagger_invite_url(base, foc), language=None)
+        _render_invite_link(
+            tagger_invite_url(base, foc),
+            title=TAGGER_PACK_THIRD.get("label") or "2nd phone",
+            subtitle=TAGGER_PACK_THIRD["subtitle"],
+            key="pack_third",
+        )
 
     with st.expander("Let them pick the pack"):
-        st.code(tagger_invite_url(base), language=None)
+        _render_invite_link(
+            tagger_invite_url(base),
+            title="Open as tagger · pick job",
+            key="pack_pick",
+        )
 
     with st.expander("Main device link"):
-        st.code(main_invite_url(base) or base, language=None)
-        st.caption("Opens as Main (full booth) after PIN.")
+        _render_invite_link(
+            main_invite_url(base) or base,
+            title="Main booth",
+            subtitle="Opens as Main (full booth) after PIN.",
+            key="pack_main",
+        )
 
 
 def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
