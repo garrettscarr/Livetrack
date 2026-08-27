@@ -6248,7 +6248,7 @@ def _fmt_matchup_call_chip(c: dict) -> str:
 
 def _render_call_sheet_look_block(block: dict, *, season_label: str) -> None:
     """One scout look → formations / plays / combos that worked."""
-    from mesh_engine import MATCHUP_SEASON_TRUST_PLAYS
+    from mesh_engine import SCOUT_MATCHUP_SEASON_TRUST_PLAYS as MATCHUP_SEASON_TRUST_PLAYS
 
     wt = "Front" if block.get("when_type") == "front" else "Coverage"
     st.markdown(
@@ -6443,8 +6443,8 @@ def _render_scout_matchup_report(
     for note in report.get("notes") or []:
         st.caption(note)
     st.caption(
-        "Each call uses **this season** when it has **≥10** tagged snaps this year; "
-        "otherwise **career** EPA (all-time). Regenerate the report after uploading scout."
+        "Scout / pre-game only: each call uses **this season** when it has **≥10** tagged snaps "
+        "this year; otherwise **career** EPA. Regenerate after uploading scout."
     )
 
     cs = report.get("call_sheet") or {}
@@ -15686,19 +15686,20 @@ def _ht_render_situation_slice(
             empty="—",
         )
     with c2:
-        st.markdown("**Year — formations**")
+        st.markdown("**All-time ideas — formations**")
+        st.caption("Tagged career EPA — suggestions when tonight is thin.")
         _ht_board_with_chart(
-            block.get("season_formations") or [],
-            "Year formations (EPA)",
-            key=f"{key_prefix}_yf",
+            block.get("alltime_formations") or [],
+            "All-time formations (EPA)",
+            key=f"{key_prefix}_af",
             season=True,
-            empty="Not enough season sample.",
+            empty="Not enough tagged career sample.",
         )
-        st.markdown("**Year — play calls**")
+        st.markdown("**All-time ideas — play calls**")
         _ht_board_with_chart(
-            block.get("season_plays") or [],
-            "Year plays (EPA)",
-            key=f"{key_prefix}_yp",
+            block.get("alltime_plays") or [],
+            "All-time plays (EPA)",
+            key=f"{key_prefix}_ap",
             season=True,
             empty="—",
         )
@@ -16564,6 +16565,10 @@ def _render_halftime_report_body(
     )
     if s.get("scope") == "all_logged_tonight":
         st.caption("Using all tonight’s snaps (no half=1 tags).")
+    else:
+        st.caption(
+            "Primary: tonight's tagged 1st-half snaps. All-time EPA = ideas when sample is thin."
+        )
 
     coach_default = bool(st.session_state.get("ht_coach_mode", True))
     view = st.radio(
@@ -16854,6 +16859,9 @@ def _render_halftime_report_body(
             )
 
     with tab_scen:
+        st.caption(
+            "Left = tonight's tagged snaps (primary). Right = all-time tagged EPA ideas when sample is thin."
+        )
         by_down = scenarios.get("by_down") or {}
         openers = scenarios.get("drive_start") or {}
         conv = scenarios.get("convert") or {}
@@ -16911,16 +16919,16 @@ def _render_halftime_report_body(
                 )
             with a2:
                 _ht_board_with_chart(
-                    conv.get("season_formations") or [],
-                    "Year convert formations",
-                    key=f"{key_prefix}_conv_yf",
+                    conv.get("alltime_formations") or [],
+                    "All-time convert formations",
+                    key=f"{key_prefix}_conv_af",
                     season=True,
-                    empty="Not enough season convert snaps.",
+                    empty="Not enough tagged career convert snaps.",
                 )
                 _ht_board_with_chart(
-                    conv.get("season_plays") or [],
-                    "Year convert plays",
-                    key=f"{key_prefix}_conv_yp",
+                    conv.get("alltime_plays") or [],
+                    "All-time convert plays",
+                    key=f"{key_prefix}_conv_ap",
                     season=True,
                     empty="—",
                 )
@@ -17211,7 +17219,10 @@ def _halftime_panel(
     )
 
     st.subheader("Halftime — tonight over the plan")
-    st.caption("Live evidence wins. Plan items are Confirmed, Unproven, or Kill.")
+    st.caption(
+        "Tonight's tagged snaps drive every call. All-time EPA boards are suggestions only — "
+        "not the scout pre-game ≥10-season rule."
+    )
 
     _end_first_half_action(opponent, live_logs, key_prefix="igh")
 

@@ -326,7 +326,9 @@ def scout_favorite_looks(
 
 # --- Scout matchup report (upload × our EPA) ---------------------------------
 
-MATCHUP_SEASON_TRUST_PLAYS = 10  # use season EPA when a call has this many snaps this year
+# Scout / pre-game matchup report only — halftime uses tonight's tags + all-time ideas.
+SCOUT_MATCHUP_SEASON_TRUST_PLAYS = 10
+MATCHUP_SEASON_TRUST_PLAYS = SCOUT_MATCHUP_SEASON_TRUST_PLAYS
 
 
 _COV_ALIASES: dict[str, set[str]] = {
@@ -1264,7 +1266,7 @@ def scout_matchup_report_markdown(report: dict) -> str:
         "",
         "_Season EPA first; career in parentheses. Verdict* = based on career sample._",
         "",
-        f"_Calls use **season** stats when n≥{MATCHUP_SEASON_TRUST_PLAYS} this year; otherwise **career**._",
+        f"_Scout pre-game: calls use **season** when n≥{MATCHUP_SEASON_TRUST_PLAYS} this year; otherwise **career**._",
         "",
     ]
     for note in report.get("notes") or []:
@@ -2422,9 +2424,11 @@ def _pair_boards(
     first_and_ten: bool = False,
     live_min: int = 1,
     season_min: int = 4,
+    alltime_min: int = 5,
     limit: int = 6,
 ) -> dict:
-    """Tonight + year formation/play boards for one situation slice."""
+    """Tonight (tagged live) + year context + all-time suggestion boards."""
+    dist_buckets = [distance_bucket] if distance_bucket else None
     return {
         "tonight_n": int(len(live_df)) if live_df is not None else 0,
         "overall": {
@@ -2439,7 +2443,7 @@ def _pair_boards(
         "plays": _scenario_board(live_df, "play_call", min_plays=live_min, limit=limit),
         "season_formations": _season_scenario_board(
             downs=downs,
-            distance_buckets=[distance_bucket] if distance_bucket else None,
+            distance_buckets=dist_buckets,
             first_and_ten=first_and_ten,
             group_col="formation",
             min_plays=season_min,
@@ -2447,10 +2451,26 @@ def _pair_boards(
         ),
         "season_plays": _season_scenario_board(
             downs=downs,
-            distance_buckets=[distance_bucket] if distance_bucket else None,
+            distance_buckets=dist_buckets,
             first_and_ten=first_and_ten,
             group_col="play_call",
             min_plays=season_min,
+            limit=limit,
+        ),
+        "alltime_formations": _alltime_scenario_board(
+            downs=downs,
+            distance_buckets=dist_buckets,
+            first_and_ten=first_and_ten,
+            group_col="formation",
+            min_plays=alltime_min,
+            limit=limit,
+        ),
+        "alltime_plays": _alltime_scenario_board(
+            downs=downs,
+            distance_buckets=dist_buckets,
+            first_and_ten=first_and_ten,
+            group_col="play_call",
+            min_plays=alltime_min,
             limit=limit,
         ),
     }
@@ -2552,7 +2572,7 @@ def _season_slice_overall(
     }
 
 
-def _season_scenario_board(
+def _tagged_epa_scenario_board(
     *,
     downs: list[int] | None = None,
     distance_buckets: list[str] | None = None,
@@ -2560,11 +2580,11 @@ def _season_scenario_board(
     group_col: str = "formation",
     min_plays: int = 5,
     limit: int = 8,
+    current_season_only: bool = False,
 ) -> list[dict]:
-    """Year-to-date EPA board for situation slices (down / distance)."""
+    """Tagged EPA board for situation slices — current year or all-time."""
     if group_col not in {"formation", "play_call", "formation_play"}:
         return []
-    # Pull tag-quality flags when present (multi-season Hudl / prior years)
     df = load_table(
         f"SELECT {group_col}, down, distance_bucket, epa, is_success, "
         f"form_tagged, play_tagged, tags_ok, season "
@@ -2580,9 +2600,10 @@ def _season_scenario_board(
     work = df.copy()
     work[group_col] = work[group_col].map(_clean_tag)
     work = work[work[group_col].ne("")]
-    # Formation boards: current season only (prior-year formations are flawed).
-    # Play-call boards: any season if play_tagged. EPA model still uses all snaps.
-    if "season" in work.columns and group_col in {"formation", "formation_play"}:
+    if current_season_only and "season" in work.columns and group_col in {
+        "formation",
+        "formation_play",
+    }:
         work = work[work["season"].map(_is_current_season_value)]
     if group_col == "formation" and "form_tagged" in work.columns:
         work = work[pd.to_numeric(work["form_tagged"], errors="coerce").fillna(0) == 1]
@@ -2598,7 +2619,6 @@ def _season_scenario_board(
         wanted = {str(b).lower() for b in distance_buckets}
         work = work[work["distance_bucket"].astype(str).str.lower().isin(wanted)]
     if first_and_ten:
-        # Season proxy for drive starters: 1st & long (usually 1st & 10)
         work = work[
             (pd.to_numeric(work["down"], errors="coerce") == 1)
             & (work["distance_bucket"].astype(str).str.lower() == "long")
@@ -2624,13 +2644,56 @@ def _season_scenario_board(
                 "plays": n,
                 "avg_epa": round(avg_epa, 3),
                 "success_rate": round(sr, 3) if sr is not None else None,
-                "score": round(avg_epa, 3),  # align sort key with live boards
+                "score": round(avg_epa, 3),
                 "good": int(succ.fillna(0).sum()) if len(succ) else 0,
                 "bad": int(n - succ.fillna(0).sum()) if len(succ) else 0,
+                "source": "season" if current_season_only else "all_time",
             }
         )
     rows.sort(key=lambda r: (float(r.get("avg_epa") or 0), int(r.get("plays") or 0)), reverse=True)
     return rows[:limit]
+
+
+def _season_scenario_board(
+    *,
+    downs: list[int] | None = None,
+    distance_buckets: list[str] | None = None,
+    first_and_ten: bool = False,
+    group_col: str = "formation",
+    min_plays: int = 5,
+    limit: int = 8,
+) -> list[dict]:
+    """Current-season tagged EPA for situation context (halftime overall line)."""
+    return _tagged_epa_scenario_board(
+        downs=downs,
+        distance_buckets=distance_buckets,
+        first_and_ten=first_and_ten,
+        group_col=group_col,
+        min_plays=min_plays,
+        limit=limit,
+        current_season_only=True,
+    )
+
+
+def _alltime_scenario_board(
+    *,
+    downs: list[int] | None = None,
+    distance_buckets: list[str] | None = None,
+    first_and_ten: bool = False,
+    group_col: str = "formation",
+    min_plays: int = 5,
+    limit: int = 8,
+) -> list[dict]:
+    """All-time tagged EPA ideas — halftime suggestions when tonight is thin."""
+    return _tagged_epa_scenario_board(
+        downs=downs,
+        distance_buckets=distance_buckets,
+        first_and_ten=first_and_ten,
+        group_col=group_col,
+        min_plays=min_plays,
+        limit=limit,
+        current_season_only=False,
+    )
 
 
 def _defense_look_key(row: pd.Series) -> str:
@@ -2926,6 +2989,12 @@ def build_halftime_report(
             "season_plays": _season_scenario_board(
                 downs=[3, 4], group_col="play_call", min_plays=5, limit=8
             ),
+            "alltime_formations": _alltime_scenario_board(
+                downs=[3, 4], group_col="formation", min_plays=5, limit=8
+            ),
+            "alltime_plays": _alltime_scenario_board(
+                downs=[3, 4], group_col="play_call", min_plays=5, limit=8
+            ),
         },
         "drive_start": {
             "label": "Drive starters (1st snap of drive)",
@@ -2938,6 +3007,12 @@ def build_halftime_report(
                 first_and_ten=True, group_col="formation", min_plays=5, limit=8
             ),
             "season_plays": _season_scenario_board(
+                first_and_ten=True, group_col="play_call", min_plays=5, limit=8
+            ),
+            "alltime_formations": _alltime_scenario_board(
+                first_and_ten=True, group_col="formation", min_plays=5, limit=8
+            ),
+            "alltime_plays": _alltime_scenario_board(
                 first_and_ten=True, group_col="play_call", min_plays=5, limit=8
             ),
         },
@@ -3159,7 +3234,7 @@ def build_halftime_report(
     report = {
         "opponent": opponent,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "version": 9,
+        "version": 10,
         "summary": summary,
         "working": {
             "offense": _scores_to_records(working_o),
@@ -3389,8 +3464,8 @@ def format_halftime_report_markdown(report: dict) -> str:
             lines.append(f"- **Overall:** {' · '.join(ov_bits)}")
         _md_board("Tonight formations", block.get("formations") or [])
         _md_board("Tonight plays", block.get("plays") or [])
-        _md_board("Year formations", block.get("season_formations") or [])
-        _md_board("Year plays", block.get("season_plays") or [])
+        _md_board("All-time ideas — formations", block.get("alltime_formations") or [])
+        _md_board("All-time ideas — plays", block.get("alltime_plays") or [])
         if block.get("by_distance"):
             for bucket in ("short", "medium", "long"):
                 sub = (block.get("by_distance") or {}).get(bucket) or {}
@@ -3417,8 +3492,8 @@ def format_halftime_report_markdown(report: dict) -> str:
                     lines.append(f"  - **Overall:** {' · '.join(sub_bits)}")
                 _md_board("  Tonight formations", sub.get("formations") or [])
                 _md_board("  Tonight plays", sub.get("plays") or [])
-                _md_board("  Year formations", sub.get("season_formations") or [])
-                _md_board("  Year plays", sub.get("season_plays") or [])
+                _md_board("  All-time ideas — formations", sub.get("alltime_formations") or [])
+                _md_board("  All-time ideas — plays", sub.get("alltime_plays") or [])
 
     for key in ("convert", "drive_start"):
         block = scenarios.get(key) or {}
@@ -3426,10 +3501,10 @@ def format_halftime_report_markdown(report: dict) -> str:
             continue
         lines.append("")
         lines.append(f"## {block.get('label', key)} (tonight n={block.get('tonight_n', 0)})")
-        _md_board("Formations", block.get("formations") or [])
-        _md_board("Plays", block.get("plays") or [])
-        _md_board("Year formations", block.get("season_formations") or [])
-        _md_board("Year plays", block.get("season_plays") or [])
+        _md_board("Tonight formations", block.get("formations") or [])
+        _md_board("Tonight plays", block.get("plays") or [])
+        _md_board("All-time ideas — formations", block.get("alltime_formations") or [])
+        _md_board("All-time ideas — plays", block.get("alltime_plays") or [])
 
     players = report.get("players") or []
     if players:
@@ -3443,6 +3518,10 @@ def format_halftime_report_markdown(report: dict) -> str:
             )
 
     lines.append("")
+    lines.append(
+        "_Halftime: tonight's tagged snaps drive calls; all-time rows are suggestions only "
+        "(not the scout ≥10-season rule)._"
+    )
     lines.append("_2nd half: feature hot formations/combos; expect blitz/coverage in those spots._")
     return "\n".join(lines)
 
