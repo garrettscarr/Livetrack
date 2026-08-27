@@ -6209,35 +6209,100 @@ def _look_table_for_display(rows: list[dict], *, season_label: str = "Season") -
 
 
 def _matchup_game_plan_cues(report: dict) -> list[str]:
+    cs = report.get("call_sheet") or {}
     cues: list[str] = []
+    for e in cs.get("featured") or []:
+        cues.append(str(e.get("message") or ""))
+    for e in cs.get("avoid") or []:
+        cues.append(str(e.get("message") or ""))
+    if cues:
+        return cues[:8]
+    # Fallback when no tagged formation/play sample
     for r in report.get("edges") or []:
         calls = r.get("best_calls") or []
         call_bit = ""
         if calls:
-            call_bit = " · feature " + ", ".join(
+            call_bit = " · " + ", ".join(
                 f"{c['call']} ({c['avg_epa']:+.2f})" for c in calls[:2]
             )
         epa = r.get("avg_epa")
         epa_s = f"{epa:+.3f}" if epa is not None else "—"
         cues.append(
-            f"Run vs **{r['look']}** — they show {r['scout_pct']}% · EPA {epa_s}{call_bit}"
+            f"When **{r['look']}** ({r['scout_pct']}%) · EPA {epa_s}{call_bit}"
         )
-    for r in report.get("traps") or []:
-        epa = r.get("avg_epa")
-        epa_a = r.get("avg_epa_all")
-        epa_s = f"{epa:+.3f}" if epa is not None else "—"
-        epa_as = f"{epa_a:+.3f}" if epa_a is not None else "—"
-        cues.append(
-            f"Kill / caution **{r['look']}** — {r['scout_pct']}% · "
-            f"EPA {epa_s} season / {epa_as} career"
-        )
-    fronts = report.get("fronts") or []
-    covs = report.get("coverages") or []
-    if fronts and len(cues) < 6:
-        cues.append(f"Front lean: **{fronts[0].get('look')}** ({fronts[0].get('scout_pct')}%)")
-    if covs and len(cues) < 6:
-        cues.append(f"Coverage lean: **{covs[0].get('look')}** ({covs[0].get('scout_pct')}%)")
     return cues[:7]
+
+
+def _render_call_sheet_look_block(block: dict, *, season_label: str) -> None:
+    """One scout look → formations / plays / combos that worked."""
+    wt = "Front" if block.get("when_type") == "front" else "Coverage"
+    st.markdown(
+        f"**{block.get('when_look')}** · {wt} · scout **{block.get('scout_pct')}%** "
+        f"· our n={block.get('our_plays', 0)} ({season_label})"
+    )
+    combos = block.get("combos") or []
+    plays = block.get("plays") or []
+    forms = block.get("formations") or []
+    avoid = block.get("avoid") or []
+    if combos:
+        bits = ", ".join(
+            f"**{c['label']}** ({c['avg_epa']:+.2f}, n={c['plays']})" for c in combos[:3]
+        )
+        st.success(f"Combos · {bits}")
+    if plays and not combos:
+        bits = ", ".join(
+            f"**{c['label']}** ({c['avg_epa']:+.2f}, n={c['plays']})" for c in plays[:3]
+        )
+        st.success(f"Plays · {bits}")
+    if forms and not combos and not plays:
+        bits = ", ".join(
+            f"**{c['label']}** ({c['avg_epa']:+.2f}, n={c['plays']})" for c in forms[:3]
+        )
+        st.info(f"Formations · {bits}")
+    if avoid:
+        bits = ", ".join(
+            f"**{c['label']}** ({c['avg_epa']:+.2f})" for c in avoid[:2]
+        )
+        st.warning(f"Avoid · {bits}")
+    if not combos and not plays and not forms:
+        st.caption("Need more tagged formation/play snaps vs this look in your EPA database.")
+
+
+def _matchup_call_sheet_chart(report: dict, *, season_label: str) -> go.Figure | None:
+    """Top matched combos — EPA by call, colored by front vs coverage."""
+    featured = (report.get("call_sheet") or {}).get("featured") or []
+    if not featured:
+        return None
+    rows = featured[:8]
+    labels = [str(r.get("label") or "")[:22] for r in rows]
+    epas = [float(r.get("avg_epa") or 0) for r in rows]
+    colors = ["#40916C" if r.get("when_type") == "front" else "#2D6A4F" for r in rows]
+    hover = [
+        f"{r.get('when_look')} ({r.get('scout_pct')}%) · n={r.get('plays')}"
+        for r in rows
+    ]
+    fig = go.Figure(
+        go.Bar(
+            x=epas,
+            y=labels,
+            orientation="h",
+            marker_color=colors,
+            text=[f"{v:+.2f}" for v in epas],
+            textposition="outside",
+            hovertext=hover,
+            hoverinfo="text",
+        )
+    )
+    fig.update_layout(
+        title=f"Best calls vs their looks ({season_label})",
+        height=max(280, 38 * len(rows) + 90),
+        margin=dict(l=10, r=30, t=44, b=10),
+        paper_bgcolor="#F4F7F5",
+        plot_bgcolor="#FFFFFF",
+        font=dict(color="#14201a"),
+        xaxis_title="Avg EPA",
+    )
+    return fig
 
 
 def _matchup_scout_pct_chart(rows: list[dict], title: str, key: str) -> go.Figure | None:
@@ -6356,7 +6421,7 @@ def _render_scout_matchup_report(
             <div class="mm-stat"><div class="n">{report.get('scout_snaps', 0)}</div><div class="l">Scout snaps</div></div>
             <div class="mm-stat"><div class="n">{report.get('our_plays_sampled', 0):,}</div><div class="l">{season_label}</div></div>
             <div class="mm-stat"><div class="n">{report.get('our_plays_all_time', 0):,}</div><div class="l">Career snaps</div></div>
-            <div class="mm-stat"><div class="n">{len(report.get('edges') or [])}/{len(report.get('traps') or [])}</div><div class="l">Edge / trap</div></div>
+            <div class="mm-stat"><div class="n">{len((report.get('call_sheet') or {}).get('featured') or [])}</div><div class="l">Matched calls</div></div>
           </div>
         </div>
         """,
@@ -6365,79 +6430,99 @@ def _render_scout_matchup_report(
     st.caption(str(report.get("summary") or ""))
     for note in report.get("notes") or []:
         st.caption(note)
-    st.caption(f"Verdicts use **{season_label}** EPA first; * = career-based when season sample is thin.")
+    st.caption(
+        f"Matched from tagged **formations & play calls** in your EPA database "
+        f"({season_label} first, career fallback)."
+    )
 
+    cs = report.get("call_sheet") or {}
     cues = _matchup_game_plan_cues(report)
     if cues:
         items = "".join(f"<li>{c}</li>" for c in cues)
         st.markdown(
-            f'<div class="mm-script"><div class="mm-sec">Game plan cues</div><ol>{items}</ol></div>',
+            f'<div class="mm-script"><div class="mm-sec">Call sheet</div><ol>{items}</ol></div>',
             unsafe_allow_html=True,
         )
 
-    e1, e2 = st.columns(2)
-    with e1:
-        st.markdown("**Edges** · we win vs looks they run")
-        if report.get("edges"):
-            for r in report["edges"]:
-                calls = r.get("best_calls") or []
-                call_bit = ""
-                if calls:
-                    call_bit = " · " + ", ".join(
-                        f"{c['call']} ({c['avg_epa']:+.2f})" for c in calls[:2]
-                    )
-                epa = r.get("avg_epa")
-                epa_a = r.get("avg_epa_all")
-                epa_s = f"{epa:+.3f}" if epa is not None else "—"
-                epa_as = f" / {epa_a:+.3f} career" if epa_a is not None else ""
-                st.success(
-                    f"**{r['look']}** · scout {r['scout_pct']}% · "
-                    f"EPA {epa_s}{epa_as} (n={r.get('our_plays')}){call_bit}"
-                )
-        else:
-            st.caption("No clear edges — need more tagged snaps vs their looks.")
-    with e2:
-        st.markdown("**Traps / caution** · they run it · we struggle")
-        if report.get("traps"):
-            for r in report["traps"]:
-                epa = r.get("avg_epa")
-                epa_a = r.get("avg_epa_all")
-                epa_s = f"{epa:+.3f}" if epa is not None else "—"
-                epa_as = f" / {epa_a:+.3f} career" if epa_a is not None else ""
-                st.warning(
-                    f"**{r['look']}** · scout {r['scout_pct']}% · "
-                    f"EPA {epa_s}{epa_as} (n={r.get('our_plays')})"
-                )
-        else:
-            st.caption("No traps flagged.")
+    fig_calls = _matchup_call_sheet_chart(report, season_label=season_label)
+    if fig_calls is not None:
+        st.plotly_chart(fig_calls, use_container_width=True, key=f"{key_prefix}_chart_calls")
 
-    pool = list(report.get("fronts") or []) + list(report.get("coverages") or [])
-    c1, c2 = st.columns(2)
-    with c1:
-        front_title = (
-            "Their booth fronts"
-            if report.get("booth_front_mode") == "even_42"
-            else "Their fronts"
-        )
-        fig_f = _matchup_scout_pct_chart(
-            report.get("fronts") or [], front_title, f"{key_prefix}_cf"
-        )
-        if fig_f is not None:
-            st.plotly_chart(fig_f, use_container_width=True, key=f"{key_prefix}_chart_front")
-    with c2:
-        fig_c = _matchup_scout_pct_chart(
-            report.get("coverages") or [], "Their coverages", f"{key_prefix}_cc"
-        )
-        if fig_c is not None:
-            st.plotly_chart(fig_c, use_container_width=True, key=f"{key_prefix}_chart_cov")
-
-    fig_epa = _matchup_epa_dual_chart(
-        pool,
-        season_label=season_label,
-        title="Our EPA · season vs career",
+    tab_front, tab_cov, tab_avoid = st.tabs(
+        ["Vs their fronts", "Vs their coverages", "Avoid"]
     )
-    if fig_epa is not None:
-        st.plotly_chart(fig_epa, use_container_width=True, key=f"{key_prefix}_chart_epa")
+    with tab_front:
+        blocks = cs.get("vs_front") or []
+        if not blocks:
+            st.caption("No front call matches — tag formations/plays in your EPA database.")
+        for block in blocks:
+            _render_call_sheet_look_block(block, season_label=season_label)
+            st.markdown("---")
+    with tab_cov:
+        blocks = cs.get("vs_coverage") or []
+        if not blocks:
+            st.caption("No coverage call matches yet.")
+        for block in blocks:
+            _render_call_sheet_look_block(block, season_label=season_label)
+            st.markdown("---")
+    with tab_avoid:
+        avoid_rows = cs.get("avoid") or []
+        if avoid_rows:
+            for e in avoid_rows:
+                st.warning(str(e.get("message") or ""))
+        else:
+            st.caption("No clear plays to shelve vs their top looks.")
+
+    with st.expander("EPA overview · edges & traps", expanded=False):
+        e1, e2 = st.columns(2)
+        with e1:
+            st.markdown("**Edges**")
+            if report.get("edges"):
+                for r in report["edges"]:
+                    epa = r.get("avg_epa")
+                    epa_s = f"{epa:+.3f}" if epa is not None else "—"
+                    st.success(
+                        f"**{r['look']}** · {r['scout_pct']}% · EPA {epa_s} (n={r.get('our_plays')})"
+                    )
+            else:
+                st.caption("—")
+        with e2:
+            st.markdown("**Traps / caution**")
+            if report.get("traps"):
+                for r in report["traps"]:
+                    epa = r.get("avg_epa")
+                    epa_s = f"{epa:+.3f}" if epa is not None else "—"
+                    st.warning(
+                        f"**{r['look']}** · {r['scout_pct']}% · EPA {epa_s} (n={r.get('our_plays')})"
+                    )
+            else:
+                st.caption("—")
+        pool = list(report.get("fronts") or []) + list(report.get("coverages") or [])
+        c1, c2 = st.columns(2)
+        with c1:
+            front_title = (
+                "Their booth fronts"
+                if report.get("booth_front_mode") == "even_42"
+                else "Their fronts"
+            )
+            fig_f = _matchup_scout_pct_chart(
+                report.get("fronts") or [], front_title, f"{key_prefix}_cf"
+            )
+            if fig_f is not None:
+                st.plotly_chart(fig_f, use_container_width=True, key=f"{key_prefix}_chart_front")
+        with c2:
+            fig_c = _matchup_scout_pct_chart(
+                report.get("coverages") or [], "Their coverages", f"{key_prefix}_cc"
+            )
+            if fig_c is not None:
+                st.plotly_chart(fig_c, use_container_width=True, key=f"{key_prefix}_chart_cov")
+        fig_epa = _matchup_epa_dual_chart(
+            pool,
+            season_label=season_label,
+            title="Our EPA · season vs career (by look)",
+        )
+        if fig_epa is not None:
+            st.plotly_chart(fig_epa, use_container_width=True, key=f"{key_prefix}_chart_epa")
 
     front_label = (
         "Booth fronts · detail"

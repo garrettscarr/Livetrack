@@ -549,6 +549,327 @@ def _pick_epa_basis(season_stats: dict, all_stats: dict) -> tuple[dict, str]:
     return all_stats, "all_time" if int(all_stats.get("our_plays") or 0) else "season"
 
 
+def _norm_matchup_tag(val) -> str:
+    s = str(val or "").strip()
+    if not s or s.lower() in {"nan", "none", "unknown", "?", "—", "(none)"}:
+        return ""
+    return s
+
+
+def _offense_combo_label(row: pd.Series) -> str:
+    form = _norm_matchup_tag(row.get("formation"))
+    play = _norm_matchup_tag(row.get("play_call"))
+    if form and play:
+        return f"{form} | {play}"
+    return form or play or ""
+
+
+def _filter_offense_group(sub: pd.DataFrame, kind: str) -> pd.DataFrame:
+    """Prefer tagged formation/play rows when enough sample exists."""
+    if sub is None or sub.empty:
+        return sub
+    col = "form_tagged" if kind == "formation" else "play_tagged"
+    if col not in sub.columns:
+        return sub
+    tagged = sub[sub[col].fillna(0).astype(int) == 1]
+    return tagged if len(tagged) >= 2 else sub
+
+
+def _group_epa_offense(
+    sub: pd.DataFrame,
+    group_col: str,
+    *,
+    min_plays: int = 2,
+    limit: int = 4,
+    descending: bool = True,
+    positive_only: bool = False,
+) -> list[dict]:
+    if sub is None or sub.empty or "epa" not in sub.columns:
+        return []
+    work = sub.copy()
+    if group_col == "combo":
+        work["_grp"] = work.apply(_offense_combo_label, axis=1)
+        grp_col = "_grp"
+        work = _filter_offense_group(work, "formation")
+        work = _filter_offense_group(work, "play")
+    elif group_col == "formation":
+        grp_col = "formation"
+        work = _filter_offense_group(work, "formation")
+    elif group_col == "play_call":
+        grp_col = "play_call"
+        work = _filter_offense_group(work, "play")
+    else:
+        grp_col = group_col
+    if grp_col not in work.columns:
+        return []
+    work["_label"] = work[grp_col].map(_norm_matchup_tag)
+    work = work[work["_label"].ne("")]
+    if work.empty:
+        return []
+    try:
+        g = (
+            work.groupby("_label", as_index=False)
+            .agg(plays=("epa", "count"), avg_epa=("epa", "mean"))
+            .query(f"plays >= {int(min_plays)}")
+        )
+    except Exception:
+        return []
+    if positive_only:
+        g = g[g["avg_epa"] > 0]
+    g = g.sort_values("avg_epa", ascending=not descending).head(limit)
+    out: list[dict] = []
+    for _, row in g.iterrows():
+        lab = str(row["_label"])
+        parts = lab.split(" | ", 1) if " | " in lab else (lab, "")
+        out.append(
+            {
+                "label": lab,
+                "formation": parts[0] if parts else lab,
+                "play_call": parts[1] if len(parts) > 1 else "",
+                "plays": int(row["plays"]),
+                "avg_epa": round(float(row["avg_epa"]), 3),
+            }
+        )
+    return out
+
+
+def _calls_vs_scout_look(
+    offense_df: pd.DataFrame | None,
+    look_col: str,
+    look_name: str,
+    *,
+    booth_mode: str = "as_scouted",
+    min_plays: int = 2,
+) -> dict:
+    """Best formations / plays / combos vs one defensive look."""
+    empty = {
+        "formations": [],
+        "plays": [],
+        "combos": [],
+        "avoid": [],
+        "our_plays": 0,
+    }
+    if offense_df is None or getattr(offense_df, "empty", True):
+        return empty
+    if look_col not in offense_df.columns:
+        return empty
+    kind = "front" if look_col == "def_front" else "coverage" if look_col == "coverage" else "exact"
+    if kind in {"front", "coverage"}:
+        mask = _look_mask(offense_df[look_col], look_name, kind=kind, booth_mode=booth_mode)
+    else:
+        want = str(look_name).strip().lower()
+        mask = offense_df[look_col].astype(str).str.strip().str.lower() == want
+    sub = offense_df.loc[mask]
+    empty["our_plays"] = int(len(sub))
+    if sub.empty:
+        return empty
+    return {
+        "formations": _group_epa_offense(
+            sub, "formation", min_plays=min_plays, limit=3, positive_only=True
+        ),
+        "plays": _group_epa_offense(
+            sub, "play_call", min_plays=min_plays, limit=3, positive_only=True
+        ),
+        "combos": _group_epa_offense(
+            sub, "combo", min_plays=min_plays, limit=3, positive_only=True
+        ),
+        "avoid": _group_epa_offense(
+            sub, "play_call", min_plays=min_plays, limit=2, descending=False, positive_only=False
+        ),
+        "our_plays": int(len(sub)),
+    }
+
+
+def _merge_call_bases(season: dict, career: dict) -> dict:
+    """Season-first call lists; fill from career when season is thin."""
+    out: dict = {}
+    for key in ("formations", "plays", "combos", "avoid"):
+        primary = list(season.get(key) or [])
+        basis = "season"
+        if not primary:
+            primary = list(career.get(key) or [])
+            basis = "all_time" if primary else "season"
+        out[key] = primary
+        out[f"{key}_basis"] = basis
+    season_n = int(season.get("our_plays") or 0)
+    career_n = int(career.get("our_plays") or 0)
+    out["our_plays"] = season_n
+    out["our_plays_all"] = career_n
+    out["basis"] = "season" if season_n >= 2 else ("all_time" if career_n else "season")
+    return out
+
+
+def _call_sheet_entry(
+    *,
+    when_type: str,
+    when_look: str,
+    scout_pct: float,
+    scout_plays: int,
+    item_type: str,
+    item: dict,
+    basis: str,
+    kind: str = "run",
+) -> dict:
+    lab = str(item.get("label") or "")
+    epa = item.get("avg_epa")
+    n = item.get("plays")
+    epa_s = f"{epa:+.2f}" if epa is not None else "—"
+    when_lbl = "Front" if when_type == "front" else "Coverage"
+    if kind == "avoid":
+        msg = (
+            f"When **{when_look}** {when_lbl.lower()} ({scout_pct}%) · "
+            f"avoid **{lab}** ({epa_s}, n={n})"
+        )
+    elif item_type == "combo":
+        msg = (
+            f"When **{when_look}** ({scout_pct}%) · run **{lab}** "
+            f"({epa_s} EPA, n={n})"
+        )
+    elif item_type == "formation":
+        msg = (
+            f"When **{when_look}** ({scout_pct}%) · formation **{lab}** "
+            f"({epa_s}, n={n})"
+        )
+    else:
+        msg = (
+            f"When **{when_look}** ({scout_pct}%) · play **{lab}** "
+            f"({epa_s}, n={n})"
+        )
+    return {
+        "when_type": when_type,
+        "when_look": when_look,
+        "scout_pct": scout_pct,
+        "scout_plays": scout_plays,
+        "item_type": item_type,
+        "label": lab,
+        "formation": str(item.get("formation") or ""),
+        "play_call": str(item.get("play_call") or ""),
+        "avg_epa": epa,
+        "plays": n,
+        "basis": basis,
+        "kind": kind,
+        "message": msg,
+        "weight": float(scout_pct or 0)
+        * (abs(float(epa or 0)) if kind == "avoid" else max(float(epa or 0), 0.01)),
+    }
+
+
+def _build_matchup_call_sheet(
+    *,
+    fronts: list[dict],
+    coverages: list[dict],
+    our_primary: pd.DataFrame | None,
+    our_all: pd.DataFrame | None,
+    booth_mode: str,
+    min_plays: int = 2,
+) -> dict:
+    """Actionable formation/play calls matched to scout fronts & coverages."""
+    vs_front: list[dict] = []
+    vs_coverage: list[dict] = []
+    featured: list[dict] = []
+    avoid: list[dict] = []
+
+    def _process_looks(looks: list[dict], when_type: str, look_col: str, dest: list[dict]) -> None:
+        bm = booth_mode if look_col == "def_front" else "as_scouted"
+        for look in looks[:6]:
+            name = str(look.get("look") or "")
+            if not name or look.get("verdict") == "film":
+                continue
+            scout_pct = float(look.get("scout_pct") or 0)
+            scout_plays = int(look.get("scout_plays") or 0)
+            season_calls = _calls_vs_scout_look(
+                our_primary, look_col, name, booth_mode=bm, min_plays=min_plays
+            )
+            career_calls = _calls_vs_scout_look(
+                our_all, look_col, name, booth_mode=bm, min_plays=min_plays
+            )
+            merged = _merge_call_bases(season_calls, career_calls)
+            block = {
+                "when_type": when_type,
+                "when_look": name,
+                "scout_pct": scout_pct,
+                "scout_plays": scout_plays,
+                "our_plays": merged.get("our_plays", 0),
+                "our_plays_all": merged.get("our_plays_all", 0),
+                "formations": merged.get("formations") or [],
+                "plays": merged.get("plays") or [],
+                "combos": merged.get("combos") or [],
+                "avoid": merged.get("avoid") or [],
+                "basis": merged.get("basis") or "season",
+            }
+            dest.append(block)
+            basis = str(merged.get("basis") or "season")
+            for item in merged.get("combos") or []:
+                if float(item.get("avg_epa") or 0) <= 0:
+                    continue
+                featured.append(
+                    _call_sheet_entry(
+                        when_type=when_type,
+                        when_look=name,
+                        scout_pct=scout_pct,
+                        scout_plays=scout_plays,
+                        item_type="combo",
+                        item=item,
+                        basis=basis,
+                        kind="run",
+                    )
+                )
+            if not merged.get("combos"):
+                for item in merged.get("plays") or []:
+                    featured.append(
+                        _call_sheet_entry(
+                            when_type=when_type,
+                            when_look=name,
+                            scout_pct=scout_pct,
+                            scout_plays=scout_plays,
+                            item_type="play",
+                            item=item,
+                            basis=basis,
+                            kind="run",
+                        )
+                    )
+                for item in merged.get("formations") or []:
+                    featured.append(
+                        _call_sheet_entry(
+                            when_type=when_type,
+                            when_look=name,
+                            scout_pct=scout_pct,
+                            scout_plays=scout_plays,
+                            item_type="formation",
+                            item=item,
+                            basis=basis,
+                            kind="run",
+                        )
+                    )
+            for item in merged.get("avoid") or []:
+                if float(item.get("avg_epa") or 0) >= 0:
+                    continue
+                avoid.append(
+                    _call_sheet_entry(
+                        when_type=when_type,
+                        when_look=name,
+                        scout_pct=scout_pct,
+                        scout_plays=scout_plays,
+                        item_type="play",
+                        item=item,
+                        basis=basis,
+                        kind="avoid",
+                    )
+                )
+
+    _process_looks(fronts, "front", "def_front", vs_front)
+    _process_looks(coverages, "coverage", "coverage", vs_coverage)
+
+    featured.sort(key=lambda r: -float(r.get("weight") or 0))
+    avoid.sort(key=lambda r: -float(r.get("weight") or 0))
+    return {
+        "vs_front": vs_front,
+        "vs_coverage": vs_coverage,
+        "featured": featured[:10],
+        "avoid": avoid[:6],
+    }
+
+
 def build_scout_matchup_report(
     opponent: str,
     offense_df: pd.DataFrame | None,
@@ -788,14 +1109,23 @@ def build_scout_matchup_report(
         if our_all is not None and not getattr(our_all, "empty", True)
         else 0
     )
+    call_sheet = _build_matchup_call_sheet(
+        fronts=fronts,
+        coverages=coverages,
+        our_primary=our_primary,
+        our_all=our_all,
+        booth_mode=mode,
+        min_plays=max(2, min_our_plays - 1),
+    )
+    n_calls = len(call_sheet.get("featured") or [])
     summary = (
         f"vs {opp or 'upload'}: scout {total} D snaps · lean {top_f} / {top_c} · "
-        f"{len(edges)} edge · {len(traps)} trap/caution · "
+        f"{n_calls} formation/play calls matched · "
         f"our n={our_n:,} ({primary_label}) · career n={our_all_n:,}"
     )
     return {
         "opponent": opp or "Opponent",
-        "version": 2,
+        "version": 3,
         "scout_snaps": total,
         "booth_front_mode": mode,
         "our_plays_sampled": our_n,
@@ -806,6 +1136,7 @@ def build_scout_matchup_report(
         "fronts_detail": fronts_detail,
         "coverages": coverages,
         "def_calls": def_calls,
+        "call_sheet": call_sheet,
         "edges": edges[:6],
         "traps": traps[:6],
         "summary": summary,
@@ -832,6 +1163,28 @@ def scout_matchup_report_markdown(report: dict) -> str:
     for note in report.get("notes") or []:
         lines.append(f"> {note}")
     if report.get("notes"):
+        lines.append("")
+
+    cs = report.get("call_sheet") or {}
+    if cs.get("featured") or cs.get("avoid"):
+        lines.extend(["## Call sheet — formations & plays vs their looks", ""])
+        for e in cs.get("featured") or []:
+            epa = e.get("avg_epa")
+            epa_s = f"{epa:+.3f}" if epa is not None else "—"
+            wt = "Front" if e.get("when_type") == "front" else "Coverage"
+            lines.append(
+                f"- When **{e.get('when_look')}** ({wt}, {e.get('scout_pct')}%): "
+                f"**{e.get('label')}** · EPA {epa_s} (n={e.get('plays')})"
+            )
+        if cs.get("avoid"):
+            lines.extend(["", "### Avoid", ""])
+            for e in cs["avoid"]:
+                epa = e.get("avg_epa")
+                epa_s = f"{epa:+.3f}" if epa is not None else "—"
+                lines.append(
+                    f"- vs **{e.get('when_look')}** ({e.get('scout_pct')}%): "
+                    f"shelve **{e.get('label')}** · EPA {epa_s}"
+                )
         lines.append("")
 
     def _row(r: dict, *, dual: bool = True) -> str:

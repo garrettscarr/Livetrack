@@ -214,38 +214,72 @@ def build_matchup_report_pdf(report: dict) -> bytes:
     for note in report.get("notes") or []:
         story.append(Paragraph(str(note), sub_style))
 
-    # Game plan cues
+    # Call sheet cues (formations & plays vs their looks)
+    cs = report.get("call_sheet") or {}
     cues: list[str] = []
-    for r in report.get("edges") or []:
-        calls = r.get("best_calls") or []
-        call_bit = ""
-        if calls:
-            call_bit = " · run " + ", ".join(
-                f"{c['call']} ({c['avg_epa']:+.2f})" for c in calls[:2]
+    for e in cs.get("featured") or []:
+        msg = str(e.get("message") or "").replace("**", "")
+        cues.append(msg)
+    for e in cs.get("avoid") or []:
+        msg = "AVOID · " + str(e.get("message") or "").replace("**", "")
+        cues.append(msg)
+    if not cues:
+        for r in report.get("edges") or []:
+            cues.append(
+                f"EDGE {r['look']} — they show {r['scout_pct']}% · "
+                f"EPA {_epa_fmt(r.get('avg_epa'))}"
             )
-        cues.append(
-            f"EDGE {r['look']} — they show {r['scout_pct']}% · "
-            f"our EPA {_epa_fmt(r.get('avg_epa'))} (season){call_bit}"
-        )
-    for r in report.get("traps") or []:
-        cues.append(
-            f"TRAP {r['look']} — they show {r['scout_pct']}% · "
-            f"our EPA {_epa_fmt(r.get('avg_epa'))} (season) / "
-            f"{_epa_fmt(r.get('avg_epa_all'))} (career)"
-        )
-    fronts = report.get("fronts") or []
-    covs = report.get("coverages") or []
-    if fronts:
-        cues.append(f"Expect front lean: {fronts[0].get('look')} ({fronts[0].get('scout_pct')}%)")
-    if covs:
-        cues.append(f"Expect coverage lean: {covs[0].get('look')} ({covs[0].get('scout_pct')}%)")
 
     if cues:
         story.append(Spacer(1, 0.12 * inch))
-        story.append(Paragraph("Game plan cues", h2_style))
-        story.extend(_bullets(cues[:7], cue_style))
+        story.append(Paragraph("Call sheet", h2_style))
+        story.extend(_bullets(cues[:8], cue_style))
 
-    # Charts
+    featured = cs.get("featured") or []
+    if featured:
+        chart_calls = _chart_scout_tendency(
+            [
+                {
+                    "look": f"{r.get('when_look')} → {str(r.get('label') or '')[:16]}",
+                    "scout_pct": abs(float(r.get("avg_epa") or 0)) * 100,
+                }
+                for r in featured[:6]
+            ],
+            f"Best calls vs their looks ({season_label[:14]})",
+        )
+        if chart_calls:
+            story.append(Spacer(1, 0.08 * inch))
+            story.append(Image(chart_calls, width=6.9 * inch, height=2.5 * inch))
+        rows = [["Their look", "Formation / play", "EPA", "n"]]
+        for e in featured[:10]:
+            rows.append(
+                [
+                    f"{e.get('when_look')} ({e.get('scout_pct')}%)",
+                    str(e.get("label") or "")[:28],
+                    _epa_fmt(e.get("avg_epa")),
+                    str(e.get("plays") or ""),
+                ]
+            )
+        tbl = Table(rows, colWidths=[1.65 * inch, 2.35 * inch, 0.85 * inch, 0.55 * inch])
+        tbl.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), BRAND),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, -1), 8),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F4F7F5")]),
+                    ("GRID", (0, 0), (-1, -1), 0.25, colors.HexColor("#D8E2DC")),
+                ]
+            )
+        )
+        story.append(Spacer(1, 0.06 * inch))
+        story.append(tbl)
+        story.append(Spacer(1, 0.1 * inch))
+
+    # Scout tendency charts
+    fronts = report.get("fronts") or []
+    covs = report.get("coverages") or []
     front_title = (
         "Their booth fronts (scout %)"
         if report.get("booth_front_mode") == "even_42"
