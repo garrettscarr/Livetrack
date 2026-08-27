@@ -6248,7 +6248,7 @@ def _fmt_matchup_call_chip(c: dict) -> str:
 
 def _render_call_sheet_look_block(block: dict, *, season_label: str) -> None:
     """One scout look → formations / plays / combos that worked."""
-    from mesh_engine import SCOUT_MATCHUP_SEASON_TRUST_PLAYS as MATCHUP_SEASON_TRUST_PLAYS
+    from mesh_engine import MATCHUP_SEASON_TRUST_PLAYS
 
     wt = "Front" if block.get("when_type") == "front" else "Coverage"
     st.markdown(
