@@ -6180,7 +6180,7 @@ def _apply_pending_live_situation() -> None:
 
 
 def _look_table_for_display(rows: list[dict], *, season_label: str = "Season") -> pd.DataFrame:
-    """Coach-facing table — season EPA primary, career alongside."""
+    """Coach-facing table — season EPA when n≥10; career marked with * on verdict."""
     if not rows:
         return pd.DataFrame()
     out = []
@@ -6233,36 +6233,48 @@ def _matchup_game_plan_cues(report: dict) -> list[str]:
     return cues[:7]
 
 
+def _fmt_matchup_call_chip(c: dict) -> str:
+    basis = str(c.get("basis") or "season")
+    n = c.get("plays")
+    epa = c.get("avg_epa")
+    if basis == "all_time":
+        n_bit = f"career n={n}"
+    elif basis == "season_thin":
+        n_bit = f"n={n} season"
+    else:
+        n_bit = f"n={n} this year"
+    return f"**{c['label']}** ({epa:+.2f}, {n_bit})"
+
+
 def _render_call_sheet_look_block(block: dict, *, season_label: str) -> None:
     """One scout look → formations / plays / combos that worked."""
+    from mesh_engine import MATCHUP_SEASON_TRUST_PLAYS
+
     wt = "Front" if block.get("when_type") == "front" else "Coverage"
     st.markdown(
         f"**{block.get('when_look')}** · {wt} · scout **{block.get('scout_pct')}%** "
         f"· our n={block.get('our_plays', 0)} ({season_label})"
     )
+    if int(block.get("our_plays") or 0) < MATCHUP_SEASON_TRUST_PLAYS:
+        st.caption(
+            f"Under {MATCHUP_SEASON_TRUST_PLAYS} season snaps vs this look — "
+            "call EPA below uses **career** unless noted."
+        )
     combos = block.get("combos") or []
     plays = block.get("plays") or []
     forms = block.get("formations") or []
     avoid = block.get("avoid") or []
     if combos:
-        bits = ", ".join(
-            f"**{c['label']}** ({c['avg_epa']:+.2f}, n={c['plays']})" for c in combos[:3]
-        )
+        bits = ", ".join(_fmt_matchup_call_chip(c) for c in combos[:3])
         st.success(f"Combos · {bits}")
     if plays and not combos:
-        bits = ", ".join(
-            f"**{c['label']}** ({c['avg_epa']:+.2f}, n={c['plays']})" for c in plays[:3]
-        )
+        bits = ", ".join(_fmt_matchup_call_chip(c) for c in plays[:3])
         st.success(f"Plays · {bits}")
     if forms and not combos and not plays:
-        bits = ", ".join(
-            f"**{c['label']}** ({c['avg_epa']:+.2f}, n={c['plays']})" for c in forms[:3]
-        )
+        bits = ", ".join(_fmt_matchup_call_chip(c) for c in forms[:3])
         st.info(f"Formations · {bits}")
     if avoid:
-        bits = ", ".join(
-            f"**{c['label']}** ({c['avg_epa']:+.2f})" for c in avoid[:2]
-        )
+        bits = ", ".join(_fmt_matchup_call_chip(c) for c in avoid[:2])
         st.warning(f"Avoid · {bits}")
     if not combos and not plays and not forms:
         st.caption("Need more tagged formation/play snaps vs this look in your EPA database.")
@@ -6372,7 +6384,7 @@ def _render_scout_matchup_report(
     key_prefix: str = "scout_rpt",
     expanded: bool = True,
 ) -> None:
-    """Coach-ready scout × EPA report — season first, career context, PDF export."""
+    """Coach-ready scout × EPA report — 10+ season snaps per call, else career; PDF export."""
     if not report or not report.get("scout_snaps"):
         st.info(report.get("summary") or "No scout defense data yet.")
         return
@@ -6431,8 +6443,8 @@ def _render_scout_matchup_report(
     for note in report.get("notes") or []:
         st.caption(note)
     st.caption(
-        f"Matched from tagged **formations & play calls** in your EPA database "
-        f"({season_label} first, career fallback)."
+        "Each call uses **this season** when it has **≥10** tagged snaps this year; "
+        "otherwise **career** EPA (all-time). Regenerate the report after uploading scout."
     )
 
     cs = report.get("call_sheet") or {}

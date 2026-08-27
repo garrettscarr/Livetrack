@@ -326,6 +326,9 @@ def scout_favorite_looks(
 
 # --- Scout matchup report (upload × our EPA) ---------------------------------
 
+MATCHUP_SEASON_TRUST_PLAYS = 10  # use season EPA when a call has this many snaps this year
+
+
 _COV_ALIASES: dict[str, set[str]] = {
     "0": {"0", "cover 0", "0 switch", "cover 0 switch"},
     "1": {"1", "cover 1", "cover 1 press man", "cover 1 man"},
@@ -535,18 +538,99 @@ def _primary_offense_sample(
 
 
 def _pick_epa_basis(season_stats: dict, all_stats: dict) -> tuple[dict, str]:
-    """Prefer current-season EPA; fall back to all-time when sample is thin."""
+    """Season EPA when n≥MATCHUP_SEASON_TRUST_PLAYS; else career (if available)."""
+    season_n = int(season_stats.get("our_plays") or 0)
+    career_n = int(all_stats.get("our_plays") or 0)
     if (
-        not season_stats.get("thin")
+        season_n >= MATCHUP_SEASON_TRUST_PLAYS
         and season_stats.get("avg_epa") is not None
-        and int(season_stats.get("our_plays") or 0) >= 1
     ):
         return season_stats, "season"
-    if all_stats.get("avg_epa") is not None and int(all_stats.get("our_plays") or 0) >= 1:
+    if all_stats.get("avg_epa") is not None and career_n >= 1:
         return all_stats, "all_time"
-    if not season_stats.get("thin"):
-        return season_stats, "season"
-    return all_stats, "all_time" if int(all_stats.get("our_plays") or 0) else "season"
+    if season_stats.get("avg_epa") is not None and season_n >= 1:
+        return season_stats, "season_thin"
+    return all_stats if career_n else season_stats, "all_time" if career_n else "season"
+
+
+def _call_item_label(item: dict) -> str:
+    return str(item.get("label") or item.get("call") or "").strip()
+
+
+def _pick_call_item(
+    season_item: dict | None,
+    career_item: dict | None,
+) -> dict | None:
+    """Per call: season stats when n≥10 this year, else career."""
+    s = season_item or {}
+    c = career_item or {}
+    season_n = int(s.get("plays") or 0)
+    if season_item and season_n >= MATCHUP_SEASON_TRUST_PLAYS:
+        out = dict(season_item)
+        out["basis"] = "season"
+        if career_item:
+            out["plays_all"] = int(c.get("plays") or 0)
+            out["avg_epa_all"] = c.get("avg_epa")
+        if "label" not in out and out.get("call"):
+            out["label"] = out["call"]
+        return out
+    if career_item and int(c.get("plays") or 0) >= 2:
+        out = dict(career_item)
+        out["basis"] = "all_time"
+        if season_item:
+            out["plays_season"] = season_n
+            out["avg_epa_season"] = s.get("avg_epa")
+        if "label" not in out and out.get("call"):
+            out["label"] = out["call"]
+        return out
+    if season_item and season_n >= 2:
+        out = dict(season_item)
+        out["basis"] = "season_thin"
+        if "label" not in out and out.get("call"):
+            out["label"] = out["call"]
+        return out
+    return None
+
+
+def _merge_call_item_lists(
+    season_list: list[dict],
+    career_list: list[dict],
+    *,
+    descending: bool = True,
+    limit: int = 4,
+) -> list[dict]:
+    s_map = {_call_item_label(x): x for x in season_list if _call_item_label(x)}
+    c_map = {_call_item_label(x): x for x in career_list if _call_item_label(x)}
+    merged: list[dict] = []
+    for lab in set(s_map) | set(c_map):
+        picked = _pick_call_item(s_map.get(lab), c_map.get(lab))
+        if picked:
+            merged.append(picked)
+    merged.sort(key=lambda r: float(r.get("avg_epa") or 0), reverse=descending)
+    return merged[:limit]
+
+
+def _merge_best_calls(season_stats: dict, all_stats: dict) -> list[dict]:
+    s_calls = [
+        {**c, "label": str(c.get("call") or "")}
+        for c in (season_stats.get("best_calls") or [])
+        if str(c.get("call") or "").strip()
+    ]
+    a_calls = [
+        {**c, "label": str(c.get("call") or "")}
+        for c in (all_stats.get("best_calls") or [])
+        if str(c.get("call") or "").strip()
+    ]
+    merged = _merge_call_item_lists(s_calls, a_calls, limit=3)
+    return [
+        {
+            "call": m.get("label") or m.get("call"),
+            "plays": m.get("plays"),
+            "avg_epa": m.get("avg_epa"),
+            "basis": m.get("basis"),
+        }
+        for m in merged
+    ]
 
 
 def _norm_matchup_tag(val) -> str:
@@ -681,21 +765,29 @@ def _calls_vs_scout_look(
 
 
 def _merge_call_bases(season: dict, career: dict) -> dict:
-    """Season-first call lists; fill from career when season is thin."""
+    """Blend call lists: season when n≥10 this year, else career per call."""
     out: dict = {}
-    for key in ("formations", "plays", "combos", "avoid"):
-        primary = list(season.get(key) or [])
-        basis = "season"
-        if not primary:
-            primary = list(career.get(key) or [])
-            basis = "all_time" if primary else "season"
-        out[key] = primary
-        out[f"{key}_basis"] = basis
+    for key, desc, lim in (
+        ("formations", True, 3),
+        ("plays", True, 3),
+        ("combos", True, 3),
+        ("avoid", False, 2),
+    ):
+        out[key] = _merge_call_item_lists(
+            list(season.get(key) or []),
+            list(career.get(key) or []),
+            descending=desc,
+            limit=lim,
+        )
     season_n = int(season.get("our_plays") or 0)
     career_n = int(career.get("our_plays") or 0)
     out["our_plays"] = season_n
     out["our_plays_all"] = career_n
-    out["basis"] = "season" if season_n >= 2 else ("all_time" if career_n else "season")
+    out["basis"] = (
+        "season"
+        if season_n >= MATCHUP_SEASON_TRUST_PLAYS
+        else ("all_time" if career_n else "season")
+    )
     return out
 
 
@@ -713,27 +805,34 @@ def _call_sheet_entry(
     lab = str(item.get("label") or "")
     epa = item.get("avg_epa")
     n = item.get("plays")
+    item_basis = str(item.get("basis") or basis or "season")
     epa_s = f"{epa:+.2f}" if epa is not None else "—"
+    if item_basis == "all_time":
+        n_bit = f"career n={n}"
+    elif item_basis == "season_thin":
+        n_bit = f"n={n} (thin season — career preferred when n<{MATCHUP_SEASON_TRUST_PLAYS})"
+    else:
+        n_bit = f"n={n} this year"
     when_lbl = "Front" if when_type == "front" else "Coverage"
     if kind == "avoid":
         msg = (
             f"When **{when_look}** {when_lbl.lower()} ({scout_pct}%) · "
-            f"avoid **{lab}** ({epa_s}, n={n})"
+            f"avoid **{lab}** ({epa_s}, {n_bit})"
         )
     elif item_type == "combo":
         msg = (
             f"When **{when_look}** ({scout_pct}%) · run **{lab}** "
-            f"({epa_s} EPA, n={n})"
+            f"({epa_s} EPA, {n_bit})"
         )
     elif item_type == "formation":
         msg = (
             f"When **{when_look}** ({scout_pct}%) · formation **{lab}** "
-            f"({epa_s}, n={n})"
+            f"({epa_s}, {n_bit})"
         )
     else:
         msg = (
             f"When **{when_look}** ({scout_pct}%) · play **{lab}** "
-            f"({epa_s}, n={n})"
+            f"({epa_s}, {n_bit})"
         )
     return {
         "when_type": when_type,
@@ -746,7 +845,7 @@ def _call_sheet_entry(
         "play_call": str(item.get("play_call") or ""),
         "avg_epa": epa,
         "plays": n,
-        "basis": basis,
+        "basis": item_basis,
         "kind": kind,
         "message": msg,
         "weight": float(scout_pct or 0)
@@ -1035,9 +1134,9 @@ def build_scout_matchup_report(
                     if name.lower() in {"even", "odd", "bear"}
                     else name
                 )
-            best = season_stats.get("best_calls") or []
-            if not best:
-                best = all_stats.get("best_calls") or []
+            best = _merge_best_calls(season_stats, all_stats)
+            disp_epa = basis_stats.get("avg_epa")
+            disp_plays = int(basis_stats.get("our_plays") or 0)
             rows.append(
                 {
                     "look": display,
@@ -1046,11 +1145,13 @@ def build_scout_matchup_report(
                     "our_plays": season_stats["our_plays"],
                     "avg_epa": season_stats["avg_epa"],
                     "success_rate": season_stats["success_rate"],
-                    "thin": bool(season_stats.get("thin")),
+                    "thin": season_stats["our_plays"] < MATCHUP_SEASON_TRUST_PLAYS,
                     "our_plays_all": all_stats["our_plays"],
                     "avg_epa_all": all_stats["avg_epa"],
                     "success_rate_all": all_stats["success_rate"],
                     "thin_all": bool(all_stats.get("thin")),
+                    "avg_epa_used": disp_epa,
+                    "our_plays_used": disp_plays,
                     "verdict": verdict,
                     "verdict_basis": basis,
                     "best_calls": best,
@@ -1098,7 +1199,11 @@ def build_scout_matchup_report(
         notes.append(
             "Booth mode: 4-2 — numbered scout fronts mapped to Even for EPA match."
         )
-    notes.append(f"Primary EPA sample: **{primary_label}** (season-first; all-time shown alongside).")
+    notes.append(f"Primary EPA sample: **{primary_label}**.")
+    notes.append(
+        f"Season EPA when a call has **≥{MATCHUP_SEASON_TRUST_PLAYS}** snaps this year; "
+        "otherwise **career** (all-time)."
+    )
     our_n = (
         int(len(our_primary))
         if our_primary is not None and not getattr(our_primary, "empty", True)
@@ -1158,6 +1263,8 @@ def scout_matchup_report_markdown(report: dict) -> str:
         f"Primary sample: **{report.get('primary_season_label', 'This season')}**",
         "",
         "_Season EPA first; career in parentheses. Verdict* = based on career sample._",
+        "",
+        f"_Calls use **season** stats when n≥{MATCHUP_SEASON_TRUST_PLAYS} this year; otherwise **career**._",
         "",
     ]
     for note in report.get("notes") or []:

@@ -250,14 +250,22 @@ def build_matchup_report_pdf(report: dict) -> bytes:
         if chart_calls:
             story.append(Spacer(1, 0.08 * inch))
             story.append(Image(chart_calls, width=6.9 * inch, height=2.5 * inch))
-        rows = [["Their look", "Formation / play", "EPA", "n"]]
+        rows = [["Their look", "Formation / play", "EPA", "Sample"]]
         for e in featured[:10]:
+            basis = str(e.get("basis") or "season")
+            n = e.get("plays") or ""
+            if basis == "all_time":
+                sample = f"career n={n}"
+            elif basis == "season_thin":
+                sample = f"n={n} season"
+            else:
+                sample = f"n={n} this year"
             rows.append(
                 [
                     f"{e.get('when_look')} ({e.get('scout_pct')}%)",
                     str(e.get("label") or "")[:28],
                     _epa_fmt(e.get("avg_epa")),
-                    str(e.get("plays") or ""),
+                    sample,
                 ]
             )
         tbl = Table(rows, colWidths=[1.65 * inch, 2.35 * inch, 0.85 * inch, 0.55 * inch])
@@ -334,7 +342,8 @@ def build_matchup_report_pdf(report: dict) -> bytes:
     story.append(
         Paragraph(
             f"<para alignment='center'><font size='8' color='#5c6b62'>"
-            f"Season EPA ({season_label}) drives edges/traps; career EPA for context.</font></para>",
+            f"Each call uses season EPA when it has ≥10 tagged snaps this year ({season_label}); "
+            f"otherwise career (all-time). * = verdict from career sample.</font></para>",
             ParagraphStyle("Footer", alignment=TA_CENTER, fontSize=8),
         )
     )
