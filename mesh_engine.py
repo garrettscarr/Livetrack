@@ -328,6 +328,7 @@ def scout_favorite_looks(
 
 # Scout / pre-game matchup report only — halftime uses tonight's tags + all-time ideas.
 SCOUT_MATCHUP_SEASON_TRUST_PLAYS = 10
+SCOUT_MATCHUP_CAREER_MIN_PLAYS = 5  # min tagged snaps to trust career fallback
 MATCHUP_SEASON_TRUST_PLAYS = SCOUT_MATCHUP_SEASON_TRUST_PLAYS
 
 
@@ -540,7 +541,7 @@ def _primary_offense_sample(
 
 
 def _pick_epa_basis(season_stats: dict, all_stats: dict) -> tuple[dict, str]:
-    """Season EPA when n≥MATCHUP_SEASON_TRUST_PLAYS; else career (if available)."""
+    """Season EPA when n≥10 this year; else career when n≥5; else insufficient."""
     season_n = int(season_stats.get("our_plays") or 0)
     career_n = int(all_stats.get("our_plays") or 0)
     if (
@@ -548,11 +549,18 @@ def _pick_epa_basis(season_stats: dict, all_stats: dict) -> tuple[dict, str]:
         and season_stats.get("avg_epa") is not None
     ):
         return season_stats, "season"
-    if all_stats.get("avg_epa") is not None and career_n >= 1:
+    if (
+        all_stats.get("avg_epa") is not None
+        and career_n >= SCOUT_MATCHUP_CAREER_MIN_PLAYS
+    ):
         return all_stats, "all_time"
-    if season_stats.get("avg_epa") is not None and season_n >= 1:
+    if (
+        season_stats.get("avg_epa") is not None
+        and season_n >= SCOUT_MATCHUP_CAREER_MIN_PLAYS
+    ):
         return season_stats, "season_thin"
-    return all_stats if career_n else season_stats, "all_time" if career_n else "season"
+    empty = season_stats if season_n >= career_n else all_stats
+    return empty, "insufficient"
 
 
 def _call_item_label(item: dict) -> str:
@@ -563,31 +571,26 @@ def _pick_call_item(
     season_item: dict | None,
     career_item: dict | None,
 ) -> dict | None:
-    """Per call: season stats when n≥10 this year, else career."""
+    """Per call: season when n≥10 this year; else career when n≥5; else omit."""
     s = season_item or {}
     c = career_item or {}
     season_n = int(s.get("plays") or 0)
+    career_n = int(c.get("plays") or 0)
     if season_item and season_n >= MATCHUP_SEASON_TRUST_PLAYS:
         out = dict(season_item)
         out["basis"] = "season"
         if career_item:
-            out["plays_all"] = int(c.get("plays") or 0)
+            out["plays_all"] = career_n
             out["avg_epa_all"] = c.get("avg_epa")
         if "label" not in out and out.get("call"):
             out["label"] = out["call"]
         return out
-    if career_item and int(c.get("plays") or 0) >= 2:
+    if career_item and career_n >= SCOUT_MATCHUP_CAREER_MIN_PLAYS:
         out = dict(career_item)
         out["basis"] = "all_time"
         if season_item:
             out["plays_season"] = season_n
             out["avg_epa_season"] = s.get("avg_epa")
-        if "label" not in out and out.get("call"):
-            out["label"] = out["call"]
-        return out
-    if season_item and season_n >= 2:
-        out = dict(season_item)
-        out["basis"] = "season_thin"
         if "label" not in out and out.get("call"):
             out["label"] = out["call"]
         return out
@@ -650,14 +653,21 @@ def _offense_combo_label(row: pd.Series) -> str:
     return form or play or ""
 
 
-def _filter_offense_group(sub: pd.DataFrame, kind: str) -> pd.DataFrame:
-    """Prefer tagged formation/play rows when enough sample exists."""
+def _filter_offense_group(
+    sub: pd.DataFrame,
+    kind: str,
+    *,
+    tagged_only: bool = False,
+) -> pd.DataFrame:
+    """Prefer tagged rows; scout mode never falls back to untagged."""
     if sub is None or sub.empty:
         return sub
     col = "form_tagged" if kind == "formation" else "play_tagged"
     if col not in sub.columns:
         return sub
     tagged = sub[sub[col].fillna(0).astype(int) == 1]
+    if tagged_only:
+        return tagged
     return tagged if len(tagged) >= 2 else sub
 
 
@@ -669,6 +679,7 @@ def _group_epa_offense(
     limit: int = 4,
     descending: bool = True,
     positive_only: bool = False,
+    tagged_only: bool = True,
 ) -> list[dict]:
     if sub is None or sub.empty or "epa" not in sub.columns:
         return []
@@ -676,14 +687,14 @@ def _group_epa_offense(
     if group_col == "combo":
         work["_grp"] = work.apply(_offense_combo_label, axis=1)
         grp_col = "_grp"
-        work = _filter_offense_group(work, "formation")
-        work = _filter_offense_group(work, "play")
+        work = _filter_offense_group(work, "formation", tagged_only=tagged_only)
+        work = _filter_offense_group(work, "play", tagged_only=tagged_only)
     elif group_col == "formation":
         grp_col = "formation"
-        work = _filter_offense_group(work, "formation")
+        work = _filter_offense_group(work, "formation", tagged_only=tagged_only)
     elif group_col == "play_call":
         grp_col = "play_call"
-        work = _filter_offense_group(work, "play")
+        work = _filter_offense_group(work, "play", tagged_only=tagged_only)
     else:
         grp_col = group_col
     if grp_col not in work.columns:
@@ -726,8 +737,10 @@ def _calls_vs_scout_look(
     *,
     booth_mode: str = "as_scouted",
     min_plays: int = 2,
+    career_min_plays: int | None = None,
 ) -> dict:
-    """Best formations / plays / combos vs one defensive look."""
+    """Best tagged formations / plays / combos vs one defensive look."""
+    floor = int(career_min_plays if career_min_plays is not None else min_plays)
     empty = {
         "formations": [],
         "plays": [],
@@ -746,23 +759,33 @@ def _calls_vs_scout_look(
         want = str(look_name).strip().lower()
         mask = offense_df[look_col].astype(str).str.strip().str.lower() == want
     sub = offense_df.loc[mask]
-    empty["our_plays"] = int(len(sub))
+    tagged = sub
+    if "play_tagged" in sub.columns:
+        tagged = sub[sub["play_tagged"].fillna(0).astype(int) == 1]
+    empty["our_plays"] = int(len(tagged) if len(tagged) else sub)
     if sub.empty:
         return empty
+    grp_min = max(int(min_plays), floor)
     return {
         "formations": _group_epa_offense(
-            sub, "formation", min_plays=min_plays, limit=3, positive_only=True
+            sub, "formation", min_plays=grp_min, limit=3, positive_only=True, tagged_only=True
         ),
         "plays": _group_epa_offense(
-            sub, "play_call", min_plays=min_plays, limit=3, positive_only=True
+            sub, "play_call", min_plays=grp_min, limit=3, positive_only=True, tagged_only=True
         ),
         "combos": _group_epa_offense(
-            sub, "combo", min_plays=min_plays, limit=3, positive_only=True
+            sub, "combo", min_plays=grp_min, limit=3, positive_only=True, tagged_only=True
         ),
         "avoid": _group_epa_offense(
-            sub, "play_call", min_plays=min_plays, limit=2, descending=False, positive_only=False
+            sub,
+            "play_call",
+            min_plays=grp_min,
+            limit=2,
+            descending=False,
+            positive_only=False,
+            tagged_only=True,
         ),
-        "our_plays": int(len(sub)),
+        "our_plays": int(len(tagged) if len(tagged) else sub),
     }
 
 
@@ -881,8 +904,14 @@ def _build_matchup_call_sheet(
             season_calls = _calls_vs_scout_look(
                 our_primary, look_col, name, booth_mode=bm, min_plays=min_plays
             )
+            career_df = our_all if our_all is not None else our_primary
             career_calls = _calls_vs_scout_look(
-                our_all, look_col, name, booth_mode=bm, min_plays=min_plays
+                career_df,
+                look_col,
+                name,
+                booth_mode=bm,
+                min_plays=SCOUT_MATCHUP_CAREER_MIN_PLAYS,
+                career_min_plays=SCOUT_MATCHUP_CAREER_MIN_PLAYS,
             )
             merged = _merge_call_bases(season_calls, career_calls)
             block = {
@@ -1128,7 +1157,10 @@ def build_scout_matchup_report(
                 positive_calls_only=True,
             )
             basis_stats, basis = _pick_epa_basis(season_stats, all_stats)
-            verdict = _verdict_for_look(basis_stats, scout_n, total)
+            if basis == "insufficient":
+                verdict = "unknown"
+            else:
+                verdict = _verdict_for_look(basis_stats, scout_n, total)
             display = name
             if col == "def_front" and mode == "even_42" and bm == mode:
                 display = (
@@ -1203,8 +1235,8 @@ def build_scout_matchup_report(
         )
     notes.append(f"Primary EPA sample: **{primary_label}**.")
     notes.append(
-        f"Season EPA when a call has **≥{MATCHUP_SEASON_TRUST_PLAYS}** snaps this year; "
-        "otherwise **career** (all-time)."
+        f"Calls: **season** EPA when n≥{MATCHUP_SEASON_TRUST_PLAYS} this year; "
+        f"else **career** when n≥{SCOUT_MATCHUP_CAREER_MIN_PLAYS}. Thinner samples hidden."
     )
     our_n = (
         int(len(our_primary))
@@ -1232,7 +1264,7 @@ def build_scout_matchup_report(
     )
     return {
         "opponent": opp or "Opponent",
-        "version": 3,
+        "version": 4,
         "scout_snaps": total,
         "booth_front_mode": mode,
         "our_plays_sampled": our_n,
@@ -1266,7 +1298,8 @@ def scout_matchup_report_markdown(report: dict) -> str:
         "",
         "_Season EPA first; career in parentheses. Verdict* = based on career sample._",
         "",
-        f"_Scout pre-game: calls use **season** when n≥{MATCHUP_SEASON_TRUST_PLAYS} this year; otherwise **career**._",
+        f"_Scout pre-game: season when n≥{MATCHUP_SEASON_TRUST_PLAYS} this year; "
+        f"career when n≥{SCOUT_MATCHUP_CAREER_MIN_PLAYS}; thinner calls omitted._",
         "",
     ]
     for note in report.get("notes") or []:
@@ -1281,9 +1314,15 @@ def scout_matchup_report_markdown(report: dict) -> str:
             epa = e.get("avg_epa")
             epa_s = f"{epa:+.3f}" if epa is not None else "—"
             wt = "Front" if e.get("when_type") == "front" else "Coverage"
+            basis = str(e.get("basis") or "season")
+            n = e.get("plays")
+            if basis == "all_time":
+                n_bit = f"career n={n}"
+            else:
+                n_bit = f"n={n} this year"
             lines.append(
                 f"- When **{e.get('when_look')}** ({wt}, {e.get('scout_pct')}%): "
-                f"**{e.get('label')}** · EPA {epa_s} (n={e.get('plays')})"
+                f"**{e.get('label')}** · EPA {epa_s} ({n_bit})"
             )
         if cs.get("avoid"):
             lines.extend(["", "### Avoid", ""])
@@ -1297,22 +1336,27 @@ def scout_matchup_report_markdown(report: dict) -> str:
         lines.append("")
 
     def _row(r: dict, *, dual: bool = True) -> str:
-        epa = r.get("avg_epa")
+        epa = r.get("avg_epa_used")
+        if epa is None:
+            epa = r.get("avg_epa")
         suc = r.get("success_rate")
         epa_s = f"{epa:+.3f}" if epa is not None else "—"
         suc_s = f"{100 * suc:.0f}%" if suc is not None else "—"
         basis = r.get("verdict_basis") or ""
+        n_used = r.get("our_plays_used")
+        if n_used is None:
+            n_used = r.get("our_plays")
         if dual and r.get("avg_epa_all") is not None:
             epa_a = r.get("avg_epa_all")
             epa_all_s = f"{epa_a:+.3f}" if epa_a is not None else "—"
             n_all = r.get("our_plays_all", "—")
             epa_col = f"{epa_s} ({epa_all_s} career)"
-            n_col = f"{r.get('our_plays')} ({n_all})"
+            n_col = f"{n_used} ({n_all})"
         else:
             epa_col = epa_s
-            n_col = str(r.get("our_plays"))
+            n_col = str(n_used)
         verdict = str(r.get("verdict") or "—")
-        if basis == "all_time" and verdict not in {"film", "—"}:
+        if basis == "all_time" and verdict not in {"film", "—", "unknown"}:
             verdict += "*"
         return (
             f"| {r.get('look')} | {r.get('scout_pct')}% | {n_col} | "

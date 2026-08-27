@@ -6179,8 +6179,21 @@ def _apply_pending_live_situation() -> None:
         st.session_state.lt_situation_note = note
 
 
+def _scout_sample_label(r: dict) -> str:
+    """n label for scout matchup — reflects season vs career basis."""
+    basis = str(r.get("verdict_basis") or r.get("basis") or "season")
+    n = r.get("our_plays_used")
+    if n is None:
+        n = r.get("plays") if r.get("plays") is not None else r.get("our_plays")
+    if basis == "all_time":
+        return f"career n={n}"
+    if basis in {"season", "season_thin"}:
+        return f"n={n} this year"
+    return f"n={n}"
+
+
 def _look_table_for_display(rows: list[dict], *, season_label: str = "Season") -> pd.DataFrame:
-    """Coach-facing table — season EPA when n≥10; career marked with * on verdict."""
+    """Coach-facing table — shows season + career context and basis-used EPA/n."""
     if not rows:
         return pd.DataFrame()
     out = []
@@ -6189,16 +6202,24 @@ def _look_table_for_display(rows: list[dict], *, season_label: str = "Season") -
         suc = r.get("success_rate")
         epa = r.get("avg_epa")
         epa_all = r.get("avg_epa_all")
+        epa_used = r.get("avg_epa_used")
+        if epa_used is None:
+            epa_used = epa if r.get("verdict_basis") != "all_time" else epa_all
+        n_used = r.get("our_plays_used")
+        if n_used is None:
+            n_used = r.get("our_plays")
         verdict = str(r.get("verdict") or "—")
-        if r.get("verdict_basis") == "all_time" and verdict not in {"film", "—"}:
+        if r.get("verdict_basis") == "all_time" and verdict not in {"film", "—", "unknown"}:
             verdict += "*"
         row = {
             "Look": r.get("look"),
             "Scout %": r.get("scout_pct"),
             "Scout n": r.get("scout_plays"),
+            "Used n": _scout_sample_label(r),
             f"Our n ({sl})": r.get("our_plays"),
             f"EPA ({sl})": epa if epa is not None else "—",
             "EPA (career)": epa_all if epa_all is not None else "—",
+            "EPA (used)": epa_used if epa_used is not None else "—",
             "Success": f"{100 * suc:.0f}%" if suc is not None else "—",
             "Verdict": verdict,
         }
@@ -6225,10 +6246,12 @@ def _matchup_game_plan_cues(report: dict) -> list[str]:
             call_bit = " · " + ", ".join(
                 f"{c['call']} ({c['avg_epa']:+.2f})" for c in calls[:2]
             )
-        epa = r.get("avg_epa")
+        epa = r.get("avg_epa_used")
+        if epa is None:
+            epa = r.get("avg_epa")
         epa_s = f"{epa:+.3f}" if epa is not None else "—"
         cues.append(
-            f"When **{r['look']}** ({r['scout_pct']}%) · EPA {epa_s}{call_bit}"
+            f"When **{r['look']}** ({r['scout_pct']}%) · EPA {epa_s} ({_scout_sample_label(r)}){call_bit}"
         )
     return cues[:7]
 
@@ -6251,6 +6274,16 @@ def _render_call_sheet_look_block(block: dict, *, season_label: str) -> None:
     from mesh_engine import MATCHUP_SEASON_TRUST_PLAYS
 
     wt = "Front" if block.get("when_type") == "front" else "Coverage"
+    combos = block.get("combos") or []
+    plays = block.get("plays") or []
+    forms = block.get("formations") or []
+    avoid = block.get("avoid") or []
+    if not combos and not plays and not forms and not avoid:
+        st.caption(
+            f"No tagged calls with enough sample vs **{block.get('when_look')}** "
+            f"(need ≥{MATCHUP_SEASON_TRUST_PLAYS} this year or ≥5 career)."
+        )
+        return
     st.markdown(
         f"**{block.get('when_look')}** · {wt} · scout **{block.get('scout_pct')}%** "
         f"· our n={block.get('our_plays', 0)} ({season_label})"
@@ -6258,12 +6291,8 @@ def _render_call_sheet_look_block(block: dict, *, season_label: str) -> None:
     if int(block.get("our_plays") or 0) < MATCHUP_SEASON_TRUST_PLAYS:
         st.caption(
             f"Under {MATCHUP_SEASON_TRUST_PLAYS} season snaps vs this look — "
-            "call EPA below uses **career** unless noted."
+            "call EPA uses **career** when n≥5 tagged."
         )
-    combos = block.get("combos") or []
-    plays = block.get("plays") or []
-    forms = block.get("formations") or []
-    avoid = block.get("avoid") or []
     if combos:
         bits = ", ".join(_fmt_matchup_call_chip(c) for c in combos[:3])
         st.success(f"Combos · {bits}")
@@ -6443,8 +6472,8 @@ def _render_scout_matchup_report(
     for note in report.get("notes") or []:
         st.caption(note)
     st.caption(
-        "Scout / pre-game only: each call uses **this season** when it has **≥10** tagged snaps "
-        "this year; otherwise **career** EPA. Regenerate after uploading scout."
+        "Scout / pre-game only: **≥10** tagged snaps this year → season EPA; "
+        f"else **≥5** career tagged snaps. Calls below that are hidden. Regenerate after scout upload."
     )
 
     cs = report.get("call_sheet") or {}
@@ -6491,10 +6520,12 @@ def _render_scout_matchup_report(
             st.markdown("**Edges**")
             if report.get("edges"):
                 for r in report["edges"]:
-                    epa = r.get("avg_epa")
+                    epa = r.get("avg_epa_used")
+                    if epa is None:
+                        epa = r.get("avg_epa")
                     epa_s = f"{epa:+.3f}" if epa is not None else "—"
                     st.success(
-                        f"**{r['look']}** · {r['scout_pct']}% · EPA {epa_s} (n={r.get('our_plays')})"
+                        f"**{r['look']}** · {r['scout_pct']}% · EPA {epa_s} ({_scout_sample_label(r)})"
                     )
             else:
                 st.caption("—")
@@ -6502,10 +6533,12 @@ def _render_scout_matchup_report(
             st.markdown("**Traps / caution**")
             if report.get("traps"):
                 for r in report["traps"]:
-                    epa = r.get("avg_epa")
+                    epa = r.get("avg_epa_used")
+                    if epa is None:
+                        epa = r.get("avg_epa")
                     epa_s = f"{epa:+.3f}" if epa is not None else "—"
                     st.warning(
-                        f"**{r['look']}** · {r['scout_pct']}% · EPA {epa_s} (n={r.get('our_plays')})"
+                        f"**{r['look']}** · {r['scout_pct']}% · EPA {epa_s} ({_scout_sample_label(r)})"
                     )
             else:
                 st.caption("—")

@@ -343,7 +343,7 @@ def build_matchup_report_pdf(report: dict) -> bytes:
         Paragraph(
             f"<para alignment='center'><font size='8' color='#5c6b62'>"
             f"Each call uses season EPA when it has ≥10 tagged snaps this year ({season_label}); "
-            f"otherwise career (all-time). * = verdict from career sample.</font></para>",
+            f"otherwise career when n≥5. Thin samples hidden. * = verdict from career.</font></para>",
             ParagraphStyle("Footer", alignment=TA_CENTER, fontSize=8),
         )
     )
