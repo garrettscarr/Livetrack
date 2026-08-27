@@ -6179,27 +6179,126 @@ def _apply_pending_live_situation() -> None:
         st.session_state.lt_situation_note = note
 
 
-def _look_table_for_display(rows: list[dict]) -> pd.DataFrame:
-    """Coach-facing table for scout × our success rows."""
+def _look_table_for_display(rows: list[dict], *, season_label: str = "Season") -> pd.DataFrame:
+    """Coach-facing table — season EPA primary, career alongside."""
     if not rows:
         return pd.DataFrame()
     out = []
+    sl = str(season_label or "Season")[:14]
     for r in rows:
         suc = r.get("success_rate")
         epa = r.get("avg_epa")
+        epa_all = r.get("avg_epa_all")
+        verdict = str(r.get("verdict") or "—")
+        if r.get("verdict_basis") == "all_time" and verdict not in {"film", "—"}:
+            verdict += "*"
         row = {
             "Look": r.get("look"),
             "Scout %": r.get("scout_pct"),
             "Scout n": r.get("scout_plays"),
-            "Our n": r.get("our_plays"),
-            "Our EPA": epa if epa is not None else "—",
+            f"Our n ({sl})": r.get("our_plays"),
+            f"EPA ({sl})": epa if epa is not None else "—",
+            "EPA (career)": epa_all if epa_all is not None else "—",
             "Success": f"{100 * suc:.0f}%" if suc is not None else "—",
-            "Verdict": str(r.get("verdict") or "—"),
+            "Verdict": verdict,
         }
         if r.get("booth_tag"):
             row["Booth"] = r.get("booth_tag")
         out.append(row)
     return pd.DataFrame(out)
+
+
+def _matchup_game_plan_cues(report: dict) -> list[str]:
+    cues: list[str] = []
+    for r in report.get("edges") or []:
+        calls = r.get("best_calls") or []
+        call_bit = ""
+        if calls:
+            call_bit = " · feature " + ", ".join(
+                f"{c['call']} ({c['avg_epa']:+.2f})" for c in calls[:2]
+            )
+        epa = r.get("avg_epa")
+        epa_s = f"{epa:+.3f}" if epa is not None else "—"
+        cues.append(
+            f"Run vs **{r['look']}** — they show {r['scout_pct']}% · EPA {epa_s}{call_bit}"
+        )
+    for r in report.get("traps") or []:
+        epa = r.get("avg_epa")
+        epa_a = r.get("avg_epa_all")
+        epa_s = f"{epa:+.3f}" if epa is not None else "—"
+        epa_as = f"{epa_a:+.3f}" if epa_a is not None else "—"
+        cues.append(
+            f"Kill / caution **{r['look']}** — {r['scout_pct']}% · "
+            f"EPA {epa_s} season / {epa_as} career"
+        )
+    fronts = report.get("fronts") or []
+    covs = report.get("coverages") or []
+    if fronts and len(cues) < 6:
+        cues.append(f"Front lean: **{fronts[0].get('look')}** ({fronts[0].get('scout_pct')}%)")
+    if covs and len(cues) < 6:
+        cues.append(f"Coverage lean: **{covs[0].get('look')}** ({covs[0].get('scout_pct')}%)")
+    return cues[:7]
+
+
+def _matchup_scout_pct_chart(rows: list[dict], title: str, key: str) -> go.Figure | None:
+    if not rows:
+        return None
+    df = pd.DataFrame(rows[:8])
+    if df.empty or "scout_pct" not in df.columns:
+        return None
+    fig = px.bar(
+        df.sort_values("scout_pct", ascending=True),
+        x="scout_pct",
+        y="look",
+        orientation="h",
+        title=title,
+        text="scout_pct",
+    )
+    fig.update_traces(marker_color="#2D6A4F", texttemplate="%{text}%", textposition="outside")
+    fig.update_layout(
+        height=max(260, 42 * len(df) + 80),
+        margin=dict(l=10, r=20, t=40, b=10),
+        paper_bgcolor="#F4F7F5",
+        plot_bgcolor="#FFFFFF",
+        font=dict(color="#14201a"),
+        xaxis_title="Scout %",
+        yaxis_title="",
+    )
+    return fig
+
+
+def _matchup_epa_dual_chart(
+    rows: list[dict],
+    *,
+    season_label: str,
+    title: str,
+) -> go.Figure | None:
+    usable = [
+        r
+        for r in (rows or [])[:8]
+        if r.get("avg_epa") is not None or r.get("avg_epa_all") is not None
+    ]
+    if not usable:
+        return None
+    labels = [str(r.get("look") or "") for r in usable]
+    season_vals = [float(r.get("avg_epa") or 0) for r in usable]
+    career_vals = [float(r.get("avg_epa_all") or 0) for r in usable]
+    fig = go.Figure()
+    fig.add_bar(name=season_label[:18], x=labels, y=season_vals, marker_color="#40916C")
+    fig.add_bar(name="Career", x=labels, y=career_vals, marker_color="#95D5B2")
+    fig.add_hline(y=0, line_color="#666", line_width=1)
+    fig.update_layout(
+        barmode="group",
+        title=title,
+        height=320,
+        margin=dict(l=10, r=10, t=44, b=60),
+        paper_bgcolor="#F4F7F5",
+        plot_bgcolor="#FFFFFF",
+        font=dict(color="#14201a"),
+        yaxis_title="Avg EPA",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+    )
+    return fig
 
 
 def _render_scout_matchup_report(
@@ -6208,73 +6307,165 @@ def _render_scout_matchup_report(
     key_prefix: str = "scout_rpt",
     expanded: bool = True,
 ) -> None:
-    """Show tendencies × our success after scout upload / on Scout page."""
+    """Coach-ready scout × EPA report — season first, career context, PDF export."""
     if not report or not report.get("scout_snaps"):
         st.info(report.get("summary") or "No scout defense data yet.")
         return
 
-    st.markdown(f"### Scout matchup · vs {report.get('opponent')}")
+    opp = str(report.get("opponent") or "Opponent")
+    season_label = str(report.get("primary_season_label") or "This season")
+
+    st.markdown(
+        f"""
+        <style>
+        .mm-wrap {{ margin: 0.25rem 0 1rem 0; }}
+        .mm-title {{
+            font-size: 1.45rem; font-weight: 900; color: #1B4332 !important;
+            letter-spacing: 0.03em; margin-bottom: 0.35rem;
+        }}
+        .mm-strip {{
+            display: grid; grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 0.55rem; margin: 0.65rem 0 0.85rem 0;
+        }}
+        .mm-stat {{
+            background: #F4F7F5; border: 1px solid #D8E2DC; border-radius: 12px;
+            padding: 0.65rem 0.75rem; text-align: center;
+        }}
+        .mm-stat .n {{ font-size: 1.55rem; font-weight: 900; color: #1B4332 !important; }}
+        .mm-stat .l {{
+            font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.06em;
+            color: #5c6b62 !important; margin-top: 0.15rem;
+        }}
+        .mm-script {{
+            background: #1B4332; color: #fff !important; border-radius: 14px;
+            padding: 0.85rem 1rem; margin: 0.5rem 0 0.85rem 0;
+        }}
+        .mm-script ol {{
+            margin: 0.35rem 0 0 0; padding-left: 1.2rem; font-size: 1.02rem;
+            font-weight: 700; line-height: 1.42; color: #fff !important;
+        }}
+        .mm-script li {{ margin-bottom: 0.3rem; color: #fff !important; }}
+        .mm-sec {{
+            font-size: 0.78rem; font-weight: 800; text-transform: uppercase;
+            letter-spacing: 0.08em; color: #95D5B2 !important; margin: 0;
+        }}
+        </style>
+        <div class="mm-wrap">
+          <div class="mm-title">Matchup · vs {opp}</div>
+          <div class="mm-strip">
+            <div class="mm-stat"><div class="n">{report.get('scout_snaps', 0)}</div><div class="l">Scout snaps</div></div>
+            <div class="mm-stat"><div class="n">{report.get('our_plays_sampled', 0):,}</div><div class="l">{season_label}</div></div>
+            <div class="mm-stat"><div class="n">{report.get('our_plays_all_time', 0):,}</div><div class="l">Career snaps</div></div>
+            <div class="mm-stat"><div class="n">{len(report.get('edges') or [])}/{len(report.get('traps') or [])}</div><div class="l">Edge / trap</div></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.caption(str(report.get("summary") or ""))
     for note in report.get("notes") or []:
         st.caption(note)
+    st.caption(f"Verdicts use **{season_label}** EPA first; * = career-based when season sample is thin.")
+
+    cues = _matchup_game_plan_cues(report)
+    if cues:
+        items = "".join(f"<li>{c}</li>" for c in cues)
+        st.markdown(
+            f'<div class="mm-script"><div class="mm-sec">Game plan cues</div><ol>{items}</ol></div>',
+            unsafe_allow_html=True,
+        )
 
     e1, e2 = st.columns(2)
     with e1:
-        st.markdown("**Edges** (we good vs looks they run)")
+        st.markdown("**Edges** · we win vs looks they run")
         if report.get("edges"):
             for r in report["edges"]:
                 calls = r.get("best_calls") or []
                 call_bit = ""
                 if calls:
-                    call_bit = " · feature " + ", ".join(
+                    call_bit = " · " + ", ".join(
                         f"{c['call']} ({c['avg_epa']:+.2f})" for c in calls[:2]
                     )
                 epa = r.get("avg_epa")
+                epa_a = r.get("avg_epa_all")
                 epa_s = f"{epa:+.3f}" if epa is not None else "—"
+                epa_as = f" / {epa_a:+.3f} career" if epa_a is not None else ""
                 st.success(
                     f"**{r['look']}** · scout {r['scout_pct']}% · "
-                    f"EPA {epa_s} (n={r['our_plays']}){call_bit}"
+                    f"EPA {epa_s}{epa_as} (n={r.get('our_plays')}){call_bit}"
                 )
         else:
-            st.caption("No clear edges yet (need more tagged snaps vs their looks).")
+            st.caption("No clear edges — need more tagged snaps vs their looks.")
     with e2:
-        st.markdown("**Traps / caution** (they run it · we struggle)")
+        st.markdown("**Traps / caution** · they run it · we struggle")
         if report.get("traps"):
             for r in report["traps"]:
                 epa = r.get("avg_epa")
+                epa_a = r.get("avg_epa_all")
                 epa_s = f"{epa:+.3f}" if epa is not None else "—"
+                epa_as = f" / {epa_a:+.3f} career" if epa_a is not None else ""
                 st.warning(
                     f"**{r['look']}** · scout {r['scout_pct']}% · "
-                    f"EPA {epa_s} (n={r['our_plays']})"
+                    f"EPA {epa_s}{epa_as} (n={r.get('our_plays')})"
                 )
         else:
             st.caption("No traps flagged.")
 
+    pool = list(report.get("fronts") or []) + list(report.get("coverages") or [])
+    c1, c2 = st.columns(2)
+    with c1:
+        front_title = (
+            "Their booth fronts"
+            if report.get("booth_front_mode") == "even_42"
+            else "Their fronts"
+        )
+        fig_f = _matchup_scout_pct_chart(
+            report.get("fronts") or [], front_title, f"{key_prefix}_cf"
+        )
+        if fig_f is not None:
+            st.plotly_chart(fig_f, use_container_width=True, key=f"{key_prefix}_chart_front")
+    with c2:
+        fig_c = _matchup_scout_pct_chart(
+            report.get("coverages") or [], "Their coverages", f"{key_prefix}_cc"
+        )
+        if fig_c is not None:
+            st.plotly_chart(fig_c, use_container_width=True, key=f"{key_prefix}_chart_cov")
+
+    fig_epa = _matchup_epa_dual_chart(
+        pool,
+        season_label=season_label,
+        title="Our EPA · season vs career",
+    )
+    if fig_epa is not None:
+        st.plotly_chart(fig_epa, use_container_width=True, key=f"{key_prefix}_chart_epa")
+
     front_label = (
-        "Booth fronts · full table"
+        "Booth fronts · detail"
         if report.get("booth_front_mode") == "even_42"
-        else "Fronts · full table"
+        else "Fronts · detail"
     )
     with st.expander(front_label, expanded=expanded):
-        tf = _look_table_for_display(report.get("fronts") or [])
+        tf = _look_table_for_display(report.get("fronts") or [], season_label=season_label)
         if tf.empty:
             st.caption("No fronts in scout.")
         else:
             st.dataframe(tf, hide_index=True, use_container_width=True)
     if report.get("fronts_detail") and report.get("booth_front_mode") == "even_42":
         with st.expander("Scout front detail (film only)", expanded=False):
-            td = _look_table_for_display(report.get("fronts_detail") or [])
+            td = _look_table_for_display(
+                report.get("fronts_detail") or [], season_label=season_label
+            )
             if not td.empty:
                 cols = [c for c in ["Look", "Booth", "Scout %", "Scout n"] if c in td.columns]
                 st.dataframe(td[cols], hide_index=True, use_container_width=True)
-    with st.expander("Coverages · full table", expanded=False):
-        tc = _look_table_for_display(report.get("coverages") or [])
+    with st.expander("Coverages · detail", expanded=False):
+        tc = _look_table_for_display(report.get("coverages") or [], season_label=season_label)
         if tc.empty:
             st.caption("No coverages in scout.")
         else:
             st.dataframe(tc, hide_index=True, use_container_width=True)
     with st.expander("Front | Coverage pairs", expanded=False):
-        tp = _look_table_for_display(report.get("def_calls") or [])
+        tp = _look_table_for_display(report.get("def_calls") or [], season_label=season_label)
         if tp.empty:
             st.caption("No paired calls in scout.")
         else:
@@ -6283,19 +6474,39 @@ def _render_scout_matchup_report(
     from mesh_engine import scout_matchup_report_markdown
 
     md = scout_matchup_report_markdown(report)
-    st.download_button(
-        "Download matchup report (.md)",
-        data=md,
-        file_name=f"scout_matchup_{report.get('opponent', 'opp').replace(' ', '_')}.md",
-        mime="text/markdown",
-        key=f"{key_prefix}_dl",
-        use_container_width=True,
-        type="primary",
-    )
+    d1, d2 = st.columns(2)
+    with d1:
+        st.download_button(
+            "Download PDF (charts + tables)",
+            data=_matchup_pdf_bytes(report),
+            file_name=f"matchup_{opp.replace(' ', '_')}.pdf",
+            mime="application/pdf",
+            key=f"{key_prefix}_dl_pdf",
+            use_container_width=True,
+            type="primary",
+        )
+    with d2:
+        st.download_button(
+            "Download markdown",
+            data=md,
+            file_name=f"scout_matchup_{opp.replace(' ', '_')}.md",
+            mime="text/markdown",
+            key=f"{key_prefix}_dl_md",
+            use_container_width=True,
+        )
+
+
+def _matchup_pdf_bytes(report: dict) -> bytes:
+    try:
+        from matchup_report_pdf import build_matchup_report_pdf
+
+        return build_matchup_report_pdf(report)
+    except Exception as exc:
+        return f"PDF error: {exc}".encode("utf-8")
 
 
 def _save_scout_matchup_report(report: dict) -> Path | None:
-    """Persist markdown under data/scout_reports/."""
+    """Persist markdown (+ PDF when available) under data/scout_reports/."""
     if not report or not report.get("scout_snaps"):
         return None
     try:
@@ -6306,6 +6517,13 @@ def _save_scout_matchup_report(report: dict) -> Path | None:
         opp = str(report.get("opponent") or "opponent").replace("/", "-")
         path = out_dir / f"{opp}_matchup.md"
         path.write_text(scout_matchup_report_markdown(report), encoding="utf-8")
+        try:
+            pdf_bytes = _matchup_pdf_bytes(report)
+            if pdf_bytes[:4] == b"%PDF":
+                pdf_path = out_dir / f"{opp}_matchup.pdf"
+                pdf_path.write_bytes(pdf_bytes)
+        except Exception:
+            pass
         return path
     except Exception:
         return None
@@ -6371,17 +6589,15 @@ def _render_scout_upload_matchup_panel(offense_df: pd.DataFrame) -> None:
             },
             reverse=True,
         )
-    default_seasons = [
-        s for s in season_opts if s in {"24-25", "25-26", "26-27", current_season_id()}
-    ]
-    if not default_seasons and season_opts:
-        default_seasons = season_opts[:2]
+    default_seasons = [current_season_id()] if current_season_id() in season_opts else (
+        season_opts[:1] if season_opts else []
+    )
     our_seasons = st.multiselect(
-        "Our EPA seasons to include",
+        "Our EPA seasons (primary — career always shown alongside)",
         options=season_opts or ["all"],
         default=default_seasons or season_opts,
         key="scout_upload_our_seasons",
-        help="Last year + this year’s scrimmages is the usual week-1 mix.",
+        help="Defaults to this season. Career EPA is always computed for context.",
     )
 
     up = st.file_uploader(

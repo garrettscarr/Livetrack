@@ -502,6 +502,53 @@ def _filter_offense_seasons(
     return offense_df.loc[s.isin(want)].copy()
 
 
+def _filter_current_season_offense(
+    offense_df: pd.DataFrame | None,
+) -> pd.DataFrame | None:
+    """Current-season slice for primary EPA (falls back to all if untagged)."""
+    if offense_df is None or getattr(offense_df, "empty", True):
+        return offense_df
+    if "season" not in offense_df.columns:
+        return offense_df
+    mask = offense_df["season"].map(_is_current_season_value).fillna(False).astype(bool)
+    sub = offense_df.loc[mask].copy()
+    return sub if not sub.empty else offense_df
+
+
+def _primary_offense_sample(
+    offense_df: pd.DataFrame | None,
+    our_seasons: list[str] | None,
+) -> tuple[pd.DataFrame | None, str]:
+    """Season-first EPA sample: explicit multiselect → current season → all."""
+    if our_seasons:
+        filtered = _filter_offense_seasons(offense_df, our_seasons)
+        label = ", ".join(str(s) for s in our_seasons)
+        return filtered, label
+    cur = _filter_current_season_offense(offense_df)
+    try:
+        import team_config as tc
+
+        label = tc.current_season_label()
+    except Exception:
+        label = "This season"
+    return cur, label
+
+
+def _pick_epa_basis(season_stats: dict, all_stats: dict) -> tuple[dict, str]:
+    """Prefer current-season EPA; fall back to all-time when sample is thin."""
+    if (
+        not season_stats.get("thin")
+        and season_stats.get("avg_epa") is not None
+        and int(season_stats.get("our_plays") or 0) >= 1
+    ):
+        return season_stats, "season"
+    if all_stats.get("avg_epa") is not None and int(all_stats.get("our_plays") or 0) >= 1:
+        return all_stats, "all_time"
+    if not season_stats.get("thin"):
+        return season_stats, "season"
+    return all_stats, "all_time" if int(all_stats.get("our_plays") or 0) else "season"
+
+
 def build_scout_matchup_report(
     opponent: str,
     offense_df: pd.DataFrame | None,
@@ -552,18 +599,25 @@ def build_scout_matchup_report(
     if scout is None or getattr(scout, "empty", True):
         return empty
 
-    our = _filter_offense_seasons(offense_df, our_seasons)
+    our_all = offense_df
+    our_primary, primary_label = _primary_offense_sample(offense_df, our_seasons)
     notes: list[str] = []
-    # Coverage tags are sparse in recent seasons — fall back for cov EPA
-    our_cov = our
-    if our is not None and not getattr(our, "empty", True) and "coverage" in our.columns:
-        cov_tagged = our["coverage"].notna() & (
-            our["coverage"].astype(str).str.strip().str.lower().isin({"", "nan", "none"}) == False
+    # Coverage tags are sparse in recent seasons — fall back for cov EPA (all-time)
+    our_cov_primary = our_primary
+    our_cov_all = our_all
+    if (
+        our_primary is not None
+        and not getattr(our_primary, "empty", True)
+        and "coverage" in our_primary.columns
+    ):
+        cov_tagged = our_primary["coverage"].notna() & (
+            our_primary["coverage"].astype(str).str.strip().str.lower().isin({"", "nan", "none"})
+            == False
         )
-        if int(cov_tagged.sum()) < 30 and offense_df is not None and not getattr(offense_df, "empty", True):
-            our_cov = offense_df
+        if int(cov_tagged.sum()) < 30 and our_all is not None and not getattr(our_all, "empty", True):
+            our_cov_primary = our_all
             notes.append(
-                "Coverage EPA uses all stored seasons (selected seasons lack coverage tags)."
+                "Coverage EPA (season) uses all stored seasons — thin coverage tags this year."
             )
     total = int(len(scout))
     mode = (
@@ -601,11 +655,13 @@ def build_scout_matchup_report(
         *,
         front_mode: str | None = None,
         film_only: bool = False,
-        sample: pd.DataFrame | None = None,
+        sample_primary: pd.DataFrame | None = None,
+        sample_all: pd.DataFrame | None = None,
     ) -> list[dict]:
         rows: list[dict] = []
         bm = front_mode if front_mode is not None else mode
-        sample_df = our if sample is None else sample
+        sample_season = our_primary if sample_primary is None else sample_primary
+        sample_career = our_all if sample_all is None else sample_all
         for it in items:
             name = str(it.get("name") or "")
             if not name or name.lower() in {"nan", "none", ""}:
@@ -623,21 +679,34 @@ def build_scout_matchup_report(
                         "our_plays": 0,
                         "avg_epa": None,
                         "success_rate": None,
+                        "our_plays_all": 0,
+                        "avg_epa_all": None,
+                        "success_rate_all": None,
                         "verdict": "film",
+                        "verdict_basis": "film",
                         "best_calls": [],
                         "thin": True,
                     }
                 )
                 continue
-            our_stats = _our_stats_vs_look(
-                sample_df,
+            season_stats = _our_stats_vs_look(
+                sample_season,
                 col,
                 name,
                 min_plays=min_our_plays,
                 booth_mode=bm if col == "def_front" else "as_scouted",
                 positive_calls_only=True,
             )
-            verdict = _verdict_for_look(our_stats, scout_n, total)
+            all_stats = _our_stats_vs_look(
+                sample_career,
+                col,
+                name,
+                min_plays=min_our_plays,
+                booth_mode=bm if col == "def_front" else "as_scouted",
+                positive_calls_only=True,
+            )
+            basis_stats, basis = _pick_epa_basis(season_stats, all_stats)
+            verdict = _verdict_for_look(basis_stats, scout_n, total)
             display = name
             if col == "def_front" and mode == "even_42" and bm == mode:
                 display = (
@@ -645,17 +714,25 @@ def build_scout_matchup_report(
                     if name.lower() in {"even", "odd", "bear"}
                     else name
                 )
+            best = season_stats.get("best_calls") or []
+            if not best:
+                best = all_stats.get("best_calls") or []
             rows.append(
                 {
                     "look": display,
                     "scout_plays": scout_n,
                     "scout_pct": pct,
-                    "our_plays": our_stats["our_plays"],
-                    "avg_epa": our_stats["avg_epa"],
-                    "success_rate": our_stats["success_rate"],
+                    "our_plays": season_stats["our_plays"],
+                    "avg_epa": season_stats["avg_epa"],
+                    "success_rate": season_stats["success_rate"],
+                    "thin": bool(season_stats.get("thin")),
+                    "our_plays_all": all_stats["our_plays"],
+                    "avg_epa_all": all_stats["avg_epa"],
+                    "success_rate_all": all_stats["success_rate"],
+                    "thin_all": bool(all_stats.get("thin")),
                     "verdict": verdict,
-                    "best_calls": our_stats.get("best_calls") or [],
-                    "thin": bool(our_stats.get("thin")),
+                    "verdict_basis": basis,
+                    "best_calls": best,
                 }
             )
         return rows
@@ -667,16 +744,22 @@ def build_scout_matchup_report(
         front_mode="as_scouted",
         film_only=(mode == "even_42"),
     )
-    coverages = _enrich(covs_raw, "coverage", sample=our_cov)
-    def_calls = _enrich(calls_raw, "def_call", sample=our_cov)
+    coverages = _enrich(
+        covs_raw,
+        "coverage",
+        sample_primary=our_cov_primary,
+        sample_all=our_cov_all,
+    )
+    def_calls = _enrich(
+        calls_raw,
+        "def_call",
+        sample_primary=our_cov_primary,
+        sample_all=our_cov_all,
+    )
 
     pool = list(fronts) + list(coverages)
-    edges = [r for r in pool if r.get("verdict") == "edge" and not r.get("thin")]
-    traps = [
-        r
-        for r in pool
-        if r.get("verdict") in {"trap", "caution"} and not r.get("thin")
-    ]
+    edges = [r for r in pool if r.get("verdict") == "edge"]
+    traps = [r for r in pool if r.get("verdict") in {"trap", "caution"}]
     edges.sort(
         key=lambda r: (float(r.get("scout_pct") or 0) * float(r.get("avg_epa") or 0)),
         reverse=True,
@@ -694,23 +777,31 @@ def build_scout_matchup_report(
         notes.append(
             "Booth mode: 4-2 — numbered scout fronts mapped to Even for EPA match."
         )
-    if our_seasons:
-        notes.append("Our sample seasons: " + ", ".join(str(s) for s in our_seasons))
+    notes.append(f"Primary EPA sample: **{primary_label}** (season-first; all-time shown alongside).")
     our_n = (
-        int(len(our))
-        if our is not None and not getattr(our, "empty", True)
+        int(len(our_primary))
+        if our_primary is not None and not getattr(our_primary, "empty", True)
+        else 0
+    )
+    our_all_n = (
+        int(len(our_all))
+        if our_all is not None and not getattr(our_all, "empty", True)
         else 0
     )
     summary = (
         f"vs {opp or 'upload'}: scout {total} D snaps · lean {top_f} / {top_c} · "
-        f"{len(edges)} edge · {len(traps)} trap/caution · our n={our_n:,}"
+        f"{len(edges)} edge · {len(traps)} trap/caution · "
+        f"our n={our_n:,} ({primary_label}) · career n={our_all_n:,}"
     )
     return {
         "opponent": opp or "Opponent",
+        "version": 2,
         "scout_snaps": total,
         "booth_front_mode": mode,
         "our_plays_sampled": our_n,
+        "our_plays_all_time": our_all_n,
         "our_seasons": list(our_seasons or []),
+        "primary_season_label": primary_label,
         "fronts": fronts,
         "fronts_detail": fronts_detail,
         "coverages": coverages,
@@ -731,7 +822,11 @@ def scout_matchup_report_markdown(report: dict) -> str:
         str(report.get("summary") or ""),
         "",
         f"Scout defense snaps: **{report.get('scout_snaps', 0)}**",
-        f"Our snaps matched: **{report.get('our_plays_sampled', '—')}**",
+        f"Our snaps (season): **{report.get('our_plays_sampled', '—')}**",
+        f"Our snaps (career): **{report.get('our_plays_all_time', '—')}**",
+        f"Primary sample: **{report.get('primary_season_label', 'This season')}**",
+        "",
+        "_Season EPA first; career in parentheses. Verdict* = based on career sample._",
         "",
     ]
     for note in report.get("notes") or []:
@@ -739,14 +834,27 @@ def scout_matchup_report_markdown(report: dict) -> str:
     if report.get("notes"):
         lines.append("")
 
-    def _row(r: dict) -> str:
+    def _row(r: dict, *, dual: bool = True) -> str:
         epa = r.get("avg_epa")
         suc = r.get("success_rate")
         epa_s = f"{epa:+.3f}" if epa is not None else "—"
         suc_s = f"{100 * suc:.0f}%" if suc is not None else "—"
+        basis = r.get("verdict_basis") or ""
+        if dual and r.get("avg_epa_all") is not None:
+            epa_a = r.get("avg_epa_all")
+            epa_all_s = f"{epa_a:+.3f}" if epa_a is not None else "—"
+            n_all = r.get("our_plays_all", "—")
+            epa_col = f"{epa_s} ({epa_all_s} career)"
+            n_col = f"{r.get('our_plays')} ({n_all})"
+        else:
+            epa_col = epa_s
+            n_col = str(r.get("our_plays"))
+        verdict = str(r.get("verdict") or "—")
+        if basis == "all_time" and verdict not in {"film", "—"}:
+            verdict += "*"
         return (
-            f"| {r.get('look')} | {r.get('scout_pct')}% | {r.get('our_plays')} | "
-            f"{epa_s} | {suc_s} | {r.get('verdict')} |"
+            f"| {r.get('look')} | {r.get('scout_pct')}% | {n_col} | "
+            f"{epa_col} | {suc_s} | {verdict} |"
         )
 
     mode = report.get("booth_front_mode") or "as_scouted"
