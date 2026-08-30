@@ -2281,6 +2281,257 @@ def list_play_seasons(df: pd.DataFrame) -> list[str]:
     return ([cur] if cur in found or cur else []) + rest
 
 
+def _render_previous_game_hudl_viewer(review_df: pd.DataFrame, season: str) -> None:
+    """
+    Dedicated inspector to load, inspect, and export play logs from previous games
+    (both Live Track promoted games and archive files) formatted specifically for tagging in Hudl.
+    """
+    from pathlib import Path
+    import re
+    from live_games import LIVE_GAMES_DIR, list_saved_live_games
+
+    st.markdown("---")
+    st.subheader("📋 Previous Game Play Logs (Tag in Hudl)")
+    st.caption(
+        "Load play-by-play logs from previous games to reference, copy, or export for easy tagging in Hudl."
+    )
+
+    # 1. Discover all available games/sources
+    # Source A: Promoted / saved live game CSV files in data/live_games
+    saved_files = list_saved_live_games()
+    
+    # Source B: Archived live logs in data/live_log_archive
+    archive_dir = PROJECT_DIR / "data" / "live_log_archive"
+    archive_files = sorted(archive_dir.glob("*.csv"), reverse=True) if archive_dir.exists() else []
+
+    # Source C: Games present in the current review_df (e.g. from football.db)
+    db_games = []
+    if not review_df.empty and "opponent" in review_df.columns:
+        for opp, grp in review_df.groupby(review_df["opponent"].fillna("Unknown").astype(str)):
+            opp_str = str(opp).strip()
+            if not opp_str or opp_str.lower() in {"nan", "none"}:
+                continue
+            gid = grp["game_id"].iloc[0] if "game_id" in grp.columns else 0
+            label = f"{opp_str} (Season {season} · {len(grp)} plays)"
+            db_games.append({
+                "type": "db",
+                "label": f"📊 {label}",
+                "opponent": opp_str,
+                "game_id": gid,
+                "df": grp.copy(),
+            })
+
+    # Prepare options for the selector
+    options_map: dict[str, dict] = {}
+    
+    # Add saved live games
+    for p in saved_files:
+        stem = p.stem
+        # e.g. 26-27_g2_Cooper_Scrimmage
+        clean_label = stem.replace("_", " ")
+        key = f"💾 Live Game File: {clean_label} ({p.name})"
+        options_map[key] = {
+            "type": "live_game_csv",
+            "path": p,
+            "name": p.name,
+        }
+
+    # Add archived logs
+    for p in archive_files:
+        stem = p.stem
+        clean_label = stem.replace("_", " ")
+        key = f"📁 Live Archive: {clean_label}"
+        options_map[key] = {
+            "type": "archive_csv",
+            "path": p,
+            "name": p.name,
+        }
+
+    # Add database games
+    for g in db_games:
+        key = g["label"]
+        options_map[key] = g
+
+    if not options_map:
+        st.info("No previous game play logs found yet. Once a game is tracked and archived or promoted, it will appear here.")
+        return
+
+    # Game Selector dropdown
+    selected_key = st.selectbox(
+        "Select Game to View / Tag",
+        list(options_map.keys()),
+        key="hudl_prev_game_select",
+        help="Choose a previous live game or archived play log to review and tag in Hudl.",
+    )
+
+    selected_info = options_map.get(selected_key)
+    if not selected_info:
+        return
+
+    # Load dataframe for the selected option
+    game_df: pd.DataFrame | None = None
+    file_type = selected_info.get("type")
+    
+    if file_type == "db":
+        game_df = selected_info.get("df")
+    elif file_type in {"live_game_csv", "archive_csv"}:
+        path = selected_info.get("path")
+        if path and Path(path).exists():
+            try:
+                game_df = pd.read_csv(path)
+            except Exception as e:
+                st.error(f"Error loading file {path}: {e}")
+                return
+
+    if game_df is None or game_df.empty:
+        st.warning("Selected game log has no play records.")
+        return
+
+    # Display game summary metrics
+    n_plays = len(game_df)
+    opp_name = (
+        str(game_df["opponent"].iloc[0])
+        if "opponent" in game_df.columns and pd.notna(game_df["opponent"].iloc[0])
+        else "Opponent"
+    )
+
+    total_gain = 0
+    if "yards_gained" in game_df.columns:
+        total_gain = int(pd.to_numeric(game_df["yards_gained"], errors="coerce").fillna(0).sum())
+
+    c_m1, c_m2, c_m3, c_m4 = st.columns(4)
+    c_m1.metric("Total Plays", f"{n_plays}")
+    c_m2.metric("Total Yards", f"{total_gain:+d}")
+    
+    if "tagged_by" in game_df.columns:
+        tagger_count = int(game_df["tagged_by"].astype(str).str.contains("Tagger", case=False, na=False).sum())
+        c_m3.metric("Tagger Snaps", f"{tagger_count}")
+    elif "film_pending" in game_df.columns:
+        pen_count = int((game_df["film_pending"].astype(str).str.lower() == "yes").sum())
+        c_m3.metric("Pending Film Tags", f"{pen_count}")
+    else:
+        c_m3.metric("Format", file_type.replace("_", " ").title())
+
+    if "result" in game_df.columns:
+        tds = int((game_df["result"].astype(str).str.upper() == "TD").sum())
+        c_m4.metric("Touchdowns", f"{tds}")
+    elif "epa" in game_df.columns:
+        c_m4.metric("Avg EPA", f"{pd.to_numeric(game_df['epa'], errors='coerce').mean():.2f}")
+    else:
+        c_m4.metric("Opponent", opp_name)
+
+    # Format dataframe for Hudl tagging view
+    # Common Hudl tagging columns: Play #, ODK, Down, Distance, Yard Line, Hash, Formation, Play Call, Result, Gain, Front, Coverage, Blitz, Ball Player, Passer, Motion, Tagged By, Notes
+    view_df = game_df.copy()
+    
+    # Ensure play numbering
+    if "play_n" not in view_df.columns and "play_num" in view_df.columns:
+        view_df["play_n"] = view_df["play_num"]
+    elif "play_n" not in view_df.columns:
+        view_df["play_n"] = range(1, len(view_df) + 1)
+
+    # Format Yard Line / Ball Spot if available
+    if "ball_yard" in view_df.columns and "yard_line" not in view_df.columns:
+        view_df["yard_line"] = view_df["ball_yard"].apply(
+            lambda y: f"+{100-int(y)}" if pd.notna(y) and int(y) > 50 else (f"-{int(y)}" if pd.notna(y) else "")
+        )
+
+    # Build an intuitive table layout
+    hudl_display_cols = [
+        "play_n",
+        "half",
+        "drive_id",
+        "down",
+        "distance_yards",
+        "distance",
+        "yard_line",
+        "hash",
+        "formation",
+        "play_call",
+        "play_type",
+        "result",
+        "yards_gained",
+        "def_front",
+        "coverage",
+        "blitz",
+        "ball_player",
+        "pass_player",
+        "motion",
+        "tagged_by",
+        "note",
+    ]
+    
+    # Keep columns that exist in the dataframe
+    actual_cols = [c for c in hudl_display_cols if c in view_df.columns]
+    # Add any remaining columns at the end
+    remaining = [c for c in view_df.columns if c not in actual_cols and c not in {"game_id", "source_file", "film_pending"}]
+    show_cols = actual_cols + remaining
+
+    rename_map = {
+        "play_n": "Play #",
+        "half": "Half",
+        "drive_id": "Drive",
+        "down": "Down",
+        "distance_yards": "Distance",
+        "distance": "Dist Bucket",
+        "yard_line": "Yard Line",
+        "hash": "Hash",
+        "formation": "Formation",
+        "play_call": "Play Call",
+        "play_type": "Type",
+        "result": "Result",
+        "yards_gained": "Gain",
+        "def_front": "Def Front",
+        "coverage": "Coverage",
+        "blitz": "Blitz",
+        "ball_player": "Ball Carrier / Target",
+        "pass_player": "Passer",
+        "motion": "Motion",
+        "tagged_by": "Tagged By",
+        "note": "Notes",
+    }
+
+    display_table = view_df[show_cols].rename(columns=rename_map)
+
+    # Filters row
+    f_col1, f_col2, f_col3 = st.columns(3)
+    with f_col1:
+        if "Half" in display_table.columns:
+            half_opts = ["All"] + sorted(display_table["Half"].dropna().unique().tolist())
+            h_pick = st.selectbox("Filter Half", half_opts, key="hudl_filter_half")
+            if h_pick != "All":
+                display_table = display_table[display_table["Half"] == h_pick]
+
+    with f_col2:
+        if "Down" in display_table.columns:
+            down_opts = ["All", "1", "2", "3", "4"]
+            d_pick = st.selectbox("Filter Down", down_opts, key="hudl_filter_down")
+            if d_pick != "All":
+                display_table = display_table[display_table["Down"].astype(str) == str(d_pick)]
+
+    with f_col3:
+        if "Formation" in display_table.columns:
+            f_opts = ["All"] + sorted([str(x) for x in display_table["Formation"].dropna().unique() if str(x).strip()])
+            form_pick = st.selectbox("Filter Formation", f_opts, key="hudl_filter_form")
+            if form_pick != "All":
+                display_table = display_table[display_table["Formation"].astype(str) == str(form_pick)]
+
+    # Render interactive DataFrame
+    st.dataframe(display_table, use_container_width=True, hide_index=True)
+
+    # Hudl Export Download Button
+    csv_bytes = display_table.to_csv(index=False).encode("utf-8")
+    file_label = f"hudl_tagging_{_safe_name(opp_name)}_{n_plays}plays.csv"
+    
+    st.download_button(
+        label=f"📥 Download Hudl Tagging CSV ({len(display_table)} plays)",
+        data=csv_bytes,
+        file_name=file_label,
+        mime="text/csv",
+        help="Export this play log as a CSV formatted for importing or copying into Hudl.",
+    )
+
+
 def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
     invert = unit_cfg["invert_xp"]
     if invert:
@@ -2533,6 +2784,11 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
             f"**Best finishing luck:** {lucky['game_label']} ({lucky['luck']:+.1f}) · "
             f"**Worst finishing luck:** {unlucky['game_label']} ({unlucky['luck']:+.1f})"
         )
+
+    # -------------------------------------------------------------
+    # Previous Game Play Log & Hudl Tagging Export Inspector
+    # -------------------------------------------------------------
+    _render_previous_game_hudl_viewer(review_df, picked)
 
 
 def combo_page(df: pd.DataFrame, unit_cfg: dict) -> None:
@@ -5179,6 +5435,8 @@ def _render_formation_slot(
         on_change=_on_slot_change,
     )
     st.markdown("</div>", unsafe_allow_html=True)
+
+
 def live_play_value(result: str, yards_gained: float = 0.0, unit: str = "Offense") -> float:
     """Rough live +/- for a snap (basketball-style), not full EPA."""
     r = str(result)
@@ -9751,6 +10009,8 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
                 resume_drive(int(resume_pick), opponent)
                 st.success(f"Back on drive #{int(resume_pick)}.")
                 st.rerun()
+        with st.expander("Previous Game Play Logs (Tag in Hudl)", expanded=False):
+            _render_previous_game_hudl_viewer(offense_df, season="current")
     elif tagger and has_snaps_focus(focuses):
         ht_open = bool(st.session_state.get("ht_auto_open", False))
         with st.expander("Halftime / end 1st half", expanded=ht_open):
