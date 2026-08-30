@@ -2657,16 +2657,24 @@ def _render_post_game_coach_report_section(
     k_col4.metric("xPoints", f"{kpis.get('xpoints', 0.0):.1f} xP", f"{kpis.get('luck', 0.0):+.1f} luck")
     k_col5.metric("Explosives (10+y)", f"{kpis.get('explosive_count', 0)} plays", f"{kpis.get('explosive_pct', 0):.0f}% rate")
 
-    # Coach Action Items
+    # Coach Action Items Card
     takeaways = report.get("coach_takeaways", [])
     if takeaways:
-        st.markdown("##### 💡 Coach Takeaways & Action Items")
-        for t in takeaways:
-            clean_t = t.replace("<b>", "**").replace("</b>", "**")
-            st.markdown(f"- {clean_t}")
+        with st.container():
+            st.markdown(
+                """
+                <div style="background:#F0FDF4;border:1.5px solid #2D6A4F;border-radius:10px;padding:0.75rem 1rem;margin:0.75rem 0 0.5rem 0;">
+                  <div style="font-weight:700;color:#1B4332;font-size:0.95rem;margin-bottom:0.35rem;">💡 Coach Takeaways & Action Items</div>
+                """,
+                unsafe_allow_html=True,
+            )
+            for t in takeaways:
+                clean_t = t.replace("<b>", "<b>").replace("</b>", "</b>")
+                st.markdown(f"• {clean_t}", unsafe_allow_html=True)
+            st.markdown("</div>", unsafe_allow_html=True)
 
-    # Two action buttons: PDF Download and Markdown Download
-    c_btn1, c_btn2 = st.columns([1.2, 1])
+    # Action Buttons: PDF Download & Markdown Download
+    c_btn1, c_btn2, _ = st.columns([1.4, 1.2, 1])
     with c_btn1:
         try:
             pdf_bytes = build_post_game_pdf(report)
@@ -2677,7 +2685,7 @@ def _render_post_game_coach_report_section(
                 file_name=file_name_pdf,
                 mime="application/pdf",
                 type="primary",
-                help="Download full multi-page coach report with visual charts and tables.",
+                help="Download clean 3-page publication PDF with visual charts and complete tables.",
             )
         except Exception as e:
             st.warning(f"PDF generation note: {e}")
@@ -2686,12 +2694,113 @@ def _render_post_game_coach_report_section(
         md_text = format_post_game_report_markdown(report)
         file_name_md = f"PostGame_Report_{_safe_name(opp_name)}_{_safe_name(season)}.md"
         st.download_button(
-            label=f"📝 Download Markdown Report (.md)",
+            label=f"📝 Download Markdown (.md)",
             data=md_text.encode("utf-8"),
             file_name=file_name_md,
             mime="text/markdown",
-            help="Download clean Markdown format for copy-pasting into notes or team docs.",
+            help="Download clean Markdown format for meeting notes or team docs.",
         )
+
+    # Interactive Breakdown Tabs for Coaches
+    t_eff, t_form, t_exp = st.tabs([
+        "📉 Down & Phase Efficiency",
+        "🛡️ Formations & Combos",
+        "🎬 Explosive Plays Reel (10+ Yds)",
+    ])
+
+    with t_eff:
+        p_c1, p_c2 = st.columns(2)
+        pd_info = report.get("phase_data", {})
+        with p_c1:
+            st.markdown("##### 🏃 Run Game Breakdown")
+            st.write(
+                f"**Plays:** {pd_info.get('run_plays', 0)} · "
+                f"**Yards:** {pd_info.get('run_yds', 0)} ({pd_info.get('run_avg', 0):.1f} yds/carry) · "
+                f"**Touchdowns:** {pd_info.get('run_tds', 0)} · "
+                f"**Success Rate:** {pd_info.get('run_success_rate', 0)*100:.0f}%"
+            )
+        with p_c2:
+            st.markdown("##### 🎯 Pass Game Breakdown")
+            st.write(
+                f"**Plays:** {pd_info.get('pass_plays', 0)} · "
+                f"**Yards:** {pd_info.get('pass_yds', 0)} ({pd_info.get('pass_avg', 0):.1f} yds/att) · "
+                f"**Touchdowns:** {pd_info.get('pass_tds', 0)} · "
+                f"**Success Rate:** {pd_info.get('pass_success_rate', 0)*100:.0f}%"
+            )
+
+        st.markdown("##### 📉 Down & Distance Efficiency")
+        downs_data = report.get("down_efficiency", [])
+        if downs_data:
+            d_df = pd.DataFrame(downs_data).rename(
+                columns={
+                    "label": "Down",
+                    "plays": "Plays",
+                    "total_yards": "Total Yards",
+                    "avg_yards": "Avg Yds",
+                    "avg_epa": "Avg EPA",
+                    "success_rate": "Success Rate",
+                    "notes": "Coaching Note",
+                }
+            )
+            if "down" in d_df.columns:
+                d_df = d_df.drop(columns=["down"])
+            if "Success Rate" in d_df.columns:
+                d_df["Success Rate"] = d_df["Success Rate"].apply(lambda v: f"{float(v)*100:.0f}%")
+            st.dataframe(d_df, use_container_width=True, hide_index=True)
+
+    with t_form:
+        f_list = report.get("formation_defense", [])
+        if f_list:
+            st.markdown("##### 🛡️ How They Defended Our Formations")
+            form_rows = []
+            for f in f_list:
+                bp = f.get("best_play")
+                bp_str = f"{bp['play_call']} ({bp['avg_yards']:+.1f}y)" if bp else "—"
+                form_rows.append({
+                    "Formation": f.get("formation", ""),
+                    "Snaps": f.get("plays", 0),
+                    "Total Yards": f.get("total_yards", 0),
+                    "Avg Yards": f"{f.get('avg_yards', 0.0):+.1f}",
+                    "Success %": f"{float(f.get('success_rate', 0.0))*100:.0f}%",
+                    "Looks Faced": f.get("tell_summary", ""),
+                    "Verdict": f.get("verdict", "SOLID"),
+                    "Best Call": bp_str,
+                })
+            st.dataframe(pd.DataFrame(form_rows), use_container_width=True, hide_index=True)
+
+        combos_list = report.get("formation_combos", [])
+        if combos_list:
+            st.markdown("##### ⚡ Formation + Play Combinations")
+            combo_rows = []
+            for c in combos_list:
+                combo_rows.append({
+                    "Combo": c.get("combo", ""),
+                    "Snaps": c.get("plays", 0),
+                    "Avg Yards": f"{c.get('avg_yards', 0.0):+.1f}",
+                    "Success %": f"{float(c.get('success_rate', 0.0))*100:.0f}%",
+                    "Outcomes": c.get("outcomes_str", ""),
+                    "Look Faced": c.get("look_summary", ""),
+                    "Verdict": c.get("verdict", "SOLID"),
+                    "Coach Tip": c.get("coach_tip", ""),
+                })
+            st.dataframe(pd.DataFrame(combo_rows), use_container_width=True, hide_index=True)
+
+    with t_exp:
+        exp_list = report.get("explosive_plays", [])
+        if exp_list:
+            st.markdown(f"##### 🎬 Explosive (10+ Yards) & Scoring Plays ({len(exp_list)} Plays)")
+            exp_rows = []
+            for ep in exp_list:
+                exp_rows.append({
+                    "Play #": f"#{ep.get('play_num')}",
+                    "Situation": ep.get("situation"),
+                    "Formation": ep.get("formation"),
+                    "Play Call": ep.get("play_call"),
+                    "Result": ep.get("result"),
+                    "Gain": f"{ep.get('yards_gained'):+d} yds",
+                    "Look Faced": ep.get("look"),
+                })
+            st.dataframe(pd.DataFrame(exp_rows), use_container_width=True, hide_index=True)
 
 
 def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
