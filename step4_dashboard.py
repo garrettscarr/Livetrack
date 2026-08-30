@@ -13,8 +13,12 @@ import sqlite3
 
 import numpy as np
 import pandas as pd
-import plotly.express as px
-import plotly.graph_objects as go
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+except ImportError:
+    px = None  # type: ignore
+    go = None  # type: ignore
 import streamlit as st
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -2988,6 +2992,7 @@ LIVE_LOG_COLUMNS = [
     "pass_player",
     "note",
     "film_pending",
+    "tagged_by",
     "drive_id",
     "play_n",
 ]
@@ -6070,6 +6075,8 @@ def advance_live_situation(
         new_zone = ball_yard_to_zone(new_ball)
         spot = format_ball_spot(new_ball)
         note = str(base.get("note") or "")
+        if base.get("down") == 1 and new_ball >= 90:
+            base["distance_yards"] = max(1, 100 - new_ball)
         if spot and new_zone != zone:
             note = f"{note} · ball {spot} ({ZONE_LABELS.get(new_zone, new_zone)})".strip(" ·")
         elif spot:
@@ -6094,7 +6101,7 @@ def advance_live_situation(
             new_zone = ball_yard_to_zone(new_ball)
         return {
             "down": 1,
-            "distance_yards": 10,
+            "distance_yards": max(1, 100 - new_ball) if new_ball >= 90 else 10,
             "field_zone": new_zone,
             "ball_yard": new_ball,
             "note": f"1st & 10 after {r} · ball {format_ball_spot(new_ball)}",
@@ -6147,36 +6154,85 @@ def advance_live_situation(
     )
 
 
-def _apply_pending_live_situation() -> None:
-    """Apply queued down/distance BEFORE situation widgets are created."""
+def _apply_pending_live_situation(opponent: str = "") -> None:
+    """Apply queued down/distance BEFORE situation widgets are created and persist across reloads."""
     pending = st.session_state.pop("lt_situation_pending", None)
-    if not pending:
-        return
-    st.session_state.lt_down = int(pending.get("down", 1))
-    st.session_state.lt_dist_y = int(pending.get("distance_yards", 10))
-    if pending.get("ball_yard") is not None:
-        try:
-            st.session_state.lt_ball_yard = int(pending["ball_yard"])
-        except (TypeError, ValueError):
-            st.session_state.lt_ball_yard = zone_default_ball_yard(
-                pending.get("field_zone")
-            )
-        st.session_state.lt_zone = ball_yard_to_zone(st.session_state.lt_ball_yard)
-    elif pending.get("field_zone"):
-        st.session_state.lt_zone = pending["field_zone"]
-        # Keep current ball spot when only down/distance resets
-        if "lt_ball_yard" not in st.session_state or st.session_state.get("lt_ball_yard") in {
-            None,
-            "",
-        }:
-            st.session_state.lt_ball_yard = zone_default_ball_yard(pending["field_zone"])
-        else:
-            # Re-derive zone from the ball we already have
+    if pending:
+        st.session_state.lt_down = int(pending.get("down", 1))
+        st.session_state.lt_dist_y = int(pending.get("distance_yards", 10))
+        if pending.get("ball_yard") is not None:
+            try:
+                st.session_state.lt_ball_yard = int(pending["ball_yard"])
+            except (TypeError, ValueError):
+                st.session_state.lt_ball_yard = zone_default_ball_yard(
+                    pending.get("field_zone")
+                )
             st.session_state.lt_zone = ball_yard_to_zone(st.session_state.lt_ball_yard)
-    st.session_state.lt_gain = 0
-    note = pending.get("note")
-    if note:
-        st.session_state.lt_situation_note = note
+        elif pending.get("field_zone"):
+            st.session_state.lt_zone = pending["field_zone"]
+            if "lt_ball_yard" not in st.session_state or st.session_state.get("lt_ball_yard") in {
+                None,
+                "",
+            }:
+                st.session_state.lt_ball_yard = zone_default_ball_yard(pending["field_zone"])
+            else:
+                st.session_state.lt_zone = ball_yard_to_zone(st.session_state.lt_ball_yard)
+        st.session_state.lt_gain = 0
+        note = pending.get("note")
+        if note:
+            st.session_state.lt_situation_note = note
+        try:
+            from mesh_engine import save_game_spot
+
+            opp = opponent or str(st.session_state.get("lt_page_opponent") or "").strip()
+            save_game_spot(
+                opp,
+                down=st.session_state.lt_down,
+                distance_yards=st.session_state.lt_dist_y,
+                ball_yard=st.session_state.get("lt_ball_yard"),
+                field_zone=st.session_state.get("lt_zone"),
+                half=int(st.session_state.get("lt_half") or 1),
+                last_note=note,
+            )
+        except Exception:
+            pass
+        return
+
+    # Seed / restore spot from game_state.json or last log row if fresh session
+    if "lt_down" not in st.session_state or "lt_ball_yard" not in st.session_state:
+        try:
+            from mesh_engine import load_game_state, load_live_log
+
+            gstate = load_game_state()
+            opp = opponent or str(st.session_state.get("lt_page_opponent") or gstate.get("opponent") or "").strip()
+            if gstate.get("down") is not None:
+                st.session_state.lt_down = int(gstate.get("down") or 1)
+                st.session_state.lt_dist_y = int(gstate.get("distance_yards") or 10)
+                st.session_state.lt_ball_yard = int(gstate.get("ball_yard") or 45)
+                st.session_state.lt_zone = str(gstate.get("field_zone") or ball_yard_to_zone(st.session_state.lt_ball_yard))
+                if gstate.get("half") is not None and "lt_half" not in st.session_state:
+                    st.session_state.lt_half = int(gstate["half"])
+            else:
+                logs = load_live_log()
+                if logs is not None and not logs.empty:
+                    sub = logs
+                    if opp and "opponent" in logs.columns:
+                        sub = logs[logs["opponent"].astype(str).str.strip().str.lower() == opp.lower()]
+                    if not sub.empty:
+                        last_r = sub.iloc[-1]
+                        last_d = int(last_r.get("down") or 1)
+                        last_dist = int(last_r.get("distance_yards") or 10)
+                        last_gain = int(last_r.get("yards_gained") or 0)
+                        last_res = str(last_r.get("result") or "Gain")
+                        last_zone = str(last_r.get("field_zone") or "midfield")
+                        last_ball = int(last_r.get("ball_yard") or zone_default_ball_yard(last_zone))
+                        adv = advance_live_situation(last_d, last_dist, last_gain, last_res, last_zone, ball_yard=last_ball)
+                        st.session_state.lt_down = int(adv["down"])
+                        st.session_state.lt_dist_y = int(adv["distance_yards"])
+                        st.session_state.lt_ball_yard = int(adv["ball_yard"])
+                        st.session_state.lt_zone = str(adv["field_zone"])
+        except Exception:
+            pass
 
 
 def _scout_sample_label(r: dict) -> str:
@@ -7842,18 +7898,30 @@ def _booth_upsert_snap(
     half: int = 1,
 ) -> tuple[bool, int | None, str]:
     from booth_snaps import upsert_live_snap
-    from mesh_engine import load_live_log
+    from mesh_engine import load_live_log, save_game_spot
 
-    return upsert_live_snap(
+    up = dict(updates or {})
+    up.setdefault("tagged_by", "Tagger")
+    res = upsert_live_snap(
         drive_id=drive_id,
         play_n=play_n,
-        updates=updates,
+        updates=up,
         opponent=opponent,
         half=half,
         append_fn=append_live_log,
         update_at_fn=update_live_log_at,
         load_fn=load_live_log,
     )
+    try:
+        save_game_spot(
+            opponent,
+            half=half,
+            drive_id=drive_id,
+            play_n=play_n,
+        )
+    except Exception:
+        pass
+    return res
 
 
 def _render_shared_snap_bar(
@@ -9585,6 +9653,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         # Layout C — dual pane: phrase left · situation/drive right
         @st.fragment
         def _main_dual_fragment() -> None:
+            _apply_pending_live_situation(opponent)
             logs_now = load_live_log()
             left, right = st.columns([1.35, 1])
             with left:
@@ -9663,6 +9732,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
 
         @st.fragment
         def _main_log_fragment() -> None:
+            _apply_pending_live_situation(opponent)
             _live_track_log_screen(
                 opponent, offense_df, defense_df, live_logs, quick=True
             )
@@ -11848,8 +11918,10 @@ def _commit_live_play(
             merged["film_pending"] = "No"
         elif front and cov:
             merged["film_pending"] = "No"
+        merged["tagged_by"] = "Main + Tagger"
         update_live_log_at(int(idx), merged)
     else:
+        new_row["tagged_by"] = "Main"
         append_live_log(new_row)
 
     if advance_booth_snap is not None:
@@ -11900,7 +11972,7 @@ def _commit_live_play(
         "lt_cov_custom": "",
         "lt_play_type": ptype or st.session_state.get("lt_play_type", "run"),
     }
-    st.session_state.lt_situation_pending = advance_live_situation(
+    next_sit = advance_live_situation(
         int(down),
         int(distance_yards),
         int(yards_gained),
@@ -11909,6 +11981,35 @@ def _commit_live_play(
         auto_first=bool(auto_first),
         ball_yard=int(ball),
     )
+    st.session_state.lt_situation_pending = next_sit
+    st.session_state.lt_down = int(next_sit.get("down", 1))
+    st.session_state.lt_dist_y = int(next_sit.get("distance_yards", 10))
+    if next_sit.get("ball_yard") is not None:
+        try:
+            st.session_state.lt_ball_yard = int(next_sit["ball_yard"])
+        except (TypeError, ValueError):
+            pass
+        st.session_state.lt_zone = str(next_sit.get("field_zone") or ball_yard_to_zone(st.session_state.lt_ball_yard))
+    st.session_state.lt_situation_note = str(next_sit.get("note") or "")
+    try:
+        from mesh_engine import save_game_spot
+
+        save_game_spot(
+            opponent,
+            down=st.session_state.lt_down,
+            distance_yards=st.session_state.lt_dist_y,
+            ball_yard=st.session_state.get("lt_ball_yard"),
+            field_zone=st.session_state.get("lt_zone"),
+            half=half_i,
+            drive_id=drive_id,
+            play_n=play_n,
+            last_call=play_call,
+            last_result=result,
+            last_yards=int(yards_gained),
+            last_note=str(next_sit.get("note") or ""),
+        )
+    except Exception:
+        pass
     st.session_state.lt_blitz_reset = True
     st.session_state.lt_gain = 0
     st.session_state.lt_result = "Gain"
@@ -12408,6 +12509,7 @@ def _render_live_log_tail(opponent: str, live_logs: pd.DataFrame | None) -> None
             "coverage",
             "blitz",
             "def_front",
+            "tagged_by",
             "film_pending",
             "players_on",
         ]
@@ -14842,6 +14944,77 @@ def _render_main_app_bar(
     )
 
 
+def _render_tagger_live_status_card(
+    opponent: str,
+    live_logs: pd.DataFrame | None,
+    drive_id: int | None,
+    play_n: int | None,
+) -> None:
+    """Live tagger status indicator for Main booth so Main always knows tagger inputs."""
+    if drive_id is None:
+        return
+    cur_pn = int(play_n or 1)
+    from booth_snaps import find_snap_index
+
+    tagger_row = None
+    if live_logs is not None and not live_logs.empty:
+        idx = find_snap_index(live_logs, int(drive_id), cur_pn)
+        if idx is not None:
+            tagger_row = live_logs.reset_index(drop=True).loc[int(idx)].to_dict()
+
+    front = str((tagger_row or {}).get("def_front") or "").strip()
+    cov = str((tagger_row or {}).get("coverage") or "").strip()
+    blitz = str((tagger_row or {}).get("blitz") or "").strip()
+    bp = str((tagger_row or {}).get("ball_player") or "").strip()
+    mot = str((tagger_row or {}).get("motion") or "").strip()
+
+    st.markdown('<div class="mb-panel-label" style="margin-top:0.6rem">Tagger Live Sync</div>', unsafe_allow_html=True)
+    if front or cov or (blitz and blitz.lower() in {"yes", "no"}) or bp:
+        tag_items = []
+        if front:
+            tag_items.append(f"Front: <b>{front}</b>")
+        if cov:
+            tag_items.append(f"Cov: <b>{cov}</b>")
+        if blitz:
+            tag_items.append(f"Blitz: <b>{blitz}</b>")
+        if bp:
+            tag_items.append(f"Ball: <b>{bp}</b>")
+        if mot:
+            tag_items.append(f"Motion: <b>{mot}</b>")
+        tags_html = " · ".join(tag_items)
+        st.markdown(
+            f"""
+            <div style="background:#D8F3DC;border:1.5px solid #2D6A4F;border-radius:8px;padding:0.45rem 0.65rem;margin-bottom:0.4rem;font-size:0.88rem;color:#081C15;">
+              <div style="font-weight:700;color:#1B4332;display:flex;justify-content:space-between;align-items:center;">
+                <span>📡 Play #{cur_pn} Tagger Input</span>
+                <span style="background:#2D6A4F;color:#FFFFFF;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.75rem;font-weight:700;">RECEIVED</span>
+              </div>
+              <div style="margin-top:0.25rem;line-height:1.35;">{tags_html}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        last_tagged_txt = ""
+        if cur_pn > 1 and live_logs is not None and not live_logs.empty:
+            prev_idx = find_snap_index(live_logs, int(drive_id), cur_pn - 1)
+            if prev_idx is not None:
+                p_row = live_logs.reset_index(drop=True).loc[int(prev_idx)].to_dict()
+                pf = str(p_row.get("def_front") or "").strip()
+                pc = str(p_row.get("coverage") or "").strip()
+                pb = str(p_row.get("blitz") or "").strip()
+                if pf or pc:
+                    last_tagged_txt = f" · Last #{cur_pn-1}: {pf or '—'} / {pc or '—'}" + (f" (Blz {pb})" if pb else "")
+        st.markdown(
+            f"""
+            <div style="background:#F4F7F5;border:1px dashed #A3B899;border-radius:8px;padding:0.4rem 0.6rem;margin-bottom:0.4rem;font-size:0.82rem;color:#52796F;">
+              📡 Play #{cur_pn}: Waiting for tagger...{last_tagged_txt}
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+
 def _render_main_dual_rail(
     opponent: str,
     live_logs: pd.DataFrame | None,
@@ -14986,6 +15159,8 @@ def _render_main_dual_rail(
             '<span class="mb-pill ok">Film clear</span>',
             unsafe_allow_html=True,
         )
+
+    _render_tagger_live_status_card(opponent, live_logs, active_did, play_n)
 
     st.markdown(
         '<div class="mb-panel-label" style="margin-top:0.75rem">Last play</div>',
@@ -16422,6 +16597,98 @@ def _render_halftime_coach_mode(
                 )
         st.markdown("</div>", unsafe_allow_html=True)
 
+    # --- How They Played Our Formations ---
+    form_def = report.get("formation_defense") or []
+    if form_def:
+        st.markdown('<div class="ht-coach-block">', unsafe_allow_html=True)
+        st.markdown('<div class="ht-col-title">🛡️ How They Played Our Formations</div>', unsafe_allow_html=True)
+        for f in form_def:
+            f_name = f.get("formation")
+            plays_n = f.get("plays", 0)
+            avg_y = f.get("avg_yards", 0)
+            sr = f.get("success_rate", 0)
+            sr_pct = int(sr * 100)
+            tell = f.get("tell_summary", "")
+            best_p = f.get("best_play")
+            best_str = f"Best call: <b>{best_p['play_call']}</b> ({best_p['avg_yards']:+.1f} yd, {int(best_p['success_rate']*100)}% succ)" if best_p else ""
+            cold_p = f.get("cold_play")
+            cold_str = f" · Cold: <b>{cold_p['play_call']}</b> ({cold_p['avg_yards']:+.1f} yd)" if cold_p else ""
+
+            front_chips = " ".join(f"<span style='background:#E2EAFC;color:#1D3557;padding:2px 7px;border-radius:4px;font-size:0.8rem;font-weight:600;'>{fr['front']} {fr['pct']:.0f}%</span>" for fr in (f.get("fronts") or [])[:3])
+            cov_chips = " ".join(f"<span style='background:#D8F3DC;color:#1B4332;padding:2px 7px;border-radius:4px;font-size:0.8rem;font-weight:600;'>{cv['coverage']} {cv['pct']:.0f}%</span>" for cv in (f.get("coverages") or [])[:3])
+            blitz_chip = f"<span style='background:#FFDDD2;color:#780000;padding:2px 7px;border-radius:4px;font-size:0.8rem;font-weight:600;'>Blitz {f.get('blitz_pct', 0):.0f}%</span>"
+
+            st.markdown(
+                f"""
+                <div style="background:#FFFFFF;border:1.5px solid #D0DAD4;border-radius:10px;padding:0.75rem 0.85rem;margin-bottom:0.65rem;">
+                  <div style="display:flex;justify-content:space-between;align-items:center;">
+                    <span style="font-size:1.15rem;font-weight:800;color:#1B4332;">{f_name}</span>
+                    <span style="font-size:0.92rem;font-weight:700;color:#2D6A4F;">{plays_n} snaps · {avg_y:+.1f} yds/play · {sr_pct}% success</span>
+                  </div>
+                  <div style="margin:0.4rem 0;display:flex;gap:0.4rem;flex-wrap:wrap;">
+                    {front_chips} {cov_chips} {blitz_chip}
+                  </div>
+                  <div style="font-size:0.88rem;color:#2B2D42;margin-top:0.35rem;border-top:1px solid #ECEFEF;padding-top:0.35rem;">
+                    {best_str}{cold_str}
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    # --- Formation + Play Combos Breakdown ---
+    combos = report.get("formation_combos") or []
+    if combos:
+        st.markdown('<div class="ht-coach-block">', unsafe_allow_html=True)
+        st.markdown('<div class="ht-col-title">⚡ Formation + Play Combos</div>', unsafe_allow_html=True)
+        working_combos = [c for c in combos if c.get("verdict") == "FEATURE" or (c.get("success_rate", 0) >= 0.5 and c.get("avg_yards", 0) >= 3.5)]
+        struggling_combos = [c for c in combos if c not in working_combos and (c.get("verdict") == "SHELVE" or c.get("success_rate", 0) < 0.5)]
+
+        col_w, col_s = st.columns(2)
+        with col_w:
+            st.markdown("<div style='font-weight:700;color:#2D6A4F;margin-bottom:0.35rem;'>🔥 Working Combos (Feature)</div>", unsafe_allow_html=True)
+            if working_combos:
+                for c in working_combos:
+                    st.markdown(
+                        f"""
+                        <div style="background:#D8F3DC;border-left:4px solid #2D6A4F;border-radius:6px;padding:0.5rem 0.65rem;margin-bottom:0.45rem;">
+                          <div style="font-weight:700;font-size:0.95rem;color:#081C15;">{c['combo']}</div>
+                          <div style="font-size:0.84rem;color:#1B4332;margin-top:0.15rem;">
+                            <b>{c['plays']}</b> snaps · <b>{c['avg_yards']:+.1f}</b> yds · <b>{int(c['success_rate']*100)}%</b> succ
+                          </div>
+                          <div style="font-size:0.78rem;color:#2D6A4F;margin-top:0.2rem;">
+                            Outcomes: {c['outcomes_str']} · vs {c['look_summary']}
+                          </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("No clear hot combos yet.")
+
+        with col_s:
+            st.markdown("<div style='font-weight:700;color:#B02A37;margin-bottom:0.35rem;'>❄️ Stalled / Cold Combos (Shelve)</div>", unsafe_allow_html=True)
+            if struggling_combos:
+                for c in struggling_combos:
+                    st.markdown(
+                        f"""
+                        <div style="background:#FCE8E6;border-left:4px solid #B02A37;border-radius:6px;padding:0.5rem 0.65rem;margin-bottom:0.45rem;">
+                          <div style="font-weight:700;font-size:0.95rem;color:#58151C;">{c['combo']}</div>
+                          <div style="font-size:0.84rem;color:#842029;margin-top:0.15rem;">
+                            <b>{c['plays']}</b> snaps · <b>{c['avg_yards']:+.1f}</b> yds · <b>{int(c['success_rate']*100)}%</b> succ
+                          </div>
+                          <div style="font-size:0.78rem;color:#842029;margin-top:0.2rem;">
+                            Outcomes: {c['outcomes_str']} · vs {c['look_summary']}
+                          </div>
+                        </div>
+                        """,
+                        unsafe_allow_html=True,
+                    )
+            else:
+                st.caption("No clear cold combos.")
+        st.markdown("</div>", unsafe_allow_html=True)
+
     look_bits: list[str] = []
     if mix:
         summary = " · ".join(
@@ -16807,6 +17074,39 @@ def _render_halftime_report_body(
 
     with tab_form:
         st.caption("Green = working for us · Red = cold.")
+        form_def_list = report.get("formation_defense") or []
+        if form_def_list:
+            st.markdown("##### 🛡️ How They Played Our Formations")
+            f_table_rows = []
+            for fd in form_def_list:
+                bp = fd.get("best_play")
+                bp_s = f"{bp['play_call']} ({bp['avg_yards']:+.1f} yd, {int(bp['success_rate']*100)}% succ)" if bp else "—"
+                f_table_rows.append({
+                    "Formation": fd.get("formation"),
+                    "Snaps": fd.get("plays"),
+                    "Avg Yds": f"{fd.get('avg_yards', 0):+.1f}",
+                    "Success %": f"{int(fd.get('success_rate', 0)*100)}%",
+                    "Top Looks Faced": fd.get("tell_summary"),
+                    "Best Play Call": bp_s,
+                })
+            st.dataframe(pd.DataFrame(f_table_rows), hide_index=True, use_container_width=True)
+
+        combos_list = report.get("formation_combos") or []
+        if combos_list:
+            st.markdown("##### ⚡ Formation + Play Combos Breakdown")
+            c_table_rows = []
+            for cb in combos_list:
+                c_table_rows.append({
+                    "Combo": cb.get("combo"),
+                    "Verdict": cb.get("verdict_badge"),
+                    "Snaps": cb.get("plays"),
+                    "Avg Yds": f"{cb.get('avg_yards', 0):+.1f}",
+                    "Success %": f"{int(cb.get('success_rate', 0)*100)}%",
+                    "Outcomes": cb.get("outcomes_str"),
+                    "Looks Faced": cb.get("look_summary"),
+                })
+            st.dataframe(pd.DataFrame(c_table_rows), hide_index=True, use_container_width=True)
+
         st.markdown("##### Formations overall (tonight)")
         _ht_board_with_chart(
             form_rows,

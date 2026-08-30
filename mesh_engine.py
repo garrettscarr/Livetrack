@@ -1742,8 +1742,20 @@ def load_game_state() -> dict:
     empty = {
         "opponent": None,
         "phase": "1st",  # 1st | halftime | 2nd
+        "half": 1,
+        "down": 1,
+        "distance_yards": 10,
+        "ball_yard": 45,
+        "field_zone": "midfield",
+        "active_drive_id": None,
+        "play_n": 1,
+        "last_call": None,
+        "last_result": None,
+        "last_yards": None,
+        "last_note": None,
         "halftime_at": None,
         "report_path": None,
+        "updated_at": None,
     }
     if not GAME_STATE_FILE.exists():
         return empty
@@ -1756,6 +1768,69 @@ def load_game_state() -> dict:
         return out
     except Exception:
         return empty
+
+
+def save_game_spot(
+    opponent: str,
+    *,
+    down: int | None = None,
+    distance_yards: int | None = None,
+    ball_yard: int | float | None = None,
+    field_zone: str | None = None,
+    half: int | None = None,
+    phase: str | None = None,
+    drive_id: int | None = None,
+    play_n: int | None = None,
+    last_call: str | None = None,
+    last_result: str | None = None,
+    last_yards: int | float | None = None,
+    last_note: str | None = None,
+) -> dict:
+    """Atomically persist current ball spot & situation to survive disconnects / reloads."""
+    from datetime import datetime
+
+    cur = load_game_state()
+    if opponent:
+        cur["opponent"] = str(opponent).strip()
+    if down is not None:
+        cur["down"] = int(down)
+    if distance_yards is not None:
+        cur["distance_yards"] = int(distance_yards)
+    if ball_yard is not None:
+        try:
+            cur["ball_yard"] = int(ball_yard)
+        except (TypeError, ValueError):
+            pass
+    if field_zone is not None:
+        cur["field_zone"] = str(field_zone).strip()
+    if half is not None:
+        cur["half"] = int(half)
+    if phase is not None:
+        cur["phase"] = str(phase).strip()
+    if drive_id is not None:
+        try:
+            cur["active_drive_id"] = int(drive_id)
+        except (TypeError, ValueError):
+            pass
+    if play_n is not None:
+        try:
+            cur["play_n"] = int(play_n)
+        except (TypeError, ValueError):
+            pass
+    if last_call is not None:
+        cur["last_call"] = str(last_call).strip()
+    if last_result is not None:
+        cur["last_result"] = str(last_result).strip()
+    if last_yards is not None:
+        try:
+            cur["last_yards"] = int(last_yards)
+        except (TypeError, ValueError):
+            pass
+    if last_note is not None:
+        cur["last_note"] = str(last_note).strip()
+    cur["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    save_game_state(cur)
+    return cur
 
 
 def save_game_state(state: dict) -> Path:
@@ -2882,6 +2957,264 @@ def _situation_key(row: pd.Series) -> str:
     return f"{down} & {dist} | {zone}"
 
 
+def _calc_play_success(row: pd.Series | dict) -> int:
+    """
+    Standard football success rate for a charted play:
+    1st/2nd down: gain >= 50% of to-go distance.
+    3rd/4th down: gain >= 100% of to-go distance (conversion / TD).
+    Turnovers, sacks/TFL, and incompletes = 0.
+    """
+    res = str(row.get("result", "") or "").strip()
+    if res in {"TD", "First down"}:
+        return 1
+    if res in {"Turnover", "Incomplete", "Punt"}:
+        return 0
+    try:
+        yds = float(row.get("yards_gained", 0) or 0)
+    except (TypeError, ValueError):
+        yds = 0.0
+    try:
+        to_go = float(row.get("distance_yards", 10) or 10)
+    except (TypeError, ValueError):
+        to_go = 10.0
+    to_go = max(1.0, to_go)
+    try:
+        d = int(float(row.get("down", 1) or 1))
+    except (TypeError, ValueError):
+        d = 1
+    if res == "Penalty":
+        return 1 if yds > 0 else 0
+    if d in {1, 2}:
+        return 1 if yds >= (0.5 * to_go) else 0
+    return 1 if yds >= to_go else 0
+
+
+def _analyze_formation_defense(half1: pd.DataFrame, *, unit: str = "Offense") -> list[dict]:
+    """
+    How the opponent defended each of our offensive formations in the 1st half:
+    - Formation name
+    - Snaps (n)
+    - Front breakdown with counts and percentages
+    - Coverage breakdown with counts and percentages
+    - Blitz rate and count
+    - Our avg yards and success rate
+    - Plays called out of this formation with results
+    - Coach takeaway & best/worst calls
+    """
+    logs = _offense_logs(half1) if unit.lower() == "offense" else half1
+    if logs.empty or "formation" not in logs.columns:
+        return []
+    out = []
+    for form_val, grp in logs.groupby(logs["formation"].fillna("").astype(str)):
+        formation = str(form_val).strip()
+        if not formation or formation.lower() in {"(blank)", "nan", "none", "(none)"}:
+            continue
+        n = len(grp)
+        if n < 1:
+            continue
+        # Front distribution
+        fronts = []
+        if "def_front" in grp.columns:
+            f_counts = grp["def_front"].dropna().astype(str).str.strip().value_counts()
+            for f_name, f_cnt in f_counts.items():
+                if f_name and f_name.lower() not in {"", "unknown", "nan", "none"}:
+                    fronts.append({
+                        "front": f_name,
+                        "plays": int(f_cnt),
+                        "pct": round(100.0 * f_cnt / n, 1),
+                    })
+        # Coverage distribution
+        coverages = []
+        if "coverage" in grp.columns:
+            c_counts = grp["coverage"].dropna().astype(str).str.strip().value_counts()
+            for c_name, c_cnt in c_counts.items():
+                if c_name and c_name.lower() not in {"", "unknown", "nan", "none"}:
+                    coverages.append({
+                        "coverage": c_name,
+                        "plays": int(c_cnt),
+                        "pct": round(100.0 * c_cnt / n, 1),
+                    })
+        # Blitz count
+        blitz_n = 0
+        blitz_tagged_n = 0
+        if "blitz" in grp.columns:
+            for b_val in grp["blitz"].dropna():
+                b_str = str(b_val).strip().lower()
+                if b_str in {"yes", "no", "true", "false", "1", "0"}:
+                    blitz_tagged_n += 1
+                    if _is_blitz(b_val):
+                        blitz_n += 1
+        blitz_pct = round(100.0 * blitz_n / max(1, blitz_tagged_n or n), 1)
+
+        # Performance metrics
+        yards_s = pd.to_numeric(grp["yards_gained"], errors="coerce").dropna()
+        avg_yards = round(float(yards_s.mean()), 1) if not yards_s.empty else 0.0
+        successes = [int(_calc_play_success(row)) for _, row in grp.iterrows()]
+        succ_rate = round(float(sum(successes) / max(1, len(successes))), 2)
+
+        # Plays called out of this formation
+        play_calls = []
+        if "play_call" in grp.columns:
+            for p_name, p_grp in grp.groupby(grp["play_call"].fillna("").astype(str)):
+                p_str = str(p_name).strip()
+                if not p_str or p_str.lower() in {"", "unknown", "nan", "none"}:
+                    continue
+                p_yds = pd.to_numeric(p_grp["yards_gained"], errors="coerce").dropna()
+                p_avg_yds = round(float(p_yds.mean()), 1) if not p_yds.empty else 0.0
+                p_succ = [int(_calc_play_success(r)) for _, r in p_grp.iterrows()]
+                p_sr = round(float(sum(p_succ) / max(1, len(p_succ))), 2)
+                outcomes = []
+                for _, r in p_grp.iterrows():
+                    res = str(r.get("result", "") or "")
+                    yg = r.get("yards_gained")
+                    if res == "TD":
+                        outcomes.append(f"TD (+{yg})")
+                    elif res == "Incomplete":
+                        outcomes.append("Inc")
+                    elif yg is not None and not pd.isna(yg):
+                        outcomes.append(f"{int(yg):+d}")
+                    else:
+                        outcomes.append(res or "—")
+                play_calls.append({
+                    "play_call": p_str,
+                    "plays": int(len(p_grp)),
+                    "avg_yards": p_avg_yds,
+                    "success_rate": p_sr,
+                    "outcomes": ", ".join(outcomes[:5]),
+                })
+            play_calls.sort(key=lambda x: (-x["success_rate"], -x["avg_yards"], -x["plays"]))
+
+        # Best / cold play
+        best_play = play_calls[0] if play_calls else None
+        cold_play = play_calls[-1] if len(play_calls) > 1 and play_calls[-1]["success_rate"] < 0.5 else None
+
+        # Build coach takeaway
+        f_top = fronts[0]["front"] if fronts else "Unspecified"
+        f_top_pct = fronts[0]["pct"] if fronts else 0
+        c_top = coverages[0]["coverage"] if coverages else "Unspecified"
+        c_top_pct = coverages[0]["pct"] if coverages else 0
+        tell_bits = []
+        if fronts:
+            tell_bits.append(f"{f_top} ({f_top_pct:.0f}%)")
+        if coverages:
+            tell_bits.append(f"{c_top} ({c_top_pct:.0f}%)")
+        tell_bits.append(f"Blitz {blitz_pct:.0f}%")
+        tell_summary = " · ".join(tell_bits) if tell_bits else "Look balanced"
+
+        out.append({
+            "formation": formation,
+            "plays": n,
+            "avg_yards": avg_yards,
+            "success_rate": succ_rate,
+            "fronts": fronts,
+            "coverages": coverages,
+            "blitz_n": blitz_n,
+            "blitz_pct": blitz_pct,
+            "top_front": f_top,
+            "top_coverage": c_top,
+            "tell_summary": tell_summary,
+            "best_play": best_play,
+            "cold_play": cold_play,
+            "play_calls": play_calls,
+        })
+    out.sort(key=lambda x: -x["plays"])
+    return out
+
+
+def _analyze_formation_combos(half1: pd.DataFrame, *, unit: str = "Offense") -> list[dict]:
+    """
+    How each Formation + Play Call combo worked in the 1st half:
+    - Combo label (e.g. Slot · Army Bear)
+    - Snaps (n)
+    - Avg yards, Total yards
+    - Success rate %
+    - Play outcome sequence (e.g. +6, +8, TD (+22))
+    - Defensive looks faced (front/coverage)
+    - Verdict: 🔥 FEATURE / ❄️ SHELVE / 🎯 SOLID
+    - Coach takeaway note
+    """
+    logs = _offense_logs(half1) if unit.lower() == "offense" else half1
+    if logs.empty:
+        return []
+    need = {"formation", "play_call"}
+    if not need.issubset(set(logs.columns)):
+        return []
+    out = []
+    for (form_val, play_val), grp in logs.groupby([logs["formation"].fillna("").astype(str), logs["play_call"].fillna("").astype(str)]):
+        formation = str(form_val).strip()
+        play_call = str(play_val).strip()
+        if not formation or not play_call:
+            continue
+        if formation.lower() in {"(blank)", "nan", "none"} or play_call.lower() in {"(blank)", "nan", "none"}:
+            continue
+        n = len(grp)
+        if n < 1:
+            continue
+        yards_s = pd.to_numeric(grp["yards_gained"], errors="coerce").dropna()
+        avg_yards = round(float(yards_s.mean()), 1) if not yards_s.empty else 0.0
+        total_yards = int(yards_s.sum()) if not yards_s.empty else 0
+        successes = [int(_calc_play_success(row)) for _, row in grp.iterrows()]
+        succ_rate = round(float(sum(successes) / max(1, len(successes))), 2)
+
+        outcomes = []
+        looks = []
+        for _, r in grp.iterrows():
+            res = str(r.get("result", "") or "")
+            yg = r.get("yards_gained")
+            if res == "TD":
+                outcomes.append(f"TD (+{yg})")
+            elif res == "Incomplete":
+                outcomes.append("Inc")
+            elif res == "Penalty":
+                outcomes.append(f"Pen ({yg:+d})" if yg is not None and not pd.isna(yg) else "Pen")
+            elif yg is not None and not pd.isna(yg):
+                outcomes.append(f"{int(yg):+d}")
+            else:
+                outcomes.append(res or "—")
+            f = str(r.get("def_front") or "").strip()
+            c = str(r.get("coverage") or "").strip()
+            if f or c:
+                looks.append(f"{f or '—'} / {c or '—'}")
+
+        # Unique looks summary
+        look_counts = pd.Series(looks).value_counts() if looks else pd.Series(dtype=int)
+        look_summary_bits = [f"{lk} ({cnt}x)" if cnt > 1 else str(lk) for lk, cnt in look_counts.items()]
+        look_summary = " · ".join(look_summary_bits[:3]) if look_summary_bits else "Unspecified look"
+
+        # Verdict
+        if succ_rate >= 0.67 and avg_yards >= 4.0:
+            verdict = "FEATURE"
+            verdict_badge = "🔥 FEATURE"
+            coach_tip = f"{sum(successes)}/{n} successful ({avg_yards:+.1f} yds/play). High payoff vs {look_summary}."
+        elif succ_rate <= 0.33 or avg_yards < 1.0 or (n >= 2 and sum(successes) == 0):
+            verdict = "SHELVE"
+            verdict_badge = "❄️ SHELVE"
+            coach_tip = f"Only {sum(successes)}/{n} successful ({avg_yards:+.1f} yds/play) vs {look_summary}. Adjust or cut."
+        else:
+            verdict = "SOLID"
+            verdict_badge = "🎯 SOLID"
+            coach_tip = f"{sum(successes)}/{n} successful ({avg_yards:+.1f} yds/play) vs {look_summary}."
+
+        out.append({
+            "combo": f"{formation} · {play_call}",
+            "formation": formation,
+            "play_call": play_call,
+            "plays": n,
+            "avg_yards": avg_yards,
+            "total_yards": total_yards,
+            "success_rate": succ_rate,
+            "good": sum(successes),
+            "bad": n - sum(successes),
+            "outcomes_str": ", ".join(outcomes),
+            "look_summary": look_summary,
+            "verdict": verdict,
+            "verdict_badge": verdict_badge,
+            "coach_tip": coach_tip,
+        })
+    out.sort(key=lambda x: (-x["success_rate"], -x["avg_yards"], -x["plays"]))
+    return out
+
+
 def build_halftime_report(
     opponent: str,
     live_logs: pd.DataFrame,
@@ -3275,11 +3608,16 @@ def build_halftime_report(
             seen.add(a)
             unique_adj.append(a)
 
+    form_defense_summary = _analyze_formation_defense(half1, unit="Offense")
+    form_combos_summary = _analyze_formation_combos(half1, unit="Offense")
+
     report = {
         "opponent": opponent,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "version": 10,
+        "version": 11,
         "summary": summary,
+        "formation_defense": form_defense_summary,
+        "formation_combos": form_combos_summary,
         "working": {
             "offense": _scores_to_records(working_o),
             "defense": _scores_to_records(working_d),
@@ -3450,6 +3788,26 @@ def format_halftime_report_markdown(report: dict) -> str:
                         f"  - `{row.get(label_key)}` → Cover `{row.get('coverage')}` "
                         f"**{row.get('pct', 0)}%** (n={row.get('group_plays', 0)})"
                     )
+
+    # How they defended our formations
+    form_def = report.get("formation_defense") or []
+    if form_def:
+        lines.append("")
+        lines.append("## How they defended our formations")
+        for f in form_def:
+            bp = f.get("best_play")
+            bp_str = f" · Best: `{bp['play_call']}` ({bp['avg_yards']:+.1f} yds, {bp['success_rate']*100:.0f}% succ)" if bp else ""
+            lines.append(f"- **`{f['formation']}`** ({f['plays']} snaps · avg {f['avg_yards']:+.1f} yds · {f['success_rate']*100:.0f}% success)")
+            lines.append(f"  - Looks shown: {f['tell_summary']}{bp_str}")
+
+    # Formation + Play combos breakdown
+    combos = report.get("formation_combos") or []
+    if combos:
+        lines.append("")
+        lines.append("## Formation + Play combos (What worked vs what didn't)")
+        for c in combos:
+            lines.append(f"- {c['verdict_badge']} **`{c['combo']}`** ({c['plays']} snaps · avg {c['avg_yards']:+.1f} yds · {c['success_rate']*100:.0f}% succ)")
+            lines.append(f"  - Outcomes: `{c['outcomes_str']}` · faced: `{c['look_summary']}`")
 
     _short_board("Formations working", (report.get("formations") or {}).get("offense") or [])
     vs_cov = (report.get("formation_vs_look") or {}).get("vs_coverage") or []
