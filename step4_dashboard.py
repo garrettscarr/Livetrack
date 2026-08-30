@@ -2685,7 +2685,7 @@ def _render_post_game_coach_report_section(
                 file_name=file_name_pdf,
                 mime="application/pdf",
                 type="primary",
-                help="Download clean 3-page publication PDF with visual charts and complete tables.",
+                help="Download clean 4-page publication PDF with visual charts and complete tables.",
             )
         except Exception as e:
             st.warning(f"PDF generation note: {e}")

@@ -1,6 +1,6 @@
 """
-Post-game breakdown report → printable multi-page PDF with charts, tables, and coach notes.
-Designed for high-impact coach presentations: crisp typography, structured pages, and clean data visualization.
+Post-game breakdown report → clean, professional multi-page PDF for coaches.
+Crisp typography, structured layout, high-contrast tables, and dedicated visual charts.
 """
 
 from __future__ import annotations
@@ -34,24 +34,23 @@ from reportlab.platypus import (
     TableStyle,
 )
 
-# Brand Color Palette
-BRAND = colors.HexColor("#1B4332")          # Deep Forest Green
-BRAND_LIGHT = colors.HexColor("#2D6A4F")    # Medium Forest
+# Colors
+BRAND = colors.HexColor("#1B4332")          # Dark Green
+BRAND_LIGHT = colors.HexColor("#2D6A4F")    # Green Medium
 BRAND_ACCENT = colors.HexColor("#40916C")   # Accent Green
 GOLD = colors.HexColor("#C9A227")           # Athletic Gold
-GOLD_DARK = colors.HexColor("#854D0E")      # Amber Brown
-MUTED = colors.HexColor("#52796F")          # Slate Muted Green
-DARK_TEXT = colors.HexColor("#111827")      # Rich Off-Black
-BODY_TEXT = colors.HexColor("#1F2937")      # Charcoal Body
-BG_LIGHT = colors.HexColor("#F8FAFC")       # Soft Ice White / Light Slate
-BG_CARD = colors.HexColor("#F1F5F9")        # Soft Slate
-BORDER_LIGHT = colors.HexColor("#CBD5E1")   # Subtle Border
-FEATURE_GREEN = colors.HexColor("#15803D")  # Crisp Emerald Green
-SHELVE_RED = colors.HexColor("#DC2626")     # Cardinal Red
+MUTED = colors.HexColor("#52796F")          # Muted Green
+DARK_TEXT = colors.HexColor("#111827")      # Rich Text
+BODY_TEXT = colors.HexColor("#1F2937")      # Body
+BG_LIGHT = colors.HexColor("#F8FAFC")       # Soft Table Alt Row
+BG_CARD = colors.HexColor("#F1F5F9")        # Card Box
+BORDER_LIGHT = colors.HexColor("#CBD5E1")   # Grid Line
+FEATURE_GREEN = colors.HexColor("#15803D")  # Green
+SHELVE_RED = colors.HexColor("#DC2626")     # Red
 
 
 class NumberedCanvas(canvas.Canvas):
-    """Two-pass canvas for total page count & running headers/footers."""
+    """Two-pass canvas for running header & footer with exact page counts."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -65,30 +64,31 @@ class NumberedCanvas(canvas.Canvas):
         num_pages = len(self._saved_page_states)
         for state in self._saved_page_states:
             self.__dict__.update(state)
-            self.draw_page_number(num_pages)
+            self.draw_page_decorations(num_pages)
             super().showPage()
         super().save()
 
-    def draw_page_number(self, page_count: int):
+    def draw_page_decorations(self, page_count: int):
         self.saveState()
-        self.setFont("Helvetica", 8)
-        self.setFillColor(colors.HexColor("#64748B"))
+        self.setFont("Helvetica-Bold", 8)
+        self.setFillColor(BRAND)
 
-        # Running Header (pages 2+)
+        # Header on pages 2+
         if self._pageNumber > 1:
-            self.drawString(0.45 * inch, 10.55 * inch, "Football EPA · Post-Game Performance Breakdown")
+            self.drawString(0.45 * inch, 10.45 * inch, "Football EPA · Post-Game Coach Breakdown")
+            self.setFont("Helvetica", 8)
+            self.setFillColor(colors.HexColor("#64748B"))
+            self.drawRightString(8.05 * inch, 10.45 * inch, "Confidential · Team Use Only")
             self.setStrokeColor(BORDER_LIGHT)
             self.setLineWidth(0.5)
-            self.line(0.45 * inch, 10.45 * inch, 8.05 * inch, 10.45 * inch)
+            self.line(0.45 * inch, 10.35 * inch, 8.05 * inch, 10.35 * inch)
 
-        # Running Footer (all pages)
+        # Footer on all pages
+        self.setFont("Helvetica", 8)
+        self.setFillColor(colors.HexColor("#64748B"))
+        self.drawString(0.45 * inch, 0.35 * inch, "Football EPA Analytics · Process vs Outcome Performance")
         page_text = f"Page {self._pageNumber} of {page_count}"
         self.drawRightString(8.05 * inch, 0.35 * inch, page_text)
-        self.drawString(
-            0.45 * inch,
-            0.35 * inch,
-            "CONFIDENTIAL · For Coaching Staff Only · Powered by Football EPA Analytics",
-        )
         self.setStrokeColor(BORDER_LIGHT)
         self.setLineWidth(0.5)
         self.line(0.45 * inch, 0.48 * inch, 8.05 * inch, 0.48 * inch)
@@ -99,17 +99,16 @@ def _chart_down_efficiency(downs: list[dict]) -> BytesIO | None:
     """Grouped bar chart: Avg Yards & Success Rate % by Down."""
     if not downs:
         return None
-    labels = [str(d.get("label", f"Down {d.get('down')}"))[:8] for d in downs]
+    labels = [str(d.get("label", f"Down {d.get('down')}"))[:7] for d in downs]
     avg_yds = [float(d.get("avg_yards", 0) or 0) for d in downs]
     succ_rate = [float(d.get("success_rate", 0) or 0) * 100 for d in downs]
 
-    fig, ax1 = plt.subplots(figsize=(6.9, 2.3), facecolor="white")
+    fig, ax1 = plt.subplots(figsize=(6.8, 2.3), facecolor="white")
     x = np.arange(len(labels))
-    width = 0.32
+    width = 0.30
 
-    # Yards bars
-    bars1 = ax1.bar(x - width / 2, avg_yds, width, label="Yds / Play", color="#2D6A4F", edgecolor="none", zorder=3)
-    ax1.set_ylabel("Avg Yards", color="#1B4332", fontsize=8.5, fontweight="bold")
+    bars1 = ax1.bar(x - width / 2, avg_yds, width, label="Avg Yds/Play", color="#2D6A4F", zorder=3)
+    ax1.set_ylabel("Avg Yards / Play", color="#1B4332", fontsize=9, fontweight="bold")
     ax1.set_xticks(x)
     ax1.set_xticklabels(labels, fontsize=8.5, fontweight="bold", color="#1F2937")
     ax1.tick_params(axis="y", labelcolor="#1B4332", labelsize=8)
@@ -120,10 +119,10 @@ def _chart_down_efficiency(downs: list[dict]) -> BytesIO | None:
     ax1.spines["left"].set_color("#CBD5E1")
     ax1.spines["bottom"].set_color("#CBD5E1")
 
-    # Success rate bars
+    # Success rate on right axis
     ax2 = ax1.twinx()
-    bars2 = ax2.bar(x + width / 2, succ_rate, width, label="Success %", color="#C9A227", edgecolor="none", zorder=3)
-    ax2.set_ylabel("Success Rate %", color="#854D0E", fontsize=8.5, fontweight="bold")
+    bars2 = ax2.bar(x + width / 2, succ_rate, width, label="Success %", color="#C9A227", zorder=3)
+    ax2.set_ylabel("Success Rate %", color="#854D0E", fontsize=9, fontweight="bold")
     ax2.tick_params(axis="y", labelcolor="#854D0E", labelsize=8)
     ax2.set_ylim(0, max(100, max(succ_rate + [60]) * 1.15))
     ax2.spines["top"].set_visible(False)
@@ -131,18 +130,17 @@ def _chart_down_efficiency(downs: list[dict]) -> BytesIO | None:
     ax2.spines["right"].set_color("#CBD5E1")
     ax2.spines["bottom"].set_color("#CBD5E1")
 
-    # Value callouts
     for bar in bars1:
         h = bar.get_height()
         va = "bottom" if h >= 0 else "top"
         ax1.annotate(
             f"{h:+.1f}",
             xy=(bar.get_x() + bar.get_width() / 2, h),
-            xytext=(0, 2 if h >= 0 else -8),
+            xytext=(0, 2 if h >= 0 else -9),
             textcoords="offset points",
             ha="center",
             va=va,
-            fontsize=7.5,
+            fontsize=8,
             fontweight="bold",
             color="#1B4332",
         )
@@ -156,12 +154,12 @@ def _chart_down_efficiency(downs: list[dict]) -> BytesIO | None:
             textcoords="offset points",
             ha="center",
             va="bottom",
-            fontsize=7.5,
+            fontsize=8,
             fontweight="bold",
             color="#854D0E",
         )
 
-    plt.title("Down & Distance Performance (Yards & Success %)", fontsize=9.5, fontweight="bold", color="#1B4332", loc="left", pad=8)
+    plt.title("Down & Distance Performance (Avg Yards & Success Rate)", fontsize=10, fontweight="bold", color="#1B4332", loc="left", pad=6)
     fig.tight_layout()
     buf = BytesIO()
     fig.savefig(buf, format="png", dpi=160, bbox_inches="tight", facecolor="white")
@@ -171,16 +169,16 @@ def _chart_down_efficiency(downs: list[dict]) -> BytesIO | None:
 
 
 def _chart_phase_and_tendencies(phase_data: dict, looks_data: dict) -> BytesIO | None:
-    """Side-by-side: Run vs Pass Phase yardage + Opponent Coverage Tendency."""
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(6.9, 2.1), facecolor="white")
+    """Side-by-side: Run vs Pass Yardage & Opponent Coverage Tendency."""
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(6.8, 2.0), facecolor="white")
 
-    # Left: Run vs Pass
+    # Run vs Pass
     phases = ["Run Game", "Pass Game"]
     yds = [phase_data.get("run_yds", 0), phase_data.get("pass_yds", 0)]
     colors_list = ["#40916C", "#2D6A4F"]
     ax1.bar(phases, yds, color=colors_list, width=0.45, zorder=3)
     ax1.set_ylabel("Total Yards", fontsize=8.5, fontweight="bold", color="#1B4332")
-    ax1.set_title("Phase Yardage Production", fontsize=9, fontweight="bold", color="#1B4332", loc="left")
+    ax1.set_title("Yardage by Phase", fontsize=9, fontweight="bold", color="#1B4332", loc="left")
     ax1.grid(axis="y", linestyle="--", alpha=0.3, zorder=0)
     ax1.spines["top"].set_visible(False)
     ax1.spines["right"].set_visible(False)
@@ -201,7 +199,7 @@ def _chart_phase_and_tendencies(phase_data: dict, looks_data: dict) -> BytesIO |
             color="#1B4332",
         )
 
-    # Right: Coverage distribution
+    # Coverage distribution
     covs = looks_data.get("coverages", [])[:4]
     if covs:
         cov_labels = [f"{c.get('coverage')}" for c in covs]
@@ -211,8 +209,8 @@ def _chart_phase_and_tendencies(phase_data: dict, looks_data: dict) -> BytesIO |
         ax2.set_yticks(y_pos)
         ax2.set_yticklabels(cov_labels, fontsize=8, fontweight="bold", color="#1F2937")
         ax2.invert_yaxis()
-        ax2.set_xlabel("% of Defensive Snaps", fontsize=8, fontweight="bold", color="#1B4332")
-        ax2.set_title("Opponent Coverage Shown", fontsize=9, fontweight="bold", color="#1B4332", loc="left")
+        ax2.set_xlabel("% of Snaps", fontsize=8, fontweight="bold", color="#1B4332")
+        ax2.set_title("Coverage Shown", fontsize=9, fontweight="bold", color="#1B4332", loc="left")
         ax2.grid(axis="x", linestyle="--", alpha=0.3, zorder=0)
         ax2.spines["top"].set_visible(False)
         ax2.spines["right"].set_visible(False)
@@ -257,12 +255,12 @@ def _chart_formation_production(formations: list[dict]) -> BytesIO | None:
         else:
             bar_colors.append("#52796F")  # Slate
 
-    fig, ax = plt.subplots(figsize=(6.9, max(2.1, 0.35 * len(labels) + 0.6)), facecolor="white")
+    fig, ax = plt.subplots(figsize=(6.8, max(2.2, 0.36 * len(labels) + 0.6)), facecolor="white")
     y_pos = np.arange(len(labels))
 
     bars = ax.barh(y_pos, avg_yds, color=bar_colors, height=0.52, zorder=3)
     ax.set_yticks(y_pos)
-    ax.set_yticklabels([f"{l} (n={s})" for l, s in zip(labels, snaps)], fontsize=8, fontweight="bold", color="#1F2937")
+    ax.set_yticklabels([f"{l} ({s}p)" for l, s in zip(labels, snaps)], fontsize=8.5, fontweight="bold", color="#1F2937")
     ax.invert_yaxis()
     ax.set_xlabel("Avg Yards / Play", fontsize=8.5, fontweight="bold", color="#1B4332")
     ax.axvline(0, color="#64748B", linewidth=0.8, zorder=2)
@@ -282,12 +280,12 @@ def _chart_formation_production(formations: list[dict]) -> BytesIO | None:
             xy=(w + offset, bar.get_y() + bar.get_height() / 2),
             va="center",
             ha=ha,
-            fontsize=7.5,
+            fontsize=8,
             fontweight="bold",
             color="#1B4332" if w >= 0 else "#DC2626",
         )
 
-    plt.title("Formation Effectiveness (Avg Yards / Play)", fontsize=9.5, fontweight="bold", color="#1B4332", loc="left", pad=6)
+    plt.title("Formation Production (Avg Yards / Play & Snaps)", fontsize=9.5, fontweight="bold", color="#1B4332", loc="left", pad=6)
     fig.tight_layout()
     buf = BytesIO()
     fig.savefig(buf, format="png", dpi=160, bbox_inches="tight", facecolor="white")
@@ -298,10 +296,11 @@ def _chart_formation_production(formations: list[dict]) -> BytesIO | None:
 
 def build_post_game_pdf(report: dict) -> bytes:
     """
-    Render professional, publication-quality multi-page PDF report.
-    - Page 1: Executive Dashboard, KPIs, Coach Takeaways, Down Efficiency & Phase Charts.
-    - Page 2: Formation Defense Breakdown & Formation-Play Combos (Feature vs Shelve).
-    - Page 3: Explosive (10+ Yds) & Scoring Reel Log + Game Wrap-Up.
+    Render clean, professional multi-page PDF report with exact spacing.
+    - Page 1: Executive Dashboard, KPIs, Action Items & Down/Phase Tables.
+    - Page 2: Visual Charts (Down Efficiency, Phase Yardage, Formation Production).
+    - Page 3: Formation Defense & Formation-Play Combos Breakdown.
+    - Page 4: Explosive (10+ Yds) & Scoring Reel Log + Wrap-Up Card.
     """
     buf = BytesIO()
     doc = SimpleDocTemplate(
@@ -319,8 +318,8 @@ def build_post_game_pdf(report: dict) -> bytes:
     title_style = ParagraphStyle(
         "RptTitle",
         parent=styles["Heading1"],
-        fontSize=17,
-        leading=21,
+        fontSize=16,
+        leading=20,
         textColor=BRAND,
         spaceAfter=1,
         alignment=TA_LEFT,
@@ -340,15 +339,15 @@ def build_post_game_pdf(report: dict) -> bytes:
         fontSize=10.5,
         leading=13,
         textColor=BRAND,
-        spaceBefore=6,
-        spaceAfter=3,
+        spaceBefore=8,
+        spaceAfter=4,
         fontName="Helvetica-Bold",
     )
     bullet_style = ParagraphStyle(
         "RptBullet",
         parent=styles["Normal"],
         fontSize=8,
-        leading=10.5,
+        leading=11,
         textColor=BODY_TEXT,
         leftIndent=8,
         spaceAfter=2,
@@ -407,7 +406,7 @@ def build_post_game_pdf(report: dict) -> bytes:
     stamp = report.get("generated_at", datetime.now().strftime("%B %d, %Y"))
 
     # =========================================================================
-    # PAGE 1: Executive Dashboard, Scoreboard, Phase/Down Analysis
+    # PAGE 1: Executive Dashboard, KPIs, Action Items & Down/Phase Tables
     # =========================================================================
 
     story.append(Paragraph(f"📋 Post-Game Performance Report: {opp}", title_style))
@@ -478,7 +477,7 @@ def build_post_game_pdf(report: dict) -> bytes:
         )
     )
     story.append(card_table)
-    story.append(Spacer(1, 0.05 * inch))
+    story.append(Spacer(1, 0.06 * inch))
 
     # Key Takeaways Box
     takeaways = report.get("coach_takeaways", [])
@@ -487,7 +486,7 @@ def build_post_game_pdf(report: dict) -> bytes:
         for t in takeaways:
             clean_t = t.replace("<b>", "<b>").replace("</b>", "</b>")
             story.append(Paragraph(f"• {clean_t}", bullet_style))
-        story.append(Spacer(1, 0.05 * inch))
+        story.append(Spacer(1, 0.06 * inch))
 
     # Down & Distance Efficiency Table
     downs_list = report.get("down_efficiency", [])
@@ -535,41 +534,106 @@ def build_post_game_pdf(report: dict) -> bytes:
         story.append(down_tbl)
         story.append(Spacer(1, 0.06 * inch))
 
-    # Charts on Page 1: Down Efficiency + Phase Production
-    chart_down = _chart_down_efficiency(downs_list)
-    if chart_down:
-        story.append(Image(chart_down, width=7.2 * inch, height=2.25 * inch))
-
+    # Phase Breakdown (Run vs Pass) Table
     phase_data = report.get("phase_data", {})
-    looks_data = report.get("looks_faced", {})
-    chart_phase = _chart_phase_and_tendencies(phase_data, looks_data)
-    if chart_phase:
-        story.append(Spacer(1, 0.04 * inch))
-        story.append(Image(chart_phase, width=7.2 * inch, height=2.05 * inch))
+    if phase_data:
+        story.append(Paragraph("📊 Phase Breakdown (Run vs. Pass)", h2_style))
+        phase_headers = [
+            Paragraph("Phase", tbl_head_style),
+            Paragraph("Plays", tbl_head_style),
+            Paragraph("Total Yds", tbl_head_style),
+            Paragraph("Avg Yds/Play", tbl_head_style),
+            Paragraph("Touchdowns", tbl_head_style),
+            Paragraph("Success %", tbl_head_style),
+            Paragraph("Disruptions", tbl_head_style),
+        ]
+        phase_rows = [
+            phase_headers,
+            [
+                Paragraph("<b>Run Game</b>", tbl_cell_style),
+                Paragraph(str(phase_data.get("run_plays", 0)), tbl_cell_style),
+                Paragraph(f"{phase_data.get('run_yds', 0)} yds", tbl_cell_style),
+                Paragraph(f"{phase_data.get('run_avg', 0.0):.1f} ypc", tbl_cell_style),
+                Paragraph(f"{phase_data.get('run_tds', 0)} TD", tbl_cell_bold),
+                Paragraph(f"{phase_data.get('run_success_rate', 0)*100:.0f}%", tbl_cell_bold),
+                Paragraph("—", tbl_cell_style),
+            ],
+            [
+                Paragraph("<b>Pass Game</b>", tbl_cell_style),
+                Paragraph(str(phase_data.get("pass_plays", 0)), tbl_cell_style),
+                Paragraph(f"{phase_data.get('pass_yds', 0)} yds", tbl_cell_style),
+                Paragraph(f"{phase_data.get('pass_avg', 0.0):.1f} ypa", tbl_cell_style),
+                Paragraph(f"{phase_data.get('pass_tds', 0)} TDs", tbl_cell_bold),
+                Paragraph(f"{phase_data.get('pass_success_rate', 0)*100:.0f}%", tbl_cell_bold),
+                Paragraph(f"{phase_data.get('sacks', 0)} sacks, {phase_data.get('penalties', 0)} pen", tbl_cell_style),
+            ],
+        ]
+        phase_tbl = Table(
+            phase_rows,
+            colWidths=[1.1 * inch, 0.55 * inch, 0.85 * inch, 0.95 * inch, 0.85 * inch, 0.85 * inch, 2.05 * inch],
+        )
+        phase_tbl.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), BRAND),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BG_LIGHT]),
+                    ("GRID", (0, 0), (-1, -1), 0.3, BORDER_LIGHT),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2.5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+                ]
+            )
+        )
+        story.append(phase_tbl)
 
     # =========================================================================
-    # PAGE 2: Formation Performance & Combinations (Feature vs Shelve)
+    # PAGE 2: Visual Performance Charts
     # =========================================================================
     story.append(PageBreak())
 
-    form_list = report.get("formation_defense", [])
-    story.append(Paragraph("🛡️ How They Defended Our Formations", title_style))
+    story.append(Paragraph("📊 Visual Performance Charts", title_style))
     story.append(
         Paragraph(
-            "Detailed breakdown of how the opponent structured their front, coverage, and blitz rate vs each offensive look.",
+            "Graphical evaluation of down-and-distance efficiency, offensive phase yardage, and formation production.",
             sub_style,
         )
     )
-    story.append(HRFlowable(width="100%", thickness=1, color=BRAND_LIGHT, spaceBefore=1, spaceAfter=4))
+    story.append(HRFlowable(width="100%", thickness=1, color=BRAND_LIGHT, spaceBefore=1, spaceAfter=8))
 
-    # Formation production chart
+    # Charts on Page 2: Down Efficiency + Phase Production + Formation Production
+    chart_down = _chart_down_efficiency(downs_list)
+    if chart_down:
+        story.append(Image(chart_down, width=7.2 * inch, height=2.3 * inch))
+        story.append(Spacer(1, 0.1 * inch))
+
+    looks_data = report.get("looks_faced", {})
+    chart_phase = _chart_phase_and_tendencies(phase_data, looks_data)
+    if chart_phase:
+        story.append(Image(chart_phase, width=7.2 * inch, height=2.1 * inch))
+        story.append(Spacer(1, 0.1 * inch))
+
+    form_list = report.get("formation_defense", [])
     chart_form = _chart_formation_production(form_list)
     if chart_form:
-        story.append(Image(chart_form, width=7.2 * inch, height=2.1 * inch))
-        story.append(Spacer(1, 0.06 * inch))
+        story.append(Image(chart_form, width=7.2 * inch, height=2.3 * inch))
 
-    # Formation Table
+    # =========================================================================
+    # PAGE 3: Formation Performance & Combinations (Feature vs Shelve)
+    # =========================================================================
+    story.append(PageBreak())
+
+    story.append(Paragraph("🛡️ Formation Defense & Combinations Breakdown", title_style))
+    story.append(
+        Paragraph(
+            "How the opponent structured their front, coverage, and blitz rate vs each look, and combo execution verdicts.",
+            sub_style,
+        )
+    )
+    story.append(HRFlowable(width="100%", thickness=1, color=BRAND_LIGHT, spaceBefore=1, spaceAfter=5))
+
+    # Formation Table (Top 7 to ensure clean fit)
     if form_list:
+        story.append(Paragraph("How They Defended Our Formations", h2_style))
         form_headers = [
             Paragraph("Formation", tbl_head_style),
             Paragraph("Snaps", tbl_head_style),
@@ -581,7 +645,7 @@ def build_post_game_pdf(report: dict) -> bytes:
             Paragraph("Best Play Call", tbl_head_style),
         ]
         form_rows = [form_headers]
-        for f in form_list:
+        for f in form_list[:7]:
             bp = f.get("best_play")
             bp_str = f"{bp['play_call']} ({bp['avg_yards']:+.1f}y)" if bp else "—"
             verdict = str(f.get("verdict", "SOLID")).upper()
@@ -609,15 +673,15 @@ def build_post_game_pdf(report: dict) -> bytes:
                     ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BG_LIGHT]),
                     ("GRID", (0, 0), (-1, -1), 0.3, BORDER_LIGHT),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("TOPPADDING", (0, 0), (-1, -1), 2.5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
                 ]
             )
         )
         story.append(form_tbl)
-        story.append(Spacer(1, 0.08 * inch))
+        story.append(Spacer(1, 0.06 * inch))
 
-    # Formation + Play Combos Table
+    # Formation + Play Combos Table (Top 6 to keep on Page 3)
     combos = report.get("formation_combos", [])
     if combos:
         story.append(Paragraph("⚡ Formation + Play Combinations (What Worked vs What Didn't)", h2_style))
@@ -630,7 +694,7 @@ def build_post_game_pdf(report: dict) -> bytes:
             Paragraph("Verdict & Coach Action", tbl_head_style),
         ]
         combo_rows = [combo_headers]
-        for c in combos[:10]:
+        for c in combos[:6]:
             verdict = str(c.get("verdict", "SOLID")).upper()
             v_color = "#15803D" if "FEATURE" in verdict else "#DC2626" if "SHELVE" in verdict else "#475569"
             tip = str(c.get("coach_tip", ""))
@@ -655,15 +719,15 @@ def build_post_game_pdf(report: dict) -> bytes:
                     ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, BG_LIGHT]),
                     ("GRID", (0, 0), (-1, -1), 0.3, BORDER_LIGHT),
                     ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                    ("TOPPADDING", (0, 0), (-1, -1), 2.5),
-                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2.5),
+                    ("TOPPADDING", (0, 0), (-1, -1), 2),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
                 ]
             )
         )
         story.append(combo_tbl)
 
     # =========================================================================
-    # PAGE 3: Explosive Plays Reel & Coach Game Wrap
+    # PAGE 4: Explosive Plays Reel & Coach Game Wrap
     # =========================================================================
     story.append(PageBreak())
 

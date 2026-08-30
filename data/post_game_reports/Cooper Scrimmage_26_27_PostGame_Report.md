@@ -1,6 +1,6 @@
 # 📋 Post-Game Performance Report: Cooper Scrimmage
 **Game:** Cooper Scrimmage (Week 1) · **Season:** 26-27 · **Film Source:** `live:Cooper_Scrimmage.csv` (24 plays)
-**Generated:** August 30, 2026 · 01:25 PM
+**Generated:** August 30, 2026 · 01:43 PM
 
 ---
 

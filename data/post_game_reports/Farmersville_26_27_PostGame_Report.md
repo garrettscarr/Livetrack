@@ -1,6 +1,6 @@
 # 📋 Post-Game Performance Report: Farmersville
 **Game:** Farmersville (Week 1) · **Season:** 26-27 · **Film Source:** `season.xlsx` (77 plays)
-**Generated:** August 30, 2026 · 01:25 PM
+**Generated:** August 30, 2026 · 01:43 PM
 
 ---
 

@@ -1,6 +1,6 @@
 # 📋 Post-Game Performance Report: Bonham Scrimmage
 **Game:** Bonham Scrimmage (Week 1) · **Season:** 26-27 · **Film Source:** `live:Bonham_Scrimmage.csv` (23 plays)
-**Generated:** August 30, 2026 · 01:25 PM
+**Generated:** August 30, 2026 · 01:42 PM
 
 ---
 
