@@ -17,6 +17,7 @@ import pandas as pd
 PROJECT_DIR = Path(__file__).resolve().parent
 DB_FILE = PROJECT_DIR / "data" / "football.db"
 LIVE_GAMES_DIR = PROJECT_DIR / "data" / "live_games"
+LIVE_LOG_ARCHIVE_DIR = PROJECT_DIR / "data" / "live_log_archive"
 LIVE_SOURCE_PREFIX = "live:"
 
 

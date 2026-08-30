@@ -762,7 +762,7 @@ def _calls_vs_scout_look(
     tagged = sub
     if "play_tagged" in sub.columns:
         tagged = sub[sub["play_tagged"].fillna(0).astype(int) == 1]
-    empty["our_plays"] = int(len(tagged) if len(tagged) else sub)
+    empty["our_plays"] = int(len(tagged) if len(tagged) else len(sub))
     if sub.empty:
         return empty
     grp_min = max(int(min_plays), floor)

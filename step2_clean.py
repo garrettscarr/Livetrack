@@ -175,13 +175,16 @@ def season_label_from_path(path: Path) -> str:
 
 
 def find_season_files() -> list[tuple[Path, str]]:
-    """Primary season.xlsx plus optional season_*.xlsx prior-year files."""
+    """Primary season.xlsx plus optional season_*.xlsx prior-year files (deduplicating seasons)."""
     found: list[tuple[Path, str]] = []
+    seen_seasons: set[str] = set()
     if not SCOUT_DIR.exists():
         return found
     primary = SCOUT_DIR / "season.xlsx"
     if primary.exists():
-        found.append((primary, season_label_from_path(primary)))
+        s_lbl = season_label_from_path(primary)
+        found.append((primary, s_lbl))
+        seen_seasons.add(s_lbl.lower())
     for path in sorted(SCOUT_DIR.glob("season*.xlsx")):
         if path.name.startswith("~$"):
             continue
@@ -190,7 +193,10 @@ def find_season_files() -> list[tuple[Path, str]]:
         # Skip legacy scout_season.xlsx
         if path.stem.lower() == "scout_season":
             continue
-        found.append((path, season_label_from_path(path)))
+        s_lbl = season_label_from_path(path)
+        if s_lbl.lower() not in seen_seasons:
+            found.append((path, s_lbl))
+            seen_seasons.add(s_lbl.lower())
     return found
 
 
@@ -256,8 +262,12 @@ def clean_side(
         _is_tagged(df["def_front"]) & _is_tagged(df["coverage"])
     ).astype(int)
 
-    flags = df["result"].apply(result_flags).apply(pd.Series)
-    df = pd.concat([df, flags], axis=1)
+    if df.empty:
+        for k in ["is_touchdown", "is_turnover", "is_penalty", "is_incomplete", "points_scored"]:
+            df[k] = pd.Series(dtype=int if k == "points_scored" else bool)
+    else:
+        flags = df["result"].apply(result_flags).apply(pd.Series)
+        df = pd.concat([df, flags], axis=1)
 
     if opponents is not None:
         df = df.merge(opponents, on="game_id", how="left")
@@ -291,9 +301,10 @@ def find_named_scout_files() -> list[tuple[Path, str, str, str]]:
     if not SCOUT_DIR.exists():
         return found
 
-    # Opponent + D/O + optional season suffix
+    # Opponent + optional season + D/O + optional scout + optional season suffix
+    # Handles: "Farmersville D", "Farmersville 26-27 D Scout", "Farmersville D_24-25", etc.
     pat = re.compile(
-        r"^(.+?)\s+([DO])(?:[_\s\-]+(.+))?$",
+        r"^(.+?)(?:\s+(\d{2}-\d{2}|\d{4}))?\s+([DO])(?:\s*scout)?(?:[_\s\-]+(.+))?$",
         flags=re.I,
     )
     for path in sorted(SCOUT_DIR.glob("*.xlsx")):
@@ -302,7 +313,7 @@ def find_named_scout_files() -> list[tuple[Path, str, str, str]]:
         stem = path.stem.strip()
         lower = stem.lower()
         # Skip our season film files
-        if lower == "season" or lower.startswith("season_") or lower.startswith("season "):
+        if lower == "season" or lower.startswith("season_") or lower.startswith("season ") or "game" in lower:
             continue
         if lower in {"scout_season"}:
             continue
@@ -310,8 +321,10 @@ def find_named_scout_files() -> list[tuple[Path, str, str, str]]:
         if not m:
             continue
         opponent = m.group(1).strip()
-        side = m.group(2).upper()
-        season = (m.group(3) or "current").strip() or "current"
+        s_mid = (m.group(2) or "").strip()
+        side = m.group(3).upper()
+        s_end = (m.group(4) or "").strip()
+        season = s_mid or s_end or "current"
         # Only blank/"current" mean active; keep explicit prior labels (25-26, 24-25, …)
         if season.lower() in {"current", ""}:
             try:
@@ -372,8 +385,12 @@ def clean_scout_file(
         + "  |  "
         + df["coverage"].fillna("Unknown").astype(str)
     )
-    flags = df["result"].apply(result_flags).apply(pd.Series)
-    df = pd.concat([df, flags], axis=1)
+    if df.empty:
+        for k in ["is_touchdown", "is_turnover", "is_penalty", "is_incomplete", "points_scored"]:
+            df[k] = pd.Series(dtype=int if k == "points_scored" else bool)
+    else:
+        flags = df["result"].apply(result_flags).apply(pd.Series)
+        df = pd.concat([df, flags], axis=1)
 
     before = len(df)
     if scout_role == "opponent_defense":

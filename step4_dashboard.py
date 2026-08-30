@@ -2304,7 +2304,21 @@ def _render_previous_game_hudl_viewer(review_df: pd.DataFrame, season: str) -> N
     archive_dir = LIVE_LOG_ARCHIVE_DIR
     archive_files = sorted(archive_dir.glob("*.csv"), reverse=True) if archive_dir.exists() else []
 
-    # Source C: Games present in the current review_df (e.g. from football.db)
+    # Source C: Hudl exports in data/hudl_exports
+    hudl_export_dir = PROJECT_DIR / "data" / "hudl_exports"
+    hudl_export_files = (
+        sorted(
+            [
+                p for p in hudl_export_dir.glob("*.*")
+                if p.suffix.lower() in {".xlsx", ".csv"} and not p.name.startswith("~$")
+            ],
+            key=lambda p: p.name,
+        )
+        if hudl_export_dir.exists()
+        else []
+    )
+
+    # Source D: Games present in the current review_df (e.g. from football.db)
     db_games = []
     if not review_df.empty and "opponent" in review_df.columns:
         for opp, grp in review_df.groupby(review_df["opponent"].fillna("Unknown").astype(str)):
@@ -2324,6 +2338,17 @@ def _render_previous_game_hudl_viewer(review_df: pd.DataFrame, season: str) -> N
     # Prepare options for the selector
     options_map: dict[str, dict] = {}
     
+    # Add Hudl export files
+    for p in hudl_export_files:
+        stem = p.stem
+        clean_label = stem.replace("_", " ")
+        key = f"🏈 Hudl Export: {clean_label} ({p.name})"
+        options_map[key] = {
+            "type": "hudl_export_file",
+            "path": p,
+            "name": p.name,
+        }
+
     # Add saved live games
     for p in saved_files:
         stem = p.stem
@@ -2361,7 +2386,7 @@ def _render_previous_game_hudl_viewer(review_df: pd.DataFrame, season: str) -> N
         "Select Game to View / Tag",
         list(options_map.keys()),
         key="hudl_prev_game_select",
-        help="Choose a previous live game or archived play log to review and tag in Hudl.",
+        help="Choose a previous live game, Hudl export, or archived play log to review and tag in Hudl.",
     )
 
     selected_info = options_map.get(selected_key)
@@ -2374,6 +2399,17 @@ def _render_previous_game_hudl_viewer(review_df: pd.DataFrame, season: str) -> N
     
     if file_type == "db":
         game_df = selected_info.get("df")
+    elif file_type == "hudl_export_file":
+        path = selected_info.get("path")
+        if path and Path(path).exists():
+            try:
+                if str(path).lower().endswith(".xlsx"):
+                    game_df = pd.read_excel(path)
+                else:
+                    game_df = pd.read_csv(path)
+            except Exception as e:
+                st.error(f"Error loading file {path}: {e}")
+                return
     elif file_type in {"live_game_csv", "archive_csv"}:
         path = selected_info.get("path")
         if path and Path(path).exists():
