@@ -2288,7 +2288,7 @@ def _render_previous_game_hudl_viewer(review_df: pd.DataFrame, season: str) -> N
     """
     from pathlib import Path
     import re
-    from live_games import LIVE_GAMES_DIR, list_saved_live_games
+    from live_games import _safe_name, LIVE_GAMES_DIR, list_saved_live_games
 
     st.markdown("---")
     st.subheader("📋 Previous Game Play Logs (Tag in Hudl)")
@@ -2301,7 +2301,7 @@ def _render_previous_game_hudl_viewer(review_df: pd.DataFrame, season: str) -> N
     saved_files = list_saved_live_games()
     
     # Source B: Archived live logs in data/live_log_archive
-    archive_dir = PROJECT_DIR / "data" / "live_log_archive"
+    archive_dir = LIVE_LOG_ARCHIVE_DIR
     archive_files = sorted(archive_dir.glob("*.csv"), reverse=True) if archive_dir.exists() else []
 
     # Source C: Games present in the current review_df (e.g. from football.db)
