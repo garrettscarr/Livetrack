@@ -488,6 +488,23 @@ def print_side_summary(df: pd.DataFrame, side: str) -> None:
         print(df["def_call"].value_counts(dropna=False).head(8).to_string())
 
 
+def _active_season_live_game_offset(season: str) -> int:
+    """Number of pre-existing live games for this season (e.g. scrimmages on g1, g2)."""
+    try:
+        from live_games import list_saved_live_games
+
+        max_gid = 0
+        for p in list_saved_live_games():
+            m = re.match(r"^(.+?)_g(\d+)_(.+)\.csv$", p.name)
+            if m:
+                s_id, gid = m.group(1), int(m.group(2))
+                if s_id.lower() == str(season).lower():
+                    max_gid = max(max_gid, gid)
+        return max_gid
+    except Exception:
+        return 0
+
+
 def import_all_season() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Load current + prior season Hudl files into offense/defense frames."""
     files = find_season_files()
@@ -504,26 +521,32 @@ def import_all_season() -> tuple[pd.DataFrame, pd.DataFrame]:
     print(f"\nLoading {len(files)} season file(s):")
     for path, season in files:
         print(f"\n  {path.name} → season={season}")
+        try:
+            from team_config import is_current_season_value
+
+            is_active = is_current_season_value(season)
+        except Exception:
+            is_active = str(season).strip().lower() in {"current", "26-27", ""}
+
+        # For active season, preserve slots for live scrimmage games (e.g. g1, g2)
+        season_base_offset = _active_season_live_game_offset(season) if is_active else 0
+        effective_offset = game_offset + season_base_offset
+
         raw = pd.read_excel(path)
         local_ids = assign_game_ids(raw["PLAY #"])
         raw = raw.copy()
-        raw["game_id"] = local_ids + game_offset
+        raw["game_id"] = local_ids + effective_offset
         n_games = int(local_ids.nunique())
-        print(f"    rows={len(raw):,}  games={n_games}  game_id {game_offset+1}–{game_offset+n_games}")
+        print(f"    rows={len(raw):,}  games={n_games}  game_id {effective_offset+1}–{effective_offset+n_games}")
 
         opponents = load_opponents(season)
         if opponents is not None:
-            # Shift opponent map to match offset game_ids
             opp = opponents.copy()
-            opp["game_id"] = opp["game_id"] + game_offset
+            if not is_active:
+                # Prior seasons: shift relative schedule to match absolute DB offset
+                opp["game_id"] = opp["game_id"] + game_offset
         else:
             opp = None
-            try:
-                from team_config import is_current_season_value
-
-                is_active = is_current_season_value(season)
-            except Exception:
-                is_active = str(season).strip().lower() in {"current", ""}
             if not is_active:
                 print(
                     f"    note: no opponents_{season}.csv — opponents left Unknown "
@@ -543,7 +566,7 @@ def import_all_season() -> tuple[pd.DataFrame, pd.DataFrame]:
         )
         off_frames.append(offense)
         def_frames.append(defense)
-        game_offset += n_games
+        game_offset = effective_offset + n_games
 
     offense = pd.concat(off_frames, ignore_index=True)
     defense = pd.concat(def_frames, ignore_index=True)

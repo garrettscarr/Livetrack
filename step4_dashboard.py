@@ -2568,6 +2568,132 @@ def _render_previous_game_hudl_viewer(review_df: pd.DataFrame, season: str) -> N
     )
 
 
+def _render_post_game_coach_report_section(
+    review_df: pd.DataFrame,
+    season: str,
+    games_df: pd.DataFrame | None = None,
+) -> None:
+    """
+    Dedicated post-game performance report generator and viewer for coaches
+    with downloadable PDF (with charts) and Markdown.
+    """
+    if review_df is None or review_df.empty or "opponent" not in review_df.columns:
+        return
+
+    from mesh_engine import build_post_game_report, format_post_game_report_markdown
+    from post_game_report_pdf import build_post_game_pdf
+    from live_games import _safe_name
+
+    st.markdown("---")
+    st.subheader("📋 Post-Game Coach Breakdown & Downloadable Report")
+    st.caption(
+        "Generate a complete game review with visual charts, down-and-distance efficiency, "
+        "formation performance, and coach action items. Download as a PDF with graphs or clean Markdown."
+    )
+
+    # Discover games in review_df
+    distinct_games: list[dict] = []
+    for (gid, opp), grp in review_df.groupby(["game_id", "opponent"]):
+        opp_str = str(opp).strip()
+        if not opp_str or opp_str.lower() in {"nan", "none", "unknown"}:
+            continue
+        g_notes = str(grp["game_notes"].iloc[0]) if "game_notes" in grp.columns and pd.notna(grp["game_notes"].iloc[0]) else ""
+        label = format_game_label(opp_str, g_notes, game_id=int(gid))
+        distinct_games.append({
+            "game_id": int(gid),
+            "opponent": opp_str,
+            "label": label,
+            "plays": len(grp),
+            "df": grp.copy(),
+        })
+
+    if not distinct_games:
+        return
+
+    # Default to the most recent game (last in list)
+    game_labels = [g["label"] for g in distinct_games]
+    default_ix = len(game_labels) - 1
+    selected_label = st.selectbox(
+        "Select Game for Post-Game Breakdown",
+        game_labels,
+        index=default_ix,
+        key="post_game_select_box",
+        help="Choose a game to inspect performance metrics and download the coach report.",
+    )
+
+    picked_game = next((g for g in distinct_games if g["label"] == selected_label), distinct_games[-1])
+    game_plays = picked_game["df"]
+    opp_name = picked_game["opponent"]
+
+    # Match xPoints and luck from games_df if available
+    xpoints_val = None
+    luck_val = None
+    if games_df is not None and not games_df.empty:
+        match_row = games_df[
+            (games_df["game_id"].astype(str) == str(picked_game["game_id"]))
+            & (games_df["opponent"].astype(str).str.strip().str.lower() == opp_name.lower())
+        ]
+        if not match_row.empty:
+            xpoints_val = float(match_row.iloc[0]["xpoints"])
+            luck_val = float(match_row.iloc[0]["luck"])
+
+    report = build_post_game_report(
+        opp_name,
+        game_plays,
+        season=season,
+        game_label=picked_game["label"],
+        season_df=review_df,
+        xpoints=xpoints_val,
+        luck=luck_val,
+    )
+
+    kpis = report.get("summary_kpis", {})
+
+    # Top KPI metrics row
+    k_col1, k_col2, k_col3, k_col4, k_col5 = st.columns(5)
+    k_col1.metric("Touchdowns", f"{kpis.get('touchdowns', 0)} TDs", f"{kpis.get('actual_points', 0)} pts")
+    k_col2.metric("Total Yards", f"{kpis.get('total_yards', 0)} yds", f"{kpis.get('avg_yards', 0.0):.1f} yds/play")
+    k_col3.metric("Total EPA", f"{kpis.get('total_epa', 0.0):+.2f}", f"{kpis.get('avg_epa', 0.0):+.2f} /play")
+    k_col4.metric("xPoints", f"{kpis.get('xpoints', 0.0):.1f} xP", f"{kpis.get('luck', 0.0):+.1f} luck")
+    k_col5.metric("Explosives (10+y)", f"{kpis.get('explosive_count', 0)} plays", f"{kpis.get('explosive_pct', 0):.0f}% rate")
+
+    # Coach Action Items
+    takeaways = report.get("coach_takeaways", [])
+    if takeaways:
+        st.markdown("##### 💡 Coach Takeaways & Action Items")
+        for t in takeaways:
+            clean_t = t.replace("<b>", "**").replace("</b>", "**")
+            st.markdown(f"- {clean_t}")
+
+    # Two action buttons: PDF Download and Markdown Download
+    c_btn1, c_btn2 = st.columns([1.2, 1])
+    with c_btn1:
+        try:
+            pdf_bytes = build_post_game_pdf(report)
+            file_name_pdf = f"PostGame_Report_{_safe_name(opp_name)}_{_safe_name(season)}.pdf"
+            st.download_button(
+                label=f"📄 Download PDF Report with Graphs ({opp_name})",
+                data=pdf_bytes,
+                file_name=file_name_pdf,
+                mime="application/pdf",
+                type="primary",
+                help="Download full multi-page coach report with visual charts and tables.",
+            )
+        except Exception as e:
+            st.warning(f"PDF generation note: {e}")
+
+    with c_btn2:
+        md_text = format_post_game_report_markdown(report)
+        file_name_md = f"PostGame_Report_{_safe_name(opp_name)}_{_safe_name(season)}.md"
+        st.download_button(
+            label=f"📝 Download Markdown Report (.md)",
+            data=md_text.encode("utf-8"),
+            file_name=file_name_md,
+            mime="text/markdown",
+            help="Download clean Markdown format for copy-pasting into notes or team docs.",
+        )
+
+
 def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
     invert = unit_cfg["invert_xp"]
     if invert:
@@ -2820,6 +2946,11 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
             f"**Best finishing luck:** {lucky['game_label']} ({lucky['luck']:+.1f}) · "
             f"**Worst finishing luck:** {unlucky['game_label']} ({unlucky['luck']:+.1f})"
         )
+
+    # -------------------------------------------------------------
+    # Post-Game Coach Breakdown & PDF Report Generator
+    # -------------------------------------------------------------
+    _render_post_game_coach_report_section(review_df, picked, games)
 
     # -------------------------------------------------------------
     # Previous Game Play Log & Hudl Tagging Export Inspector
