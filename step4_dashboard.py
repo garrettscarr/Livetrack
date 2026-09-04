@@ -8962,8 +8962,16 @@ def _tagger_instant_save(
     focuses: list[str],
     field_updates: dict,
     key_prefix: str = "tag",
+    advance: bool | None = False,
 ) -> None:
-    """Save field(s), remember sticky last, mark done when pack is complete."""
+    """
+    Save field(s) and remember sticky last values.
+
+    advance:
+      False (default) — stay on this play (tagger confirms when the pack is done).
+      True — always advance after save.
+      None — advance only when the full pack is complete (SAME LOOK fast path).
+    """
     from booth_stations import FOCUS_BLITZ, FOCUS_COVERAGE, FOCUS_FRONT, FOCUS_MOTION
     from booth_snaps import find_snap_index
     from mesh_engine import load_live_log
@@ -9006,6 +9014,7 @@ def _tagger_instant_save(
     if "def_front" in clean or "coverage" in clean:
         st.session_state.pop(f"tg_draft_front_{drive_id}_{play_n}", None)
         st.session_state.pop(f"tg_draft_cov_{drive_id}_{play_n}", None)
+        st.session_state.pop(f"tg_edit_look_{drive_id}_{play_n}", None)
 
     logs = load_live_log()
     idx = find_snap_index(logs, int(drive_id), int(play_n))
@@ -9016,10 +9025,13 @@ def _tagger_instant_save(
         row.setdefault("play_n", int(play_n))
     row.update(clean)
 
-    if _tagger_pack_complete(row, focuses):
+    pack_done = _tagger_pack_complete(row, focuses)
+    if advance is True or (advance is None and pack_done):
         _tagger_advance_after_save(play_n, key_prefix=key_prefix)
     else:
-        if "tagger_flash" not in st.session_state:
+        if pack_done:
+            st.session_state["tagger_flash"] = "Pack ready — tap Confirm to next play"
+        elif "tagger_flash" not in st.session_state:
             st.session_state["tagger_flash"] = "Saved"
     st.rerun()
 
@@ -9032,7 +9044,7 @@ def _render_current_snap_tagger(
     drive_id: int | None,
     play_n: int,
 ) -> None:
-    """Tagger editor: tap chip = save; Same as last; advances on own pace."""
+    """Tagger editor: tap chips to tag, Confirm advances to the next play."""
     from booth_stations import (
         FOCUS_BALL,
         FOCUS_BLITZ,
@@ -9066,6 +9078,7 @@ def _render_current_snap_tagger(
     need_ball = FOCUS_BALL in focuses
     title = " · ".join(FOCUS_LABELS.get(f, f) for f in focuses) or focus_summary(focuses)
     st.markdown(f'<p class="live-title">{title}</p>', unsafe_allow_html=True)
+    st.caption("Tap each tag · Confirm when the pack is ready to move on")
 
     undo_col, _ = st.columns([1, 2])
     with undo_col:
@@ -9125,14 +9138,12 @@ def _render_current_snap_tagger(
     ensure_default_film_tags()
     full = logs if logs is not None and not logs.empty else pd.DataFrame()
     scout_looks = scout_favorite_looks(opponent, n=8)
-    scout_fronts = list(scout_looks.get("fronts") or [])
     scout_covs = list(scout_looks.get("coverages") or [])
 
     draft_f_key = f"tg_draft_front_{drive_id}_{play_n}"
     draft_c_key = f"tg_draft_cov_{drive_id}_{play_n}"
-    edit_look_key = f"tg_edit_look_{drive_id}_{play_n}"
 
-    # SAME LOOK — film only (ball carrier changes every snap)
+    # SAME LOOK — fill film tags from last snap (advances only if pack complete)
     look_bits = []
     look_updates: dict = {}
     for fid in focuses:
@@ -9148,7 +9159,7 @@ def _render_current_snap_tagger(
         st.markdown('<div class="tg-same-last">', unsafe_allow_html=True)
         if st.button(
             "SAME LOOK · " + " · ".join(look_bits),
-            type="primary",
+            type="secondary",
             use_container_width=True,
             key=f"tg_same_look_{drive_id}_{play_n}",
         ):
@@ -9159,12 +9170,11 @@ def _render_current_snap_tagger(
                 play_n=int(play_n),
                 focuses=focuses,
                 field_updates=look_updates,
+                advance=None,
             )
         st.markdown("</div>", unsafe_allow_html=True)
 
-    def _save_look_fields(updates: dict) -> None:
-        if "def_front" in updates or "coverage" in updates:
-            st.session_state.pop(edit_look_key, None)
+    def _save_look_fields(updates: dict, *, advance: bool | None = False) -> None:
         _tagger_instant_save(
             opponent=opponent,
             half=half,
@@ -9172,12 +9182,13 @@ def _render_current_snap_tagger(
             play_n=int(play_n),
             focuses=focuses,
             field_updates=updates,
+            advance=advance,
         )
 
     def _tap_front_or_cov(col: str, opt: str) -> None:
-        """Batch Front+Coverage into one save when both are chosen."""
+        """Batch Front+Coverage into one save when both are chosen (stay on play)."""
         if not batch_look:
-            _save_look_fields({col: opt})
+            _save_look_fields({col: opt}, advance=False)
             return
         if col == "def_front":
             st.session_state[draft_f_key] = opt
@@ -9200,10 +9211,12 @@ def _render_current_snap_tagger(
         if col == "coverage":
             cov = opt
         if front and cov:
-            _save_look_fields({"def_front": front, "coverage": cov})
+            _save_look_fields({"def_front": front, "coverage": cov}, advance=False)
             return
         missing = "Coverage" if front and not cov else "Front"
-        st.session_state["tagger_flash"] = f"{'Front' if col == 'def_front' else 'Coverage'} set · tap {missing}"
+        st.session_state["tagger_flash"] = (
+            f"{'Front' if col == 'def_front' else 'Coverage'} set · tap {missing}"
+        )
         st.rerun()
 
     def _chip_row(
@@ -9215,7 +9228,7 @@ def _render_current_snap_tagger(
         more: list[str] | None = None,
         batch: bool = False,
     ) -> None:
-        st.caption(f"{label} · tap to save")
+        st.caption(f"{label} · tap to select")
         opts = list(options)
         cols = st.columns(min(3, max(len(opts), 1)))
         for i, opt in enumerate(opts):
@@ -9230,7 +9243,7 @@ def _render_current_snap_tagger(
                     if batch:
                         _tap_front_or_cov(col, opt)
                     else:
-                        _save_look_fields({col: opt})
+                        _save_look_fields({col: opt}, advance=False)
         extra = [x for x in (more or []) if x not in opts]
         if extra:
             with st.expander("More…", expanded=False):
@@ -9250,7 +9263,7 @@ def _render_current_snap_tagger(
                             if batch:
                                 _tap_front_or_cov(col, opt)
                             else:
-                                _save_look_fields({col: opt})
+                                _save_look_fields({col: opt}, advance=False)
 
     def _render_field(fid: str) -> None:
         cur_col = _tagger_focus_to_col(fid)
@@ -9259,7 +9272,6 @@ def _render_current_snap_tagger(
             draft = str(st.session_state.get(draft_f_key) or "").strip()
             if draft:
                 current = draft
-            # Booth-simple: Even / Odd / Bear only (no scout numbered fronts)
             _chip_row(
                 "Front",
                 list(DEFAULT_FILM_FRONTS),
@@ -9284,7 +9296,7 @@ def _render_current_snap_tagger(
                 batch=batch_look,
             )
         elif fid == FOCUS_BLITZ:
-            st.caption("Blitz · tap to save")
+            st.caption("Blitz · tap to select")
             cur_b = current.strip().title() if current else ""
             b1, b2 = st.columns(2)
             with b1:
@@ -9294,7 +9306,7 @@ def _render_current_snap_tagger(
                     use_container_width=True,
                     type="primary" if cur_b == "No" else "secondary",
                 ):
-                    _save_look_fields({"blitz": "No"})
+                    _save_look_fields({"blitz": "No"}, advance=False)
             with b2:
                 if st.button(
                     "Yes",
@@ -9302,7 +9314,7 @@ def _render_current_snap_tagger(
                     use_container_width=True,
                     type="primary" if cur_b == "Yes" else "secondary",
                 ):
-                    _save_look_fields({"blitz": "Yes"})
+                    _save_look_fields({"blitz": "Yes"}, advance=False)
         elif fid == FOCUS_MOTION:
             motion_opts = _merge_tag_options(
                 _tag_options(
@@ -9323,11 +9335,6 @@ def _render_current_snap_tagger(
                     ordered.append(p)
             _chip_row("Motion", ordered[:3], "motion", current, more=ordered[3:8])
 
-    front_saved = str(row.get("def_front") or "").strip()
-    cov_saved = str(row.get("coverage") or "").strip()
-    look_complete = bool(front_saved and cov_saved) if batch_look else False
-    editing_look = bool(st.session_state.get(edit_look_key))
-
     def _player_chip_row(
         label: str,
         names: list[str],
@@ -9336,7 +9343,7 @@ def _render_current_snap_tagger(
         *,
         extra: dict | None = None,
     ) -> None:
-        st.caption(f"{label} · tap to save")
+        st.caption(f"{label} · tap to select")
         if not names:
             st.caption("Add players under **Database → Players**.")
             return
@@ -9354,7 +9361,7 @@ def _render_current_snap_tagger(
                     updates = {field: name}
                     if extra:
                         updates.update(extra)
-                    _save_look_fields(updates)
+                    _save_look_fields(updates, advance=False)
         rest = [n for n in names if n not in show]
         if rest:
             with st.expander("More players…", expanded=False):
@@ -9371,30 +9378,17 @@ def _render_current_snap_tagger(
                             updates = {field: name}
                             if extra:
                                 updates.update(extra)
-                            _save_look_fields(updates)
+                            _save_look_fields(updates, advance=False)
 
-    # Collapse look when Front+Cov set
-    if look_complete and not editing_look:
-        st.markdown(
-            f'<div class="tg-look-collapsed">Look · {front_saved} / {cov_saved}</div>',
-            unsafe_allow_html=True,
-        )
-        if st.button(
-            "Edit look",
-            key=f"tg_edit_look_btn_{drive_id}_{play_n}",
-            use_container_width=True,
-        ):
-            st.session_state[edit_look_key] = True
-            st.rerun()
-    else:
-        if pre:
-            st.markdown("##### Pre-snap")
-            for fid in pre:
-                _render_field(fid)
-        if post:
-            st.markdown("##### Post-snap")
-            for fid in post:
-                _render_field(fid)
+    # Always show every focus — no "Edit look" gate
+    if pre:
+        st.markdown("##### Pre-snap")
+        for fid in pre:
+            _render_field(fid)
+    if post:
+        st.markdown("##### Post-snap")
+        for fid in post:
+            _render_field(fid)
 
     if need_ball:
         st.markdown('<div class="tg-end-pin">', unsafe_allow_html=True)
@@ -9485,7 +9479,34 @@ def _render_current_snap_tagger(
                     "play_call": play,
                     "film_pending": "Yes",
                 },
+                advance=False,
             )
+
+    # Confirm advances only after the full pack is tagged
+    pack_ready = _tagger_pack_complete(row, focuses)
+    st.markdown("---")
+    if pack_ready:
+        if st.button(
+            "Confirm · next play ▶",
+            type="primary",
+            use_container_width=True,
+            key=f"tg_confirm_{drive_id}_{play_n}",
+        ):
+            st.session_state.pop(draft_f_key, None)
+            st.session_state.pop(draft_c_key, None)
+            st.session_state.pop(f"tg_edit_look_{drive_id}_{play_n}", None)
+            _tagger_advance_after_save(int(play_n), key_prefix="tag")
+            st.rerun()
+    else:
+        st.button(
+            "Confirm · next play ▶",
+            type="secondary",
+            use_container_width=True,
+            key=f"tg_confirm_disabled_{drive_id}_{play_n}",
+            disabled=True,
+            help="Tag every field in your pack first.",
+        )
+
 
 
 def _booth_switch_role_control() -> None:
