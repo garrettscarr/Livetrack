@@ -237,20 +237,21 @@ def _chart_phase_and_tendencies(phase_data: dict, looks_data: dict) -> BytesIO |
 
 
 def _chart_formation_production(formations: list[dict]) -> BytesIO | None:
-    """Horizontal bar chart: Formation Snaps & Avg Yards color-coded by verdict."""
+    """Horizontal bar chart: formations ranked by Avg EPA (then success), color by verdict."""
     if not formations:
         return None
     top = formations[:7]
     labels = [str(f.get("formation") or "")[:14] for f in top]
     snaps = [int(f.get("plays", 0) or 0) for f in top]
-    avg_yds = [float(f.get("avg_yards", 0) or 0) for f in top]
+    avg_epa = [float(f.get("avg_epa", 0) or 0) for f in top]
+    succ = [float(f.get("success_rate", 0) or 0) * 100 for f in top]
     verdicts = [str(f.get("verdict", "")).upper() for f in top]
 
     bar_colors = []
-    for v in verdicts:
-        if "FEATURE" in v:
+    for v, epa in zip(verdicts, avg_epa):
+        if "FEATURE" in v or epa > 0.05:
             bar_colors.append("#2D6A4F")  # Green
-        elif "SHELVE" in v or "ADJUST" in v:
+        elif "SHELVE" in v or "ADJUST" in v or epa < -0.05:
             bar_colors.append("#DC2626")  # Red
         else:
             bar_colors.append("#52796F")  # Slate
@@ -258,11 +259,16 @@ def _chart_formation_production(formations: list[dict]) -> BytesIO | None:
     fig, ax = plt.subplots(figsize=(6.8, max(2.2, 0.36 * len(labels) + 0.6)), facecolor="white")
     y_pos = np.arange(len(labels))
 
-    bars = ax.barh(y_pos, avg_yds, color=bar_colors, height=0.52, zorder=3)
+    bars = ax.barh(y_pos, avg_epa, color=bar_colors, height=0.52, zorder=3)
     ax.set_yticks(y_pos)
-    ax.set_yticklabels([f"{l} ({s}p)" for l, s in zip(labels, snaps)], fontsize=8.5, fontweight="bold", color="#1F2937")
+    ax.set_yticklabels(
+        [f"{l} ({s}p · {sr:.0f}% succ)" for l, s, sr in zip(labels, snaps, succ)],
+        fontsize=8,
+        fontweight="bold",
+        color="#1F2937",
+    )
     ax.invert_yaxis()
-    ax.set_xlabel("Avg Yards / Play", fontsize=8.5, fontweight="bold", color="#1B4332")
+    ax.set_xlabel("Avg EPA / Play", fontsize=8.5, fontweight="bold", color="#1B4332")
     ax.axvline(0, color="#64748B", linewidth=0.8, zorder=2)
     ax.grid(axis="x", linestyle="--", alpha=0.3, zorder=0)
     ax.spines["top"].set_visible(False)
@@ -271,12 +277,12 @@ def _chart_formation_production(formations: list[dict]) -> BytesIO | None:
     ax.spines["bottom"].set_color("#CBD5E1")
     ax.tick_params(axis="both", labelsize=8, labelcolor="#1F2937")
 
-    for bar, y_val in zip(bars, avg_yds):
+    for bar, epa_val in zip(bars, avg_epa):
         w = bar.get_width()
         ha = "left" if w >= 0 else "right"
-        offset = 0.2 if w >= 0 else -0.2
+        offset = 0.02 if w >= 0 else -0.02
         ax.annotate(
-            f"{w:+.1f} yds",
+            f"{w:+.2f}",
             xy=(w + offset, bar.get_y() + bar.get_height() / 2),
             va="center",
             ha=ha,
@@ -285,7 +291,14 @@ def _chart_formation_production(formations: list[dict]) -> BytesIO | None:
             color="#1B4332" if w >= 0 else "#DC2626",
         )
 
-    plt.title("Formation Production (Avg Yards / Play & Snaps)", fontsize=9.5, fontweight="bold", color="#1B4332", loc="left", pad=6)
+    plt.title(
+        "Formation Production (Avg EPA · sorted by EPA, then Success %)",
+        fontsize=9.5,
+        fontweight="bold",
+        color="#1B4332",
+        loc="left",
+        pad=6,
+    )
     fig.tight_layout()
     buf = BytesIO()
     fig.savefig(buf, format="png", dpi=160, bbox_inches="tight", facecolor="white")
@@ -637,9 +650,9 @@ def build_post_game_pdf(report: dict) -> bytes:
         form_headers = [
             Paragraph("Formation", tbl_head_style),
             Paragraph("Snaps", tbl_head_style),
-            Paragraph("Total Yds", tbl_head_style),
-            Paragraph("Avg Yds", tbl_head_style),
+            Paragraph("Avg EPA", tbl_head_style),
             Paragraph("Success %", tbl_head_style),
+            Paragraph("Avg Yds", tbl_head_style),
             Paragraph("Looks Shown", tbl_head_style),
             Paragraph("Verdict", tbl_head_style),
             Paragraph("Best Play Call", tbl_head_style),
@@ -654,9 +667,9 @@ def build_post_game_pdf(report: dict) -> bytes:
                 [
                     Paragraph(f"<b>{f.get('formation', '')}</b>", tbl_cell_style),
                     Paragraph(str(f.get("plays", 0)), tbl_cell_style),
-                    Paragraph(f"{f.get('total_yards', 0)}", tbl_cell_style),
-                    Paragraph(f"{f.get('avg_yards', 0.0):+.1f}", tbl_cell_style),
+                    Paragraph(f"{float(f.get('avg_epa', 0) or 0):+.2f}", tbl_cell_bold),
                     Paragraph(f"{float(f.get('success_rate', 0.0))*100:.0f}%", tbl_cell_bold),
+                    Paragraph(f"{f.get('avg_yards', 0.0):+.1f}", tbl_cell_style),
                     Paragraph(str(f.get("tell_summary", "")), tbl_cell_style),
                     Paragraph(f"<font color='{v_color}'><b>{verdict}</b></font>", tbl_cell_style),
                     Paragraph(bp_str, tbl_cell_style),
@@ -664,7 +677,7 @@ def build_post_game_pdf(report: dict) -> bytes:
             )
         form_tbl = Table(
             form_rows,
-            colWidths=[1.15 * inch, 0.45 * inch, 0.65 * inch, 0.65 * inch, 0.7 * inch, 1.75 * inch, 0.8 * inch, 1.05 * inch],
+            colWidths=[1.1 * inch, 0.45 * inch, 0.65 * inch, 0.7 * inch, 0.6 * inch, 1.7 * inch, 0.8 * inch, 1.2 * inch],
         )
         form_tbl.setStyle(
             TableStyle(

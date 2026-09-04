@@ -2779,9 +2779,9 @@ def _render_post_game_coach_report_section(
                 form_rows.append({
                     "Formation": f.get("formation", ""),
                     "Snaps": f.get("plays", 0),
-                    "Total Yards": f.get("total_yards", 0),
-                    "Avg Yards": f"{f.get('avg_yards', 0.0):+.1f}",
+                    "Avg EPA": f"{float(f.get('avg_epa', 0.0) or 0.0):+.2f}",
                     "Success %": f"{float(f.get('success_rate', 0.0))*100:.0f}%",
+                    "Avg Yards": f"{f.get('avg_yards', 0.0):+.1f}",
                     "Looks Faced": f.get("tell_summary", ""),
                     "Verdict": f.get("verdict", "SOLID"),
                     "Best Call": bp_str,
@@ -17240,13 +17240,14 @@ def _render_halftime_coach_mode(
             f_name = f.get("formation")
             plays_n = f.get("plays", 0)
             avg_y = f.get("avg_yards", 0)
+            avg_epa = float(f.get("avg_epa") or 0)
             sr = f.get("success_rate", 0)
             sr_pct = int(sr * 100)
             tell = f.get("tell_summary", "")
             best_p = f.get("best_play")
-            best_str = f"Best call: <b>{best_p['play_call']}</b> ({best_p['avg_yards']:+.1f} yd, {int(best_p['success_rate']*100)}% succ)" if best_p else ""
+            best_str = f"Best call: <b>{best_p['play_call']}</b> ({best_p.get('avg_epa', 0):+.2f} EPA, {int(best_p['success_rate']*100)}% succ)" if best_p else ""
             cold_p = f.get("cold_play")
-            cold_str = f" · Cold: <b>{cold_p['play_call']}</b> ({cold_p['avg_yards']:+.1f} yd)" if cold_p else ""
+            cold_str = f" · Cold: <b>{cold_p['play_call']}</b> ({cold_p.get('avg_epa', 0):+.2f} EPA)" if cold_p else ""
 
             front_chips = " ".join(f"<span style='background:#E2EAFC;color:#1D3557;padding:2px 7px;border-radius:4px;font-size:0.8rem;font-weight:600;'>{fr['front']} {fr['pct']:.0f}%</span>" for fr in (f.get("fronts") or [])[:3])
             cov_chips = " ".join(f"<span style='background:#D8F3DC;color:#1B4332;padding:2px 7px;border-radius:4px;font-size:0.8rem;font-weight:600;'>{cv['coverage']} {cv['pct']:.0f}%</span>" for cv in (f.get("coverages") or [])[:3])
@@ -17257,7 +17258,7 @@ def _render_halftime_coach_mode(
                 <div style="background:#FFFFFF;border:1.5px solid #D0DAD4;border-radius:10px;padding:0.75rem 0.85rem;margin-bottom:0.65rem;">
                   <div style="display:flex;justify-content:space-between;align-items:center;">
                     <span style="font-size:1.15rem;font-weight:800;color:#1B4332;">{f_name}</span>
-                    <span style="font-size:0.92rem;font-weight:700;color:#2D6A4F;">{plays_n} snaps · {avg_y:+.1f} yds/play · {sr_pct}% success</span>
+                    <span style="font-size:0.92rem;font-weight:700;color:#2D6A4F;">{plays_n} snaps · {avg_epa:+.2f} EPA · {sr_pct}% succ · {avg_y:+.1f} yds</span>
                   </div>
                   <div style="margin:0.4rem 0;display:flex;gap:0.4rem;flex-wrap:wrap;">
                     {front_chips} {cov_chips} {blitz_chip}
@@ -17718,8 +17719,9 @@ def _render_halftime_report_body(
                 f_table_rows.append({
                     "Formation": fd.get("formation"),
                     "Snaps": fd.get("plays"),
-                    "Avg Yds": f"{fd.get('avg_yards', 0):+.1f}",
+                    "Avg EPA": f"{float(fd.get('avg_epa', 0) or 0):+.2f}",
                     "Success %": f"{int(fd.get('success_rate', 0)*100)}%",
+                    "Avg Yds": f"{fd.get('avg_yards', 0):+.1f}",
                     "Top Looks Faced": fd.get("tell_summary"),
                     "Best Play Call": bp_s,
                 })

@@ -3006,6 +3006,7 @@ def _analyze_formation_defense(half1: pd.DataFrame, *, unit: str = "Offense") ->
     if logs.empty or "formation" not in logs.columns:
         return []
     out = []
+    ep_table = None
     for form_val, grp in logs.groupby(logs["formation"].fillna("").astype(str)):
         formation = str(form_val).strip()
         if not formation or formation.lower() in {"(blank)", "nan", "none", "(none)"}:
@@ -3053,6 +3054,18 @@ def _analyze_formation_defense(half1: pd.DataFrame, *, unit: str = "Offense") ->
         successes = [int(_calc_play_success(row)) for _, row in grp.iterrows()]
         succ_rate = round(float(sum(successes) / max(1, len(successes))), 2)
 
+        # EPA: prefer tagged season EPA column; else estimate from live situation
+        if "epa" in grp.columns and pd.to_numeric(grp["epa"], errors="coerce").notna().any():
+            epa_s = pd.to_numeric(grp["epa"], errors="coerce").dropna()
+            avg_epa = round(float(epa_s.mean()), 3) if not epa_s.empty else 0.0
+            total_epa = round(float(epa_s.sum()), 3) if not epa_s.empty else 0.0
+        else:
+            if ep_table is None:
+                ep_table = _load_ep_table_from_season()
+            epas = [_estimate_live_play_epa(row, ep_table) for _, row in grp.iterrows()]
+            total_epa = round(float(sum(epas)), 3) if epas else 0.0
+            avg_epa = round(total_epa / max(1, n), 3)
+
         # Plays called out of this formation
         play_calls = []
         if "play_call" in grp.columns:
@@ -3064,6 +3077,14 @@ def _analyze_formation_defense(half1: pd.DataFrame, *, unit: str = "Offense") ->
                 p_avg_yds = round(float(p_yds.mean()), 1) if not p_yds.empty else 0.0
                 p_succ = [int(_calc_play_success(r)) for _, r in p_grp.iterrows()]
                 p_sr = round(float(sum(p_succ) / max(1, len(p_succ))), 2)
+                if "epa" in p_grp.columns and pd.to_numeric(p_grp["epa"], errors="coerce").notna().any():
+                    p_epa_s = pd.to_numeric(p_grp["epa"], errors="coerce").dropna()
+                    p_avg_epa = round(float(p_epa_s.mean()), 3) if not p_epa_s.empty else 0.0
+                else:
+                    if ep_table is None:
+                        ep_table = _load_ep_table_from_season()
+                    p_epas = [_estimate_live_play_epa(r, ep_table) for _, r in p_grp.iterrows()]
+                    p_avg_epa = round(float(sum(p_epas)) / max(1, len(p_grp)), 3) if p_epas else 0.0
                 outcomes = []
                 for _, r in p_grp.iterrows():
                     res = str(r.get("result", "") or "")
@@ -3080,14 +3101,25 @@ def _analyze_formation_defense(half1: pd.DataFrame, *, unit: str = "Offense") ->
                     "play_call": p_str,
                     "plays": int(len(p_grp)),
                     "avg_yards": p_avg_yds,
+                    "avg_epa": p_avg_epa,
                     "success_rate": p_sr,
                     "outcomes": ", ".join(outcomes[:5]),
                 })
-            play_calls.sort(key=lambda x: (-x["success_rate"], -x["avg_yards"], -x["plays"]))
+            play_calls.sort(
+                key=lambda x: (-float(x.get("avg_epa") or 0), -x["success_rate"], -x["plays"])
+            )
 
-        # Best / cold play
+        # Best / cold play (by EPA then success)
         best_play = play_calls[0] if play_calls else None
-        cold_play = play_calls[-1] if len(play_calls) > 1 and play_calls[-1]["success_rate"] < 0.5 else None
+        cold_play = (
+            play_calls[-1]
+            if len(play_calls) > 1
+            and (
+                float(play_calls[-1].get("avg_epa") or 0) < 0
+                or play_calls[-1]["success_rate"] < 0.5
+            )
+            else None
+        )
 
         # Build coach takeaway
         f_top = fronts[0]["front"] if fronts else "Unspecified"
@@ -3106,6 +3138,9 @@ def _analyze_formation_defense(half1: pd.DataFrame, *, unit: str = "Offense") ->
             "formation": formation,
             "plays": n,
             "avg_yards": avg_yards,
+            "total_yards": int(yards_s.sum()) if not yards_s.empty else 0,
+            "avg_epa": avg_epa,
+            "total_epa": total_epa,
             "success_rate": succ_rate,
             "fronts": fronts,
             "coverages": coverages,
@@ -3118,7 +3153,14 @@ def _analyze_formation_defense(half1: pd.DataFrame, *, unit: str = "Offense") ->
             "cold_play": cold_play,
             "play_calls": play_calls,
         })
-    out.sort(key=lambda x: -x["plays"])
+    # Rank by process (EPA) first, then success rate — not raw yards/volume
+    out.sort(
+        key=lambda x: (
+            -float(x.get("avg_epa") or 0),
+            -float(x.get("success_rate") or 0),
+            -int(x.get("plays") or 0),
+        )
+    )
     return out
 
 
@@ -3141,6 +3183,7 @@ def _analyze_formation_combos(half1: pd.DataFrame, *, unit: str = "Offense") -> 
     if not need.issubset(set(logs.columns)):
         return []
     out = []
+    ep_table = None
     for (form_val, play_val), grp in logs.groupby([logs["formation"].fillna("").astype(str), logs["play_call"].fillna("").astype(str)]):
         formation = str(form_val).strip()
         play_call = str(play_val).strip()
@@ -3156,6 +3199,14 @@ def _analyze_formation_combos(half1: pd.DataFrame, *, unit: str = "Offense") -> 
         total_yards = int(yards_s.sum()) if not yards_s.empty else 0
         successes = [int(_calc_play_success(row)) for _, row in grp.iterrows()]
         succ_rate = round(float(sum(successes) / max(1, len(successes))), 2)
+        if "epa" in grp.columns and pd.to_numeric(grp["epa"], errors="coerce").notna().any():
+            epa_s = pd.to_numeric(grp["epa"], errors="coerce").dropna()
+            avg_epa = round(float(epa_s.mean()), 3) if not epa_s.empty else 0.0
+        else:
+            if ep_table is None:
+                ep_table = _load_ep_table_from_season()
+            epas = [_estimate_live_play_epa(row, ep_table) for _, row in grp.iterrows()]
+            avg_epa = round(float(sum(epas)) / max(1, n), 3) if epas else 0.0
 
         outcomes = []
         looks = []
@@ -3202,6 +3253,7 @@ def _analyze_formation_combos(half1: pd.DataFrame, *, unit: str = "Offense") -> 
             "play_call": play_call,
             "plays": n,
             "avg_yards": avg_yards,
+            "avg_epa": avg_epa,
             "total_yards": total_yards,
             "success_rate": succ_rate,
             "good": sum(successes),
@@ -3212,7 +3264,13 @@ def _analyze_formation_combos(half1: pd.DataFrame, *, unit: str = "Offense") -> 
             "verdict_badge": verdict_badge,
             "coach_tip": coach_tip,
         })
-    out.sort(key=lambda x: (-x["success_rate"], -x["avg_yards"], -x["plays"]))
+    out.sort(
+        key=lambda x: (
+            -float(x.get("avg_epa") or 0),
+            -float(x.get("success_rate") or 0),
+            -int(x.get("plays") or 0),
+        )
+    )
     return out
 
 
@@ -3797,8 +3855,17 @@ def format_halftime_report_markdown(report: dict) -> str:
         lines.append("## How they defended our formations")
         for f in form_def:
             bp = f.get("best_play")
-            bp_str = f" · Best: `{bp['play_call']}` ({bp['avg_yards']:+.1f} yds, {bp['success_rate']*100:.0f}% succ)" if bp else ""
-            lines.append(f"- **`{f['formation']}`** ({f['plays']} snaps · avg {f['avg_yards']:+.1f} yds · {f['success_rate']*100:.0f}% success)")
+            bp_str = (
+                f" · Best: `{bp['play_call']}` "
+                f"({bp.get('avg_epa', 0):+.2f} EPA, {bp['success_rate']*100:.0f}% succ)"
+                if bp
+                else ""
+            )
+            lines.append(
+                f"- **`{f['formation']}`** ({f['plays']} snaps · "
+                f"{f.get('avg_epa', 0):+.2f} EPA · {f['success_rate']*100:.0f}% success · "
+                f"avg {f['avg_yards']:+.1f} yds)"
+            )
             lines.append(f"  - Looks shown: {f['tell_summary']}{bp_str}")
 
     # Formation + Play combos breakdown
@@ -3807,7 +3874,11 @@ def format_halftime_report_markdown(report: dict) -> str:
         lines.append("")
         lines.append("## Formation + Play combos (What worked vs what didn't)")
         for c in combos:
-            lines.append(f"- {c['verdict_badge']} **`{c['combo']}`** ({c['plays']} snaps · avg {c['avg_yards']:+.1f} yds · {c['success_rate']*100:.0f}% succ)")
+            lines.append(
+                f"- {c['verdict_badge']} **`{c['combo']}`** "
+                f"({c['plays']} snaps · {c.get('avg_epa', 0):+.2f} EPA · "
+                f"{c['success_rate']*100:.0f}% succ · avg {c['avg_yards']:+.1f} yds)"
+            )
             lines.append(f"  - Outcomes: `{c['outcomes_str']}` · faced: `{c['look_summary']}`")
 
     _short_board("Formations working", (report.get("formations") or {}).get("offense") or [])
@@ -4284,13 +4355,17 @@ def format_post_game_report_markdown(report: dict) -> str:
         "",
         "## 🛡️ How They Defended Our Formations",
         "",
-        "| Formation | Snaps | Yards | Avg Yds | Success % | Verdict | Best Play |",
+        "| Formation | Snaps | Avg EPA | Success % | Avg Yds | Verdict | Best Play |",
         "| :--- | :---: | :---: | :---: | :---: | :---: | :--- |",
     ])
     for f in report.get("formation_defense", []):
         bp = f.get("best_play")
         bp_str = f"`{bp['play_call']}` ({bp['avg_yards']:+.1f}y)" if bp else "—"
-        lines.append(f"| **`{f.get('formation')}`** | {f.get('plays')} | {f.get('total_yards')} | {f.get('avg_yards'):+.1f} | {f.get('success_rate')*100:.0f}% | {f.get('verdict')} | {bp_str} |")
+        lines.append(
+            f"| **`{f.get('formation')}`** | {f.get('plays')} | "
+            f"{f.get('avg_epa', 0):+.2f} | {f.get('success_rate', 0)*100:.0f}% | "
+            f"{f.get('avg_yards', 0):+.1f} | {f.get('verdict')} | {bp_str} |"
+        )
 
     # Combos
     lines.extend([
