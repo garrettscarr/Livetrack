@@ -1177,6 +1177,26 @@ def yards_from_ball_span(
         return None
 
 
+def yards_to_endzone(
+    ball_yard: int | float | None,
+    field_zone: str | None = None,
+) -> int:
+    """
+    Yards needed to score from the current LOS (own-goal coords).
+
+    Own 30 → +70 · Opp 25 (ball 75) → +25 · Opp 3 (ball 97) → +3.
+    """
+    try:
+        if ball_yard is not None and str(ball_yard).strip() != "":
+            y = int(ball_yard)
+        else:
+            y = zone_default_ball_yard(field_zone)
+    except (TypeError, ValueError):
+        y = zone_default_ball_yard(field_zone)
+    y = max(1, min(99, y))
+    return max(1, 100 - y)
+
+
 def advance_ball_yard(
     ball_yard: int | float | None,
     yards_gained: int | float,
@@ -4061,9 +4081,15 @@ def validate_live_play(
     result: str,
     yards_gained: int | float,
     distance_yards: int | float,
+    *,
+    ball_yard: int | float | None = None,
+    field_zone: str | None = None,
 ) -> tuple[str, int, list[str]]:
     """
     Coerce inconsistent live tags. Returns (result, yards, warnings).
+
+    TD always fills yards as remaining distance to the end zone from the
+    ball spot (Own 30 → +70), not yards-to-go for a first down.
     """
     warnings: list[str] = []
     r = str(result or "Other")
@@ -4093,14 +4119,22 @@ def validate_live_play(
             r = "No gain"
         # Negative Gain is allowed (completed pass / catch behind the LOS)
     elif r == "TD":
-        if y < max(1, to_go):
-            # Still allow (wrong to-go happens), but nudge yards up for consistency
-            warnings.append(
-                f"TD with {y} yds vs {to_go} to-go — check yards if you can."
-            )
-        if y <= 0:
-            y = max(1, to_go)
-            warnings.append(f"TD → yards set to {y}.")
+        has_spot = ball_yard is not None or bool(field_zone)
+        need = (
+            yards_to_endzone(ball_yard, field_zone)
+            if has_spot
+            else max(1, to_go)
+        )
+        if y != need:
+            spot = format_ball_spot(ball_yard) if ball_yard is not None else ""
+            from_bit = f" from {spot}" if spot and spot != "—" else ""
+            if y <= 0:
+                warnings.append(f"TD → yards set to +{need} (to end zone{from_bit}).")
+            else:
+                warnings.append(
+                    f"TD → yards set to +{need} (to end zone{from_bit}; was {y:+d})."
+                )
+            y = need
     elif r == "Penalty":
         if y == 0:
             warnings.append("Penalty with 0 yards — set ± yards when you can.")
@@ -10310,6 +10344,18 @@ def _quick_chip_row(label: str, options: list[str], key: str, columns: int = 4) 
                 type="primary" if active else "secondary",
             ):
                 st.session_state[key] = opt
+                # TD → auto-fill remaining yards to the end zone (Own 30 → +70)
+                if key == "lt_result" and opt == "TD":
+                    try:
+                        ball = int(
+                            st.session_state.get("lt_ball_yard")
+                            or zone_default_ball_yard(st.session_state.get("lt_zone"))
+                        )
+                    except (TypeError, ValueError):
+                        ball = zone_default_ball_yard(st.session_state.get("lt_zone"))
+                    st.session_state.lt_gain = yards_to_endzone(
+                        ball, st.session_state.get("lt_zone")
+                    )
                 st.rerun()
     return str(st.session_state.get(key, options[0] if options else ""))
 
@@ -11786,6 +11832,17 @@ def _ql_apply_phrase_parse(parsed: dict) -> None:
         st.session_state.lt_result = parsed["result"]
     if parsed.get("yards_gained") is not None:
         st.session_state.lt_gain = int(parsed["yards_gained"])
+    elif str(parsed.get("result") or "") == "TD":
+        try:
+            ball = int(
+                st.session_state.get("lt_ball_yard")
+                or zone_default_ball_yard(st.session_state.get("lt_zone"))
+            )
+        except (TypeError, ValueError):
+            ball = zone_default_ball_yard(st.session_state.get("lt_zone"))
+        st.session_state.lt_gain = yards_to_endzone(
+            ball, st.session_state.get("lt_zone")
+        )
     if parsed.get("def_front"):
         st.session_state.ql_front = parsed["def_front"]
         st.session_state.ql_front_custom = ""
@@ -12238,13 +12295,29 @@ def _commit_live_play(
     phrase: str = "",
 ) -> list[str]:
     """Validate + append one live play. Returns coercion warnings."""
-    result, yards_gained, warnings = validate_live_play(result, yards_gained, distance_yards)
-
     run_tag = _ql_norm(run_tag)
     pass_tag = _ql_norm(pass_tag)
     ptype = str(play_type or "").strip().lower()
     if ptype not in PLAY_TYPES:
         ptype = ""
+
+    try:
+        ball = (
+            int(ball_yard)
+            if ball_yard is not None
+            else int(st.session_state.get("lt_ball_yard") or zone_default_ball_yard(field_zone))
+        )
+    except (TypeError, ValueError):
+        ball = zone_default_ball_yard(field_zone)
+    field_zone = ball_yard_to_zone(ball)
+
+    result, yards_gained, warnings = validate_live_play(
+        result,
+        yards_gained,
+        distance_yards,
+        ball_yard=ball,
+        field_zone=field_zone,
+    )
 
     # Fill missing tags from a compound play_call when booth only typed one field
     if (not run_tag and not pass_tag) and play_call:
@@ -12294,16 +12367,6 @@ def _commit_live_play(
             mesh_call = f"{def_front or 'Unknown'}  |  {coverage or 'Unknown'}"
         else:
             mesh_call = play_call or "(none)"
-
-    try:
-        ball = (
-            int(ball_yard)
-            if ball_yard is not None
-            else int(st.session_state.get("lt_ball_yard") or zone_default_ball_yard(field_zone))
-        )
-    except (TypeError, ValueError):
-        ball = zone_default_ball_yard(field_zone)
-    field_zone = ball_yard_to_zone(ball)
 
     # Main logs yards directly — tagger tags ball carrier, not end spot
     result_l = str(result or "").strip().lower()
@@ -12712,7 +12775,18 @@ def _live_track_fill_film(
         to_go = int(row.get("distance_yards") or 10)
         yds_in = int(row.get("yards_gained") or 0) if yds is None else int(yds)
         result_in = str(row.get("result") or "Gain") if result is None else str(result)
-        result_v, yds_v, warns = validate_live_play(result_in, yds_in, to_go)
+        try:
+            ball_in = int(row.get("ball_yard")) if row.get("ball_yard") is not None else None
+        except (TypeError, ValueError):
+            ball_in = None
+        zone_in = str(row.get("field_zone") or "") or None
+        result_v, yds_v, warns = validate_live_play(
+            result_in,
+            yds_in,
+            to_go,
+            ball_yard=ball_in,
+            field_zone=zone_in,
+        )
         motion_v = motion if motion else str(row.get("motion") or "")
         note_v = str(row.get("note") or "") if note is None else str(note)
 
@@ -13166,8 +13240,10 @@ def _ql_build_phrase_draft(phrase: str, parsed: dict, booth_favs: dict) -> dict:
             yards = int(st.session_state.get("lt_gain") or 0)
         except (TypeError, ValueError):
             yards = 0
-    if result == "TD" and int(yards) <= 0:
-        yards = max(1, distance_yards)
+    if result == "TD" and (
+        parsed.get("yards_gained") is None or int(yards) <= 0
+    ):
+        yards = yards_to_endzone(ball_yard, field_zone)
     if result == "Penalty" and int(yards) == 0:
         import re
 
@@ -14560,7 +14636,14 @@ def _render_quick_log_wizard(
                 ("-1", -1, "Sack / TFL"),
                 ("-3", -3, "Sack / TFL"),
                 ("-5", -5, "Sack / TFL"),
-                ("TD", max(1, int(distance_yards)), "TD"),
+                (
+                    "TD",
+                    yards_to_endzone(
+                        st.session_state.get("lt_ball_yard"),
+                        field_zone,
+                    ),
+                    "TD",
+                ),
                 ("TO", 0, "Turnover"),
                 ("Pen+", 5, "Penalty"),
                 ("Pen-", -5, "Penalty"),
@@ -14580,10 +14663,25 @@ def _render_quick_log_wizard(
                         st.rerun()
 
             st.number_input("Yards (fine-tune)", step=1, key="lt_gain")
+
+            def _on_lt_result_change() -> None:
+                if str(st.session_state.get("lt_result") or "") == "TD":
+                    try:
+                        ball = int(
+                            st.session_state.get("lt_ball_yard")
+                            or zone_default_ball_yard(st.session_state.get("lt_zone"))
+                        )
+                    except (TypeError, ValueError):
+                        ball = zone_default_ball_yard(st.session_state.get("lt_zone"))
+                    st.session_state.lt_gain = yards_to_endzone(
+                        ball, st.session_state.get("lt_zone")
+                    )
+
             st.selectbox(
                 "Result (fine-tune)",
                 ["Gain", "Incomplete", "No gain", "TD", "Turnover", "Penalty", "Sack / TFL", "Punt", "Other"],
                 key="lt_result",
+                on_change=_on_lt_result_change,
             )
             note = st.text_input("Note (optional)", key="lt_note_quick", placeholder="skip unless needed")
             st.session_state.ql_note = note
