@@ -623,6 +623,56 @@ class TestSeasonScope(unittest.TestCase):
         prior = "25-26" if current_season_id() != "25-26" else "24-25"
         if prior != current_season_id():
             self.assertFalse(is_current_season_value(prior))
+        # Aliases must never list another YY-YY year
+        yearish = [a for a in current_season_aliases() if a.count("-") == 1 and a[0].isdigit()]
+        self.assertEqual(yearish, [current_season_id().lower()])
+
+    def test_game_review_excludes_prior_season(self):
+        """26-27 Game Review must not include 25-26 games even with polluted aliases."""
+        import pandas as pd
+        from unittest.mock import patch
+
+        import team_config as tc
+        from step4_dashboard import game_review_table, plays_for_season
+
+        df = pd.DataFrame(
+            {
+                "season": ["26-27"] * 3 + ["25-26"] * 5 + ["24-25"] * 2,
+                "game_id": [1, 2, 3, 17, 18, 19, 20, 21, 5, 6],
+                "opponent": [
+                    "Bonham Scrimmage",
+                    "Cooper Scrimmage",
+                    "HSAA",
+                    "Farmersville",
+                    "Commerce",
+                    "Bonham",
+                    "Honey Grove",
+                    "Leonard",
+                    "Unknown",
+                    "Unknown",
+                ],
+                "epa": [0.1] * 10,
+                "points_scored": [0] * 10,
+                "is_touchdown": [0] * 10,
+                "game_notes": [""] * 10,
+            }
+        )
+        # Even if aliases wrongly include 25-26, concrete 26-27 pick stays clean
+        polluted = {"", "current", "26-27", "25-26"}
+        with patch.object(tc, "current_season_aliases", return_value=polluted):
+            with patch.object(
+                tc,
+                "is_current_season_value",
+                side_effect=lambda v: str(v).strip().lower() in polluted,
+            ):
+                rev = plays_for_season(df, "26-27")
+        self.assertEqual(set(rev["season"].unique()), {"26-27"})
+        games = game_review_table(rev)
+        self.assertEqual(set(games["opponent"]), {"Bonham Scrimmage", "Cooper Scrimmage", "HSAA"})
+        # Archived year still reachable via picker
+        prior = plays_for_season(df, "25-26")
+        self.assertEqual(set(prior["season"].unique()), {"25-26"})
+        self.assertIn("Commerce", set(game_review_table(prior)["opponent"]))
 
     def test_roster_season_roundtrip(self):
         import step4_dashboard as d

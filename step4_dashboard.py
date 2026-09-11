@@ -2261,23 +2261,37 @@ def combo_heatmap(
 
 
 def plays_for_season(df: pd.DataFrame, season_id: str | None) -> pd.DataFrame:
-    """Filter plays to a season id (None / current → active season aliases)."""
+    """Filter plays to one season id.
+
+    Concrete YY-YY picks match that stamp only (plus blank/current when it is
+    the active season). Prior-year ids never leak in via polluted aliases.
+    """
+    import re
+
     if df is None or df.empty:
         return df if df is not None else pd.DataFrame()
     if "season" not in df.columns:
         return df
     tc = _season_api()
     sid = str(season_id or tc.current_season_id()).strip()
+    sid_l = sid.lower()
     s = df["season"].fillna("").astype(str).str.strip().str.lower()
-    # Concrete id match (e.g. "26-27") — do not rely on a cached "current" mask
-    if sid.lower() not in {"current", ""} and not tc.is_current_season_value(sid):
-        return df[s == sid.lower()].copy()
-    # Active / current: include all aliases (26-27, current, blank, …)
-    aliases = {a for a in tc.current_season_aliases() if a is not None}
-    aliases.add(str(tc.current_season_id()).strip().lower())
-    aliases.add("current")
-    aliases.add("")
-    return df[s.isin(aliases)].copy()
+    s = s.replace({"nan": "", "none": ""})
+    cur = str(tc.current_season_id()).strip().lower()
+
+    # YY-YY picker: exact year only. Active year may also include blank/"current".
+    if re.fullmatch(r"\d{2}-\d{2}", sid_l):
+        want = {sid_l}
+        if sid_l == cur:
+            want.update({"current", ""})
+        return df[s.isin(want)].copy()
+
+    # "current" / blank / label → active season stamps only
+    want = {cur, "current", ""}
+    prior = str(tc.season_block().get("prior_id") or "").strip().lower()
+    if prior:
+        want.discard(prior)
+    return df[s.isin(want)].copy()
 
 
 def list_play_seasons(df: pd.DataFrame) -> list[str]:
@@ -2301,6 +2315,26 @@ def list_play_seasons(df: pd.DataFrame) -> list[str]:
     return ([cur] if cur in found or cur else []) + rest
 
 
+def _file_matches_season(path: Path, season: str) -> bool:
+    """True when a file name clearly belongs to season (or has no other YY-YY stamp)."""
+    import re
+
+    sid = str(season or "").strip().lower()
+    if not sid or sid in {"current", ""}:
+        return True
+    name = path.name.lower()
+    years = re.findall(r"\b(\d{2}-\d{2})\b", name)
+    if not years:
+        # season.xlsx / unscoped archives: only show under the active season
+        try:
+            from team_config import current_season_id, is_current_season_value
+
+            return is_current_season_value(sid) or sid == current_season_id().lower()
+        except Exception:
+            return True
+    return sid in years
+
+
 def _render_previous_game_hudl_viewer(review_df: pd.DataFrame, season: str) -> None:
     """
     Dedicated inspector to load, inspect, and export play logs from previous games
@@ -2313,24 +2347,30 @@ def _render_previous_game_hudl_viewer(review_df: pd.DataFrame, season: str) -> N
     st.markdown("---")
     st.subheader("📋 Previous Game Play Logs (Tag in Hudl)")
     st.caption(
-        "Load play-by-play logs from previous games to reference, copy, or export for easy tagging in Hudl."
+        f"Play logs for **{season}** only — switch the Season picker above to browse other years."
     )
 
-    # 1. Discover all available games/sources
+    # 1. Discover available games/sources for the selected season
     # Source A: Promoted / saved live game CSV files in data/live_games
-    saved_files = list_saved_live_games()
+    saved_files = [p for p in list_saved_live_games() if _file_matches_season(p, season)]
     
     # Source B: Archived live logs in data/live_log_archive
     archive_dir = LIVE_LOG_ARCHIVE_DIR
-    archive_files = sorted(archive_dir.glob("*.csv"), reverse=True) if archive_dir.exists() else []
+    archive_files = (
+        [p for p in sorted(archive_dir.glob("*.csv"), reverse=True) if _file_matches_season(p, season)]
+        if archive_dir.exists()
+        else []
+    )
 
-    # Source C: Hudl exports in data/hudl_exports
+    # Source C: Hudl exports in data/hudl_exports (scoped to this season)
     hudl_export_dir = PROJECT_DIR / "data" / "hudl_exports"
     hudl_export_files = (
         sorted(
             [
                 p for p in hudl_export_dir.glob("*.*")
-                if p.suffix.lower() in {".xlsx", ".csv"} and not p.name.startswith("~$")
+                if p.suffix.lower() in {".xlsx", ".csv"}
+                and not p.name.startswith("~$")
+                and _file_matches_season(p, season)
             ],
             key=lambda p: p.name,
         )
@@ -18581,17 +18621,14 @@ def _render_schedule_tab(offense_df: pd.DataFrame) -> None:
         st.success(f"Updated {n:,} play rows with opponent labels.")
         st.cache_data.clear()
         st.rerun()
-    if b3.button("Load from 25-26 archive", key="db_sched_load_prior") and is_active:
-        prior = load_schedule("25-26")
+    prior_id = str(tc.season_block().get("prior_id") or "25-26").strip() or "25-26"
+    if b3.button(f"Load from {prior_id} archive", key="db_sched_load_prior") and is_active:
+        prior = load_schedule(prior_id)
         if prior.empty:
-            # try config prior_id
-            pid = str(tc.season_block().get("prior_id") or "").strip()
-            prior = load_schedule(pid) if pid else prior
-        if prior.empty:
-            st.warning("No archived schedule found.")
+            st.warning(f"No archived schedule found (opponents_{prior_id}.csv).")
         else:
             save_schedule(prior, None)
-            st.success(f"Loaded {len(prior)} games from archive into active schedule.")
+            st.success(f"Loaded {len(prior)} games from {prior_id} into active schedule.")
             st.rerun()
     st.caption("Apply patches Game Review labels without re-importing Hudl.")
 

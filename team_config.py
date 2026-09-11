@@ -28,9 +28,10 @@ _DEFAULTS = {
     },
     "week1_opponent": "Farmersville",
     "season": {
-        "id": "25-26",
-        "label": "2025-26",
-        "current_aliases": ["current", "25-26", ""],
+        "id": "26-27",
+        "label": "2026-27",
+        "current_aliases": ["current", "26-27", ""],
+        "prior_id": "25-26",
         "note": (
             "Roster, Game Review, and Scout default to this season. "
             "Prior years still feed EPA / tagged play calls."
@@ -113,7 +114,7 @@ def season_block() -> dict:
 
 
 def current_season_id() -> str:
-    return str(season_block().get("id") or "25-26").strip() or "25-26"
+    return str(season_block().get("id") or "26-27").strip() or "26-27"
 
 
 def current_season_label() -> str:
@@ -121,13 +122,30 @@ def current_season_label() -> str:
 
 
 def current_season_aliases() -> set[str]:
-    """Values that mean 'this season' in DB / scout / roster files."""
-    raw = season_block().get("current_aliases") or ["current", "25-26", ""]
+    """Values that mean 'this season' in DB / scout / roster files.
+
+    Never includes prior_id or other YY-YY stamps — those leak prior seasons
+    into Game Review when aliases get polluted after a year roll.
+    """
+    import re
+
+    block = season_block()
+    cur = current_season_id().lower()
+    raw = block.get("current_aliases") or ["current", cur, ""]
     aliases = {str(a).strip().lower() for a in raw}
-    aliases.add(current_season_id().lower())
+    aliases.add(cur)
     aliases.add("current")
     aliases.add("")
-    return aliases
+    prior = str(block.get("prior_id") or "").strip().lower()
+    if prior:
+        aliases.discard(prior)
+    # Drop any other season-year tokens that aren't the active id
+    cleaned: set[str] = set()
+    for a in aliases:
+        if re.fullmatch(r"\d{2}-\d{2}", a) and a != cur:
+            continue
+        cleaned.add(a)
+    return cleaned
 
 
 def is_current_season_value(value) -> bool:
