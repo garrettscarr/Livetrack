@@ -8194,8 +8194,10 @@ def in_game_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
 def _render_start_new_game_panel(season_opps: list[str]) -> None:
     """Booth control: start a fresh game night (scout optional)."""
     st.caption(
-        "Saves tonight’s finished log into **Game Review** (EPA graph), archives the CSV, "
-        "resets drives / half, and sets the opponent. Scout file is optional."
+        "Promotes tonight’s **full** log into **Game Review**, then clears the live CSV for the next opponent. "
+        "**1st-half tagger tags are already saved** when you generate the HT report "
+        "(under `halftime_reports/` + `live_log_archive/*_halftime.csv`). "
+        "Scout file is optional."
     )
     known = [o for o in (season_opps or []) if str(o).strip()]
     name_opts = ["(type a new name)"] + known
@@ -15336,6 +15338,15 @@ def _execute_end_first_half(opponent: str, live_logs: pd.DataFrame) -> None:
     st.session_state.ht_auto_open = True
     st.session_state.ht_last_report = result["report"]
     st.session_state.ht_last_md = result["markdown"]
+    snap = result.get("live_log_snapshot") or {}
+    if int(snap.get("plays") or 0) > 0:
+        fill = snap.get("tag_fill") or {}
+        st.session_state.ht_snapshot_note = (
+            f"Saved **{snap['plays']}** 1st-half snaps with HT report "
+            f"(front {fill.get('def_front', 0)} · cov {fill.get('coverage', 0)} · "
+            f"ball {fill.get('ball_player', 0)}). "
+            f"Live log stays open for 2nd half."
+        )
 
 
 def _main_play_drift(opponent: str, live_logs: pd.DataFrame) -> dict | None:
@@ -18123,9 +18134,11 @@ def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: s
                 live_logs = load_live_log()
                 st.success(f"Moved {n} play(s) to 1st half.")
                 _execute_end_first_half(opponent, live_logs)
+                note = st.session_state.pop("ht_snapshot_note", None)
                 st.success(
                     "1st half ended — coach halftime report is open below. "
-                    "Read the 5-bullet script, then flip to Full boards if you want detail."
+                    + (str(note) + " " if note else "")
+                    + "Read the 5-bullet script, then flip to Full boards if you want detail."
                 )
                 st.rerun()
             if f2.button(
@@ -18138,16 +18151,21 @@ def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: s
                 st.rerun()
             return
         _execute_end_first_half(opponent, live_logs)
+        note = st.session_state.pop("ht_snapshot_note", None)
         st.success(
             "1st half ended — coach halftime report is open below. "
-            "Read the 5-bullet script, then flip to Full boards if you want detail."
+            + (str(note) + " " if note else "")
+            + "Read the 5-bullet script, then flip to Full boards if you want detail."
         )
         st.rerun()
 
     if gen:
         # Regenerate when half already closed
         _execute_end_first_half(opponent, live_logs)
-        st.success("Halftime report regenerated.")
+        note = st.session_state.pop("ht_snapshot_note", None)
+        st.success(
+            ("Halftime report regenerated. " + str(note)) if note else "Halftime report regenerated."
+        )
         st.rerun()
 
     if phase in {"halftime", "2nd"}:

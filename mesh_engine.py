@@ -1735,6 +1735,7 @@ def plan_pin_status(plan: dict, unit: str, live_scores: pd.DataFrame) -> dict[st
 
 GAME_STATE_FILE = PROJECT_DIR / "data" / "game_state.json"
 HALFTIME_REPORTS_DIR = PROJECT_DIR / "data" / "halftime_reports"
+LIVE_LOG_ARCHIVE_DIR = PROJECT_DIR / "data" / "live_log_archive"
 POST_GAME_REPORTS_DIR = PROJECT_DIR / "data" / "post_game_reports"
 HT_MIN_SAMPLE = 3  # tendency boards need at least this many snaps
 
@@ -4016,10 +4017,87 @@ def save_halftime_report(report: dict) -> Path:
     return path
 
 
+def save_halftime_live_snapshot(
+    opponent: str,
+    live_logs: pd.DataFrame,
+    *,
+    report_path: Path,
+) -> dict:
+    """
+    Persist the live log that fed this HT report.
+
+    Generation (not Start new game) is the storage standard for 1st-half tags.
+    Writes next to the HT JSON and a copy under data/live_log_archive/.
+    Does not clear live_log.csv — 2nd half still needs it.
+    """
+    out: dict = {"plays": 0, "report_csv": None, "archive_csv": None}
+    if live_logs is None or getattr(live_logs, "empty", True):
+        return out
+
+    # Same scope HT boards use: half=1 for this opponent (fallback = all tonight)
+    half1 = filter_live_logs(live_logs, opponent=opponent, half=1)
+    snap = half1
+    if snap.empty:
+        snap = filter_live_logs(live_logs, opponent=opponent, half=None)
+    if snap.empty:
+        return out
+
+    safe = "".join(
+        ch if ch.isalnum() or ch in "-_ " else "_"
+        for ch in str(opponent or "Unknown")
+    ).strip() or "Unknown"
+    stamp = report_path.stem.replace(f"{safe}_", "", 1) if report_path else ""
+    if not stamp:
+        from datetime import datetime
+
+        stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+
+    HALFTIME_REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    LIVE_LOG_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+
+    report_csv = report_path.with_name(f"{report_path.stem}_live.csv")
+    snap.to_csv(report_csv, index=False)
+    out["report_csv"] = str(
+        report_csv.relative_to(PROJECT_DIR) if report_csv.is_relative_to(PROJECT_DIR) else report_csv
+    )
+
+    # Archive copy — discoverable alongside Start-new archives; reason=halftime
+    archive_csv = LIVE_LOG_ARCHIVE_DIR / f"{safe}_{stamp}_halftime.csv"
+    snap.to_csv(archive_csv, index=False)
+    out["archive_csv"] = str(
+        archive_csv.relative_to(PROJECT_DIR) if archive_csv.is_relative_to(PROJECT_DIR) else archive_csv
+    )
+    out["plays"] = int(len(snap))
+
+    # Tag fill summary so we can audit later without opening the CSV
+    def _filled(col: str) -> int:
+        if col not in snap.columns:
+            return 0
+        s = snap[col].fillna("").astype(str).str.strip()
+        return int((s.ne("") & ~s.str.lower().isin({"nan", "none", "unknown", "?"})).sum())
+
+    out["tag_fill"] = {
+        "def_front": _filled("def_front"),
+        "coverage": _filled("coverage"),
+        "blitz": _filled("blitz"),
+        "ball_player": _filled("ball_player"),
+        "pass_player": _filled("pass_player"),
+    }
+    return out
+
+
 def end_first_half(opponent: str, live_logs: pd.DataFrame, plan: dict, player_board=None) -> dict:
-    """Mark 1st half over, build+save report, update game phase."""
+    """Mark 1st half over, build+save report + live-log snapshot, update game phase."""
+    import json
+
     report = build_halftime_report(opponent, live_logs, plan, player_board=player_board)
     path = save_halftime_report(report)
+    snapshot = save_halftime_live_snapshot(opponent, live_logs, report_path=path)
+    if snapshot.get("plays"):
+        report["live_log_snapshot"] = snapshot
+        # Re-write JSON so snapshot metadata is durable with the report
+        path.write_text(json.dumps(report, indent=2))
+
     state = {
         "opponent": opponent,
         "phase": "halftime",
@@ -4029,10 +4107,16 @@ def end_first_half(opponent: str, live_logs: pd.DataFrame, plan: dict, player_bo
         "report_md": str(path.with_suffix(".md").relative_to(PROJECT_DIR))
         if path.with_suffix(".md").is_relative_to(PROJECT_DIR)
         else path.with_suffix(".md").name,
+        "live_log_snapshot": snapshot.get("archive_csv") or snapshot.get("report_csv"),
+        "live_log_snapshot_plays": snapshot.get("plays") or 0,
     }
     save_game_state(state)
-    return {"state": state, "report": report, "markdown": format_halftime_report_markdown(report)}
-
+    return {
+        "state": state,
+        "report": report,
+        "markdown": format_halftime_report_markdown(report),
+        "live_log_snapshot": snapshot,
+    }
 
 # ---------------------------------------------------------------------------
 # Post-game breakdown & coach reporting

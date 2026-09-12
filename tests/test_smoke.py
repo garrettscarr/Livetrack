@@ -494,6 +494,81 @@ class TestStartNewGame(unittest.TestCase):
                 d.LIVE_LOG_FILE = old_log
                 d.LIVE_LOG_ARCHIVE_DIR = old_arch
 
+    def test_ht_generation_stores_live_snapshot(self):
+        """HT generate (not Start new) is the durable store for 1st-half tags."""
+        import tempfile
+        from pathlib import Path
+
+        import pandas as pd
+
+        import mesh_engine as m
+
+        logs = pd.DataFrame(
+            [
+                {
+                    "opponent": "HSAA",
+                    "half": 1,
+                    "unit": "Offense",
+                    "down": 1,
+                    "distance": "long",
+                    "field_zone": "midfield",
+                    "formation": "SLOT TRIG",
+                    "play_call": "ARMY",
+                    "result": "Gain",
+                    "yards_gained": 4,
+                    "def_front": "Even",
+                    "coverage": "Cover 3",
+                    "blitz": "No",
+                    "ball_player": "Luke Harris",
+                },
+                {
+                    "opponent": "HSAA",
+                    "half": 1,
+                    "unit": "Offense",
+                    "down": 2,
+                    "distance": "medium",
+                    "field_zone": "midfield",
+                    "formation": "SLOT TRIG",
+                    "play_call": "MOLLY",
+                    "result": "Gain",
+                    "yards_gained": 8,
+                    "def_front": "Even",
+                    "coverage": "Cover 4",
+                    "blitz": "Yes",
+                    "ball_player": "Tyse Lennon",
+                },
+            ]
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            old_ht = m.HALFTIME_REPORTS_DIR
+            old_arch = m.LIVE_LOG_ARCHIVE_DIR
+            old_state = m.GAME_STATE_FILE
+            m.HALFTIME_REPORTS_DIR = tmp_path / "ht"
+            m.LIVE_LOG_ARCHIVE_DIR = tmp_path / "archive"
+            m.GAME_STATE_FILE = tmp_path / "game_state.json"
+            try:
+                result = m.end_first_half("HSAA", logs, plan={}, player_board=None)
+                snap = result.get("live_log_snapshot") or {}
+                self.assertEqual(int(snap.get("plays") or 0), 2)
+                report_csv = tmp_path / "ht" / Path(snap["report_csv"]).name
+                # report_csv may be relative to PROJECT_DIR — resolve via stem
+                candidates = list((tmp_path / "ht").glob("*_live.csv"))
+                self.assertTrue(candidates, "expected *_live.csv next to HT report")
+                saved = pd.read_csv(candidates[0])
+                self.assertEqual(len(saved), 2)
+                self.assertEqual(int((saved["coverage"].astype(str).str.len() > 0).sum()), 2)
+                self.assertEqual(int((saved["ball_player"].astype(str).str.len() > 0).sum()), 2)
+                arch = list((tmp_path / "archive").glob("*_halftime.csv"))
+                self.assertTrue(arch, "expected live_log_archive/*_halftime.csv")
+                # live log itself is not cleared by HT generate
+                self.assertEqual(snap.get("tag_fill", {}).get("coverage"), 2)
+                self.assertTrue((result.get("state") or {}).get("live_log_snapshot"))
+            finally:
+                m.HALFTIME_REPORTS_DIR = old_ht
+                m.LIVE_LOG_ARCHIVE_DIR = old_arch
+                m.GAME_STATE_FILE = old_state
+
     def test_ht_tendency_helpers(self):
         import step4_dashboard as d
 
