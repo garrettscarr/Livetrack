@@ -9,6 +9,7 @@ Scout roles:
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import sqlite3
 
 import pandas as pd
@@ -357,6 +358,7 @@ def booth_front_tag(value, *, mode: str = "as_scouted") -> str:
     Map a scout/film front to the booth tag used for matching.
 
     mode='even_42': numbered specialty fronts (31/13/22…) → Even (4-2 base).
+      3-3 / Stack stays its own booth tag (Odd-family stack — e.g. Commerce).
     mode='as_scouted': keep scout labels (case-normalized).
     """
     import re
@@ -364,13 +366,28 @@ def booth_front_tag(value, *, mode: str = "as_scouted") -> str:
     s = str(value or "").strip().lower()
     if not s or s in {"nan", "none", "unknown"}:
         return ""
+    # Normalize 3-3 stack family before even_42 numbered → Even collapse.
+    # Bare "33" stays a numbered 4-2 front → Even; require hyphen/space or "stack".
+    if (
+        "stack" in s
+        or re.fullmatch(r"3[\s\-]+3(?:[\s\-]*stack)?", s)
+        or s in {"3-3stack", "33stack", "thirty three", "thirty-three"}
+    ):
+        return "3-3 stack"
     if mode != "even_42":
         return s
-    if s in {"bear", "odd", "even"}:
+    if s in {"bear", "odd", "even", "3-3 stack"}:
         return s
     if re.fullmatch(r"\d+", s):
         return "even"
     return s
+
+
+# 3-3 Stack plays like Odd (gaps / overhangs) — share EPA until stack tags accumulate.
+_FRONT_MATCH_ALIASES: dict[str, set[str]] = {
+    "3-3 stack": {"3-3 stack", "odd"},
+    "odd": {"odd", "3-3 stack"},
+}
 
 
 def _look_mask(
@@ -385,14 +402,47 @@ def _look_mask(
         want = booth_front_tag(name, mode=booth_mode)
         if not want:
             return pd.Series(False, index=series.index)
+        wants = _FRONT_MATCH_ALIASES.get(want, {want})
         vals = series.map(lambda v: booth_front_tag(v, mode=booth_mode))
-        return vals == want
+        return vals.isin(wants)
     token = _canon_cov_token(name)
     aliases = _COV_ALIASES.get(token, {token} if token else set())
     if not aliases:
         return pd.Series(False, index=series.index)
     vals = series.map(_canon_cov_token)
     return vals.isin(aliases)
+
+
+def _stack_scheme_opponents() -> set[str]:
+    """Opponents whose Hudl numbered fronts are 3-3 stack, not 4-2 Even."""
+    return {"commerce"}
+
+
+def _remap_numbered_fronts_to_stack(scout: pd.DataFrame) -> pd.DataFrame:
+    """Rewrite bare numbered DEF FRONT tags to 3-3 Stack for stack-scheme film."""
+    if scout is None or getattr(scout, "empty", True) or "def_front" not in scout.columns:
+        return scout
+    out = scout.copy()
+
+    def _map(v):
+        s = str(v or "").strip()
+        low = s.lower()
+        if not s or low in {"nan", "none", "unknown"}:
+            return v
+        # Keep explicit non-number tags (Bear, Stack, Odd, …)
+        if re.fullmatch(r"\d+", s) or re.fullmatch(r"\d+\s*tite", s, flags=re.I):
+            return "3-3 Stack"
+        return v
+
+    out["def_front"] = out["def_front"].map(_map)
+    # Rebuild paired call label used in scout detail
+    if "coverage" in out.columns:
+        out["def_call"] = (
+            out["def_front"].fillna("Unknown").astype(str)
+            + "  |  "
+            + out["coverage"].fillna("Unknown").astype(str)
+        )
+    return out
 
 
 def _our_stats_vs_look(
@@ -1000,6 +1050,153 @@ def _build_matchup_call_sheet(
     }
 
 
+def _scout_blitz_tagged(val) -> bool:
+    """True when Hudl scout BLITZ cell is a real send (named package or Yes)."""
+    s = str(val or "").strip().lower()
+    if not s or s in {"nan", "none", "no", "n", "0", "false", "-", "—"}:
+        return False
+    return True
+
+
+def analyze_scout_blitz(scout: pd.DataFrame, *, top_n: int = 8) -> dict:
+    """
+    Pre-game blitz tendencies from opponent D scout (named packages or Yes/No).
+    Empty BLITZ cells count as no-blitz (Hudl convention).
+    """
+    empty = {
+        "scout_snaps": 0,
+        "blitz_plays": 0,
+        "blitz_pct": 0.0,
+        "multi_send_plays": 0,
+        "multi_send_pct": 0.0,
+        "packages": [],
+        "senders": [],
+        "families": [],
+        "by_down": [],
+        "by_distance": [],
+        "by_coverage": [],
+        "summary": "No blitz tags in scout.",
+    }
+    if scout is None or getattr(scout, "empty", True) or "blitz" not in scout.columns:
+        return empty
+
+    total = int(len(scout))
+    flags = scout["blitz"].map(_scout_blitz_tagged)
+    blitz_n = int(flags.sum())
+    blitz_pct = round(100.0 * blitz_n / total, 1) if total else 0.0
+    if blitz_n == 0:
+        out = dict(empty)
+        out["scout_snaps"] = total
+        out["summary"] = f"Scout {total} snaps · no blitz packages tagged."
+        return out
+
+    blitz_rows = scout.loc[flags]
+    multi = int(
+        blitz_rows["blitz"]
+        .astype(str)
+        .str.contains(",", regex=False, na=False)
+        .sum()
+    )
+
+    piece_counts: dict[str, int] = {}
+    sender_counts: dict[str, int] = {}
+    family_counts: dict[str, int] = {}
+    sender_re = re.compile(
+        r"^(BANDIT|SAM|MIKE|WILL|SAFETY|SAFTEY|CORNER|NICKEL|STAR)\b",
+        re.I,
+    )
+    for raw in blitz_rows["blitz"].astype(str):
+        for part in re.split(r"\s*,\s*", raw):
+            name = part.strip().upper()
+            if not name or name in {"NAN", "NONE"}:
+                continue
+            piece_counts[name] = piece_counts.get(name, 0) + 1
+            m = sender_re.match(name)
+            if m:
+                sender = m.group(1).upper().replace("SAFTEY", "SAFETY")
+                sender_counts[sender] = sender_counts.get(sender, 0) + 1
+            fam = None
+            for token in ("STAB", "PLUG", "BLAST", "SMOKE", "SCRAPE", "CROSS", "MUG"):
+                if token in name:
+                    fam = token
+                    break
+            if fam:
+                family_counts[fam] = family_counts.get(fam, 0) + 1
+
+    def _pct_rows(counts: dict[str, int], denom: int) -> list[dict]:
+        rows = [
+            {
+                "name": k,
+                "plays": int(v),
+                "pct": round(100.0 * v / denom, 1) if denom else 0.0,
+            }
+            for k, v in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+        return rows[:top_n]
+
+    def _rate_by(col: str, *, min_n: int = 5) -> list[dict]:
+        if col not in scout.columns:
+            return []
+        rows: list[dict] = []
+        for key, grp in scout.groupby(scout[col], dropna=True):
+            label = str(key).strip()
+            if not label or label.lower() in {"nan", "none", "unknown"}:
+                continue
+            n = int(len(grp))
+            if n < min_n:
+                continue
+            b = int(grp["blitz"].map(_scout_blitz_tagged).sum())
+            rows.append(
+                {
+                    "name": label,
+                    "plays": n,
+                    "blitz_plays": b,
+                    "blitz_pct": round(100.0 * b / n, 1) if n else 0.0,
+                }
+            )
+        rows.sort(key=lambda r: (-r["blitz_pct"], -r["blitz_plays"], -r["plays"]))
+        return rows
+
+    by_down: list[dict] = []
+    if "down" in scout.columns:
+        for d in (1, 2, 3, 4):
+            grp = scout[scout["down"] == d]
+            n = int(len(grp))
+            if n < 3:
+                continue
+            b = int(grp["blitz"].map(_scout_blitz_tagged).sum())
+            by_down.append(
+                {
+                    "name": f"{d}",
+                    "plays": n,
+                    "blitz_plays": b,
+                    "blitz_pct": round(100.0 * b / n, 1) if n else 0.0,
+                }
+            )
+
+    packages = _pct_rows(piece_counts, blitz_n)
+    top_pkg = packages[0]["name"] if packages else "—"
+    summary = (
+        f"Blitz **{blitz_pct:.0f}%** ({blitz_n}/{total}) · "
+        f"top send **{top_pkg}** · "
+        f"multi-send {round(100.0 * multi / blitz_n, 0):.0f}% of blitz snaps"
+    )
+    return {
+        "scout_snaps": total,
+        "blitz_plays": blitz_n,
+        "blitz_pct": blitz_pct,
+        "multi_send_plays": multi,
+        "multi_send_pct": round(100.0 * multi / blitz_n, 1) if blitz_n else 0.0,
+        "packages": packages,
+        "senders": _pct_rows(sender_counts, blitz_n),
+        "families": _pct_rows(family_counts, blitz_n),
+        "by_down": by_down,
+        "by_distance": _rate_by("distance_bucket", min_n=5),
+        "by_coverage": _rate_by("coverage", min_n=5),
+        "summary": summary,
+    }
+
+
 def build_scout_matchup_report(
     opponent: str,
     offense_df: pd.DataFrame | None,
@@ -1028,6 +1225,7 @@ def build_scout_matchup_report(
         "fronts_detail": [],
         "coverages": [],
         "def_calls": [],
+        "blitz": {},
         "edges": [],
         "traps": [],
         "summary": "No scout defense data for this opponent.",
@@ -1050,9 +1248,23 @@ def build_scout_matchup_report(
     if scout is None or getattr(scout, "empty", True):
         return empty
 
+    # Film detail keeps Hudl numbers; booth buckets stack-scheme teams to 3-3 Stack.
+    scout_film = scout.copy()
+    stack_scheme = opp.strip().lower() in _stack_scheme_opponents()
+    if stack_scheme:
+        scout = _remap_numbered_fronts_to_stack(scout)
+        notes_pending_stack = True
+    else:
+        notes_pending_stack = False
+
     our_all = offense_df
     our_primary, primary_label = _primary_offense_sample(offense_df, our_seasons)
     notes: list[str] = []
+    if notes_pending_stack:
+        notes.append(
+            "Stack scheme: Hudl numbered fronts bucketed to **3-3 Stack** "
+            "(Odd-family EPA). Film numbers stay in scout front detail."
+        )
     # Coverage tags are sparse in recent seasons — fall back for cov EPA (all-time)
     our_cov_primary = our_primary
     our_cov_all = our_all
@@ -1078,8 +1290,8 @@ def build_scout_matchup_report(
     )
 
     fronts_detail_raw = (
-        _top_counts(scout["def_front"], n=top_n)
-        if "def_front" in scout.columns
+        _top_counts(scout_film["def_front"], n=top_n)
+        if "def_front" in scout_film.columns
         else []
     )
     if mode == "even_42" and "def_front" in scout.columns:
@@ -1120,11 +1332,22 @@ def build_scout_matchup_report(
             scout_n = int(it.get("plays") or 0)
             pct = round(100.0 * scout_n / total, 1) if total else 0.0
             if film_only:
-                booth = booth_front_tag(name, mode="even_42")
+                if stack_scheme and (
+                    re.fullmatch(r"\d+", name)
+                    or re.fullmatch(r"\d+\s*tite", name, flags=re.I)
+                ):
+                    booth = "3-3 stack"
+                else:
+                    booth = booth_front_tag(name, mode="even_42")
+                booth_disp = (
+                    "3-3 Stack"
+                    if booth == "3-3 stack"
+                    else (booth.title() if booth else "—")
+                )
                 rows.append(
                     {
                         "look": name,
-                        "booth_tag": booth.title() if booth else "—",
+                        "booth_tag": booth_disp,
                         "scout_plays": scout_n,
                         "scout_pct": pct,
                         "our_plays": 0,
@@ -1163,11 +1386,11 @@ def build_scout_matchup_report(
                 verdict = _verdict_for_look(basis_stats, scout_n, total)
             display = name
             if col == "def_front" and mode == "even_42" and bm == mode:
-                display = (
-                    name.title()
-                    if name.lower() in {"even", "odd", "bear"}
-                    else name
-                )
+                low = name.lower()
+                if low in {"even", "odd", "bear"}:
+                    display = name.title()
+                elif low == "3-3 stack":
+                    display = "3-3 Stack"
             best = _merge_best_calls(season_stats, all_stats)
             disp_epa = basis_stats.get("avg_epa")
             disp_plays = int(basis_stats.get("our_plays") or 0)
@@ -1231,7 +1454,8 @@ def build_scout_matchup_report(
     top_c = coverages[0]["look"] if coverages else "—"
     if mode == "even_42":
         notes.append(
-            "Booth mode: 4-2 — numbered scout fronts mapped to Even for EPA match."
+            "Booth mode: 4-2 — numbered scout fronts mapped to Even for EPA match "
+            "(3-3 Stack aliases to Odd)."
         )
     notes.append(f"Primary EPA sample: **{primary_label}**.")
     notes.append(
@@ -1256,10 +1480,14 @@ def build_scout_matchup_report(
         booth_mode=mode,
         min_plays=max(2, min_our_plays - 1),
     )
+    blitz = analyze_scout_blitz(scout, top_n=top_n)
     n_calls = len(call_sheet.get("featured") or [])
+    blitz_bit = ""
+    if blitz.get("blitz_plays"):
+        blitz_bit = f" · blitz {blitz.get('blitz_pct', 0):.0f}%"
     summary = (
         f"vs {opp or 'upload'}: scout {total} D snaps · lean {top_f} / {top_c} · "
-        f"{n_calls} formation/play calls matched · "
+        f"{n_calls} formation/play calls matched{blitz_bit} · "
         f"our n={our_n:,} ({primary_label}) · career n={our_all_n:,}"
     )
     return {
@@ -1275,6 +1503,7 @@ def build_scout_matchup_report(
         "fronts_detail": fronts_detail,
         "coverages": coverages,
         "def_calls": def_calls,
+        "blitz": blitz,
         "call_sheet": call_sheet,
         "edges": edges[:6],
         "traps": traps[:6],
@@ -1429,6 +1658,56 @@ def scout_matchup_report_markdown(report: dict) -> str:
                 f"- **{r['look']}** · scout {r['scout_pct']}% · our EPA {epa_s} "
                 f"(n={r['our_plays']})"
             )
+
+    blitz = report.get("blitz") or {}
+    if blitz.get("blitz_plays"):
+        lines.extend(
+            [
+                "",
+                "## Blitz",
+                "",
+                str(blitz.get("summary") or ""),
+                "",
+            ]
+        )
+        if blitz.get("packages"):
+            lines.append("### Packages (send counts)")
+            lines.append("")
+            for p in blitz["packages"][:8]:
+                lines.append(
+                    f"- **{p['name']}** · {p['plays']} "
+                    f"({p['pct']}% of blitz snaps)"
+                )
+            lines.append("")
+        if blitz.get("senders"):
+            lines.append(
+                "Senders: "
+                + ", ".join(
+                    f"**{s['name']}** {s['plays']}" for s in blitz["senders"][:6]
+                )
+            )
+            lines.append("")
+        if blitz.get("by_down") or blitz.get("by_distance"):
+            lines.append("### When they send")
+            lines.append("")
+            for row in blitz.get("by_down") or []:
+                lines.append(
+                    f"- Down **{row['name']}**: **{row['blitz_pct']}%** "
+                    f"({row['blitz_plays']}/{row['plays']})"
+                )
+            for row in (blitz.get("by_distance") or [])[:4]:
+                lines.append(
+                    f"- Distance **{row['name']}**: **{row['blitz_pct']}%** "
+                    f"({row['blitz_plays']}/{row['plays']})"
+                )
+            for row in (blitz.get("by_coverage") or [])[:4]:
+                if row.get("blitz_pct", 0) >= 20:
+                    lines.append(
+                        f"- vs coverage **{row['name']}**: **{row['blitz_pct']}%** "
+                        f"({row['blitz_plays']}/{row['plays']})"
+                    )
+            lines.append("")
+
     lines.append("")
     return "\n".join(lines)
 

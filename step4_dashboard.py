@@ -3755,6 +3755,7 @@ def upsert_scout_plays_from_file(
     *,
     opponent: str,
     role: str = "opponent_defense",
+    season: str | None = None,
 ) -> int:
     """
     Clean one scout workbook and merge into scout_plays (replace that opponent+role).
@@ -3767,6 +3768,13 @@ def upsert_scout_plays_from_file(
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(str(path))
+    if not season:
+        try:
+            from team_config import current_season_id
+
+            season = current_season_id()
+        except Exception:
+            season = "current"
     raw = pd.read_excel(path)
     if "PLAY #" not in raw.columns:
         # Try first sheet as-is; assign_game_ids needs PLAY #
@@ -3774,7 +3782,7 @@ def upsert_scout_plays_from_file(
     raw = raw.copy()
     raw["game_id"] = assign_game_ids(raw["PLAY #"])
     cleaned = clean_scout_file(
-        raw, opponent, role, path.name, season="current"
+        raw, opponent, role, path.name, season=season
     )
     if cleaned is None or cleaned.empty:
         return 0
@@ -6439,7 +6447,7 @@ def player_touch_stats_table(
 LIVE_TAGS_FILE = PROJECT_DIR / "data" / "live_tags.json"
 
 # Booth defaults when season film never tagged these (coverage was empty in Hudl).
-DEFAULT_FILM_FRONTS = ["Even", "Odd", "Bear"]
+DEFAULT_FILM_FRONTS = ["Even", "Odd", "Bear", "3-3 Stack"]
 DEFAULT_FILM_COVERAGES = [
     "Cover 3",
     "Cover 4",
@@ -6511,7 +6519,7 @@ def learn_live_tag(kind: str, value: str) -> None:
 
 
 def ensure_default_film_tags() -> None:
-    """Seed Even/Odd + basic covers into learned tags so Fill Film dropdowns are ready."""
+    """Seed Even/Odd/Bear/3-3 Stack + basic covers into learned tags."""
     tags = _load_learned_tags()
     changed = False
     for kind, defaults in (
@@ -6954,6 +6962,26 @@ def _matchup_game_plan_cues(report: dict) -> list[str]:
         cues.append(str(e.get("message") or ""))
     for e in cs.get("avoid") or []:
         cues.append(str(e.get("message") or ""))
+    blitz = report.get("blitz") or {}
+    if blitz.get("blitz_plays"):
+        pkgs = blitz.get("packages") or []
+        top = pkgs[0]["name"] if pkgs else "blitz"
+        cues.append(
+            f"Blitz **{blitz.get('blitz_pct', 0):.0f}%** "
+            f"({blitz.get('blitz_plays')}/{blitz.get('scout_snaps')}) · "
+            f"top send **{top}**"
+        )
+        hot_dist = [
+            r
+            for r in (blitz.get("by_distance") or [])
+            if r.get("blitz_pct", 0) >= 40 and r.get("plays", 0) >= 5
+        ]
+        if hot_dist:
+            d = hot_dist[0]
+            cues.append(
+                f"Expect blitz on **{d['name']}** yardage "
+                f"({d['blitz_pct']}% · {d['blitz_plays']}/{d['plays']})"
+            )
     if cues:
         return cues[:8]
     # Fallback when no tagged formation/play sample
@@ -7318,6 +7346,90 @@ def _render_scout_matchup_report(
             st.caption("No paired calls in scout.")
         else:
             st.dataframe(tp, hide_index=True, use_container_width=True)
+
+    blitz = report.get("blitz") or {}
+    if blitz.get("scout_snaps"):
+        with st.expander(
+            f"Blitz · {blitz.get('blitz_pct', 0):.0f}% "
+            f"({blitz.get('blitz_plays', 0)}/{blitz.get('scout_snaps', 0)})",
+            expanded=bool(blitz.get("blitz_plays")),
+        ):
+            if not blitz.get("blitz_plays"):
+                st.caption(str(blitz.get("summary") or "No blitz tags in scout."))
+            else:
+                st.caption(str(blitz.get("summary") or ""))
+                b1, b2 = st.columns(2)
+                with b1:
+                    pkgs = blitz.get("packages") or []
+                    if pkgs:
+                        st.markdown("**Packages**")
+                        st.dataframe(
+                            pd.DataFrame(
+                                [
+                                    {
+                                        "Package": p["name"],
+                                        "Sends": p["plays"],
+                                        "% of blitz": p["pct"],
+                                    }
+                                    for p in pkgs
+                                ]
+                            ),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+                    senders = blitz.get("senders") or []
+                    if senders:
+                        st.markdown("**Senders**")
+                        st.dataframe(
+                            pd.DataFrame(
+                                [
+                                    {
+                                        "Sender": s["name"],
+                                        "Sends": s["plays"],
+                                        "% of blitz": s["pct"],
+                                    }
+                                    for s in senders
+                                ]
+                            ),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+                with b2:
+                    st.markdown("**When they send**")
+                    sit_rows = []
+                    for row in blitz.get("by_down") or []:
+                        sit_rows.append(
+                            {
+                                "Situation": f"Down {row['name']}",
+                                "Blitz %": row["blitz_pct"],
+                                "n": f"{row['blitz_plays']}/{row['plays']}",
+                            }
+                        )
+                    for row in blitz.get("by_distance") or []:
+                        sit_rows.append(
+                            {
+                                "Situation": f"Dist {row['name']}",
+                                "Blitz %": row["blitz_pct"],
+                                "n": f"{row['blitz_plays']}/{row['plays']}",
+                            }
+                        )
+                    for row in blitz.get("by_coverage") or []:
+                        if row.get("blitz_pct", 0) >= 15:
+                            sit_rows.append(
+                                {
+                                    "Situation": f"Cov {row['name']}",
+                                    "Blitz %": row["blitz_pct"],
+                                    "n": f"{row['blitz_plays']}/{row['plays']}",
+                                }
+                            )
+                    if sit_rows:
+                        st.dataframe(
+                            pd.DataFrame(sit_rows),
+                            hide_index=True,
+                            use_container_width=True,
+                        )
+                    else:
+                        st.caption("Not enough snaps to break blitz down by situation.")
 
     from mesh_engine import scout_matchup_report_markdown
 
@@ -12016,7 +12128,9 @@ def parse_film_phrase(phrase: str) -> dict:
     elif re.search(r"\bblitz\b", low):
         out["blitz"] = "Yes"
 
-    if re.search(r"\b(?:bear|bare)\s+fronts?\b", low):
+    if re.search(r"\b(?:3[\s\-]?3|thirty[\s\-]?three)\s*stacks?\b|\bstacks?\s*(?:front)?\b|\b(?:3[\s\-]?3)\s+fronts?\b", low):
+        out["def_front"] = "3-3 Stack"
+    elif re.search(r"\b(?:bear|bare)\s+fronts?\b", low):
         out["def_front"] = "Bear"
     elif re.search(r"\beven\b", low):
         out["def_front"] = "Even"

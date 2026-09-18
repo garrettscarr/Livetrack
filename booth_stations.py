@@ -44,7 +44,7 @@ FOCUS_LABELS: dict[str, str] = {
 
 FOCUS_HELP: dict[str, str] = {
     FOCUS_SNAPS: "Down, distance, formation, call, result, yards (Main)",
-    FOCUS_FRONT: "Pre-snap — Even / Odd / Bear",
+    FOCUS_FRONT: "Pre-snap — Even / Odd / Bear / 3-3 Stack",
     FOCUS_COVERAGE: "Pre-snap — Cover 2 / 3 / 4 / …",
     FOCUS_BLITZ: "Post-snap — Yes or No",
     FOCUS_MOTION: "Post-snap — motion / shift",
