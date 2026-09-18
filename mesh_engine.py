@@ -785,7 +785,7 @@ def _calls_vs_scout_look(
             positive_only=False,
             tagged_only=True,
         ),
-        "our_plays": int(len(tagged) if len(tagged) else sub),
+        "our_plays": int(len(tagged) if len(tagged) else len(sub)),
     }
 
 
@@ -3629,7 +3629,10 @@ def build_halftime_report(
             for label, chunk in (("up", top), ("down", bot)):
                 for _, row in chunk.iterrows():
                     name = str(row.get("player", ""))
+                    pos = str(row.get("active_pos", "—") or "—").strip().upper()
                     if not name or name in seen_names:
+                        continue
+                    if pos in {"LT", "LG", "C", "RG", "RT", "OL"} or pos.startswith("OL"):
                         continue
                     # Skip near-zero noise on the "down" board if already featured up
                     pm = float(row.get("plus_minus", 0) or 0)

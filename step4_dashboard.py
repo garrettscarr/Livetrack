@@ -4708,13 +4708,18 @@ def update_live_log_at(index: int, updates: dict) -> bool:
 
 
 def play_needs_film(row: pd.Series | dict) -> bool:
-    """True when Sky Coach tags still need to be filled after a quick log."""
-    fp = str((row.get("film_pending") if hasattr(row, "get") else "") or "").strip().lower()
-    if fp in {"1", "true", "yes", "y"}:
-        return True
-    if fp in {"0", "false", "no", "n"}:
+    """True when front / coverage / blitz are still missing.
+
+    film_pending=Yes does not override tags already written by the tagger.
+    Opening Fill Film must not treat a tagged look as an empty slot.
+    """
+    missing = play_missing_film_fields(row)
+    if not missing:
         return False
-    return bool(play_missing_film_fields(row))
+    # Front + coverage is the look the report uses; don't reopen just for blitz.
+    if "front" not in missing and "coverage" not in missing:
+        return False
+    return True
 
 
 def play_missing_film_fields(row: pd.Series | dict) -> set[str]:
@@ -6054,21 +6059,56 @@ def player_plus_minus_table(
     ).reset_index(drop=True)
 
 
-def player_board_for_halftime(
+def _roster_ol_names() -> set[str]:
+    """Lowercased names whose roster positions are OL only (not dual-threat skill)."""
+    names: set[str] = set()
+    try:
+        roster = load_roster()
+    except Exception:
+        return names
+    skill = {"QB", "RB", "WR", "TE", "FB", "ATH"}
+    for p in roster or []:
+        name = str(p.get("name") or "").strip()
+        if not name:
+            continue
+        pos = {str(x).strip().upper() for x in (p.get("positions") or []) if str(x).strip()}
+        if not pos:
+            continue
+        if pos & skill:
+            continue
+        if pos & OL_LOG_POSITIONS or any(x.startswith("OL") for x in pos):
+            names.add(name.lower())
+    return names
+
+
+def _drop_ol_player_rows(board: pd.DataFrame) -> pd.DataFrame:
+    """Remove offensive line from player reports. OL grades stay on their own tab."""
+    if board is None or board.empty:
+        return board if board is not None else pd.DataFrame()
+    ol_names = _roster_ol_names()
+    out = board.copy()
+    if "active_pos" in out.columns:
+        pos = out["active_pos"].fillna("").astype(str).str.strip().str.upper()
+        out = out[~pos.isin(OL_LOG_POSITIONS) & ~pos.str.startswith("OL")]
+    if ol_names and "player" in out.columns:
+        out = out[~out["player"].fillna("").astype(str).str.strip().str.lower().isin(ol_names)]
+    return out.reset_index(drop=True)
+
+
+def _skill_board_from_tags(
     live_logs: pd.DataFrame,
     opponent: str | None = None,
 ) -> pd.DataFrame:
-    """+/- from lineup when tracked; else skill tags (ball/pass player)."""
-    board = player_plus_minus_table(live_logs, opponent, by_position=True)
-    if not board.empty:
-        return board
+    """Player board from tagger ball_player / pass_player — not the lineup."""
+    cols = ["player", "active_pos", "snaps", "plus_minus", "net_yards", "good", "bad"]
     touches = player_skill_stats_table(live_logs, opponent)
-    if touches.empty:
-        return board
+    if touches is None or touches.empty:
+        return pd.DataFrame(columns=cols)
     rows: list[dict] = []
+    ol_names = _roster_ol_names()
     for _, r in touches.iterrows():
         name = str(r.get("player") or "").strip()
-        if not name:
+        if not name or name.lower() in ol_names:
             continue
         snaps = max(
             int(r.get("touches") or 0),
@@ -6095,11 +6135,25 @@ def player_board_for_halftime(
             }
         )
     if not rows:
-        return board
-    out = pd.DataFrame(rows)
-    return out.sort_values(
-        ["plus_minus", "snaps"], ascending=[False, False]
-    ).reset_index(drop=True)
+        return pd.DataFrame(columns=cols)
+    return (
+        pd.DataFrame(rows)
+        .sort_values(["plus_minus", "snaps"], ascending=[False, False])
+        .reset_index(drop=True)
+    )
+
+
+def player_board_for_halftime(
+    live_logs: pd.DataFrame,
+    opponent: str | None = None,
+) -> pd.DataFrame:
+    """Skill / tagger board for HT. OL is ignored. Tagger ball tags beat lineup +/-."""
+    skill = _skill_board_from_tags(live_logs, opponent)
+    lineup = player_plus_minus_table(live_logs, opponent, by_position=True)
+    lineup = _drop_ol_player_rows(lineup)
+    if not skill.empty:
+        return skill
+    return lineup
 
 
 def lineup_slot_player(slot_id: str = "QB", slots: dict[str, str] | None = None) -> str:
@@ -12558,18 +12612,26 @@ def _commit_live_play(
         ):
             if k in new_row:
                 merged[k] = new_row[k]
-        # Ball carrier: tagger usually owns these; Main only wins if it logged a name
+        # Tagger owns ball / pass once tagged. Main only fills a blank.
+        def _tag_text(val) -> str:
+            s = str(val or "").strip()
+            return "" if s.lower() in {"nan", "none", "unknown"} else s
+
         for k in ("ball_player", "pass_player", "touch_role"):
-            main_v = str(new_row.get(k) or "").strip()
-            stub_v = str(existing.get(k) or "").strip()
-            if main_v:
+            stub_v = _tag_text(existing.get(k))
+            main_v = _tag_text(new_row.get(k))
+            if stub_v:
+                merged[k] = existing.get(k)
+            elif main_v:
                 merged[k] = new_row[k]
-            elif stub_v:
-                merged[k] = existing.get(k)
-        # Preserve non-empty film from stub
+        # Preserve non-empty film from stub — empty Fill Film / Main must not wipe it
         for k in ("def_front", "coverage", "blitz", "motion"):
-            if str(existing.get(k) or "").strip() and not str(new_row.get(k) or "").strip():
+            stub_v = _tag_text(existing.get(k))
+            main_v = _tag_text(new_row.get(k))
+            if stub_v and not main_v:
                 merged[k] = existing.get(k)
+            elif main_v:
+                merged[k] = new_row[k]
         front = str(merged.get("def_front") or "").strip()
         cov = str(merged.get("coverage") or "").strip()
         blitz_v = str(merged.get("blitz") or "").strip().lower()
@@ -12853,18 +12915,29 @@ def _live_track_fill_film(
         motion_v = motion if motion else str(row.get("motion") or "")
         note_v = str(row.get("note") or "") if note is None else str(note)
 
-        front_v = (
-            front
-            if (show_front and front is not None)
-            else str(row.get("def_front") or "")
+        # Empty Fill Film widgets must not wipe tagger front / coverage / blitz.
+        def _keep_tag(incoming, existing) -> str:
+            inc = str(incoming or "").strip()
+            if inc.lower() in {"nan", "none"}:
+                inc = ""
+            if inc:
+                return inc
+            prev = str(existing or "").strip()
+            if prev.lower() in {"nan", "none"}:
+                return ""
+            return prev
+
+        front_v = _keep_tag(
+            front if (show_front and front is not None) else None,
+            row.get("def_front"),
         )
-        cov_v = (
-            cov if (show_cov and cov is not None) else str(row.get("coverage") or "")
+        cov_v = _keep_tag(
+            cov if (show_cov and cov is not None) else None,
+            row.get("coverage"),
         )
-        blitz_v = (
-            blitz
-            if (show_blitz and blitz is not None)
-            else str(row.get("blitz") or "")
+        blitz_v = _keep_tag(
+            blitz if (show_blitz and blitz is not None) else None,
+            row.get("blitz"),
         )
 
         if unit.lower() == "offense":
@@ -12892,11 +12965,11 @@ def _live_track_fill_film(
             "call": mesh_call,
             "film_pending": "Yes" if still_missing else "No",
         }
-        if show_front and front is not None:
+        if show_front and front_v:
             patch["def_front"] = front_v
-        if show_cov and cov is not None:
+        if show_cov and cov_v:
             patch["coverage"] = cov_v
-        if show_blitz and blitz is not None:
+        if show_blitz and blitz_v:
             patch["blitz"] = blitz_v
 
         ok = update_live_log_at(idx, patch)
@@ -13048,6 +13121,18 @@ def _live_track_fill_film(
             cols_n = max(cols_n, 1)
             cols = st.columns(cols_n)
             ci = 0
+            # Seed widgets from the saved row so empty Fill Film defaults
+            # cannot overwrite tagger front / coverage / blitz.
+            if show_front and f"ff_front_{idx}" not in st.session_state:
+                st.session_state[f"ff_front_{idx}"] = str(row.get("def_front") or "")
+            if show_cov and f"ff_cov_{idx}" not in st.session_state:
+                st.session_state[f"ff_cov_{idx}"] = str(row.get("coverage") or "")
+            if show_blitz and f"ff_blitz_{idx}" not in st.session_state:
+                st.session_state[f"ff_blitz_{idx}"] = (
+                    "Yes" if str(row.get("blitz") or "").strip().lower() == "yes" else "No"
+                )
+            if not partial and f"ff_motion_{idx}" not in st.session_state:
+                st.session_state[f"ff_motion_{idx}"] = str(row.get("motion") or "")
             front = str(row.get("def_front") or "")
             cov = str(row.get("coverage") or "")
             blitz = str(row.get("blitz") or "No") or "No"
@@ -15325,7 +15410,16 @@ def _execute_end_first_half(opponent: str, live_logs: pd.DataFrame) -> None:
         end_first_half,
         filter_live_logs,
         load_game_plan,
+        load_live_log,
     )
+
+    # Always read the CSV so tagger front / coverage / ball tags win over a stale frame.
+    try:
+        fresh = load_live_log()
+        if fresh is not None and not fresh.empty:
+            live_logs = fresh
+    except Exception:
+        pass
 
     plan = load_game_plan(opponent)
     half1 = filter_live_logs(live_logs, opponent=opponent, half=1)
@@ -17981,7 +18075,7 @@ def _render_halftime_report_body(
             if pm_fig is not None:
                 st.plotly_chart(pm_fig, use_container_width=True, key=f"{key_prefix}_chart_pm")
             else:
-                st.caption("Need players_on on logged snaps.")
+                st.caption("No skill tags yet — tag ball carrier / QB on the tagger phone.")
         with p2:
             ups = [p for p in players if p.get("band") == "up"]
             downs = [p for p in players if p.get("band") == "down"]
@@ -18008,7 +18102,7 @@ def _render_halftime_report_body(
             if not ups and not downs:
                 st.caption("No standouts yet.")
         if live_logs is not None:
-            touches = player_skill_stats_table(live_logs, opp)
+            touches = _drop_ol_player_rows(player_skill_stats_table(live_logs, opp))
             if not touches.empty:
                 st.markdown('<div class="ht-sec">Skill stats (1st half)</div>', unsafe_allow_html=True)
                 st.dataframe(
