@@ -348,9 +348,24 @@ def _canon_cov_token(value) -> str:
     s = str(value or "").strip().lower()
     if not s or s in {"nan", "none", "unknown"}:
         return ""
+    # Excel float tags: "3.0" → "3"
+    if re.fullmatch(r"\d+\.0+", s):
+        s = s.split(".", 1)[0]
     s = re.sub(r"^cover\s+", "", s)
     m = re.match(r"^(\d+)", s)
     return m.group(1) if m else s
+
+
+def _normalize_hudl_label(value):
+    """Collapse Excel float labels (22.0 → 22) for scout display / counts."""
+    import re
+
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return value
+    s = str(value).strip()
+    if re.fullmatch(r"\d+\.0+", s):
+        return s.split(".", 1)[0]
+    return value
 
 
 def booth_front_tag(value, *, mode: str = "as_scouted") -> str:
@@ -366,6 +381,9 @@ def booth_front_tag(value, *, mode: str = "as_scouted") -> str:
     s = str(value or "").strip().lower()
     if not s or s in {"nan", "none", "unknown"}:
         return ""
+    # Excel often stores numbered fronts as 22.0 — collapse before digit checks
+    if re.fullmatch(r"\d+\.0+", s):
+        s = s.split(".", 1)[0]
     # Normalize 3-3 stack family before even_42 numbered → Even collapse.
     # Bare "33" stays a numbered 4-2 front → Even; require hyphen/space or "stack".
     if (
@@ -430,7 +448,9 @@ def _remap_numbered_fronts_to_stack(scout: pd.DataFrame) -> pd.DataFrame:
         if not s or low in {"nan", "none", "unknown"}:
             return v
         # Keep explicit non-number tags (Bear, Stack, Odd, …)
-        if re.fullmatch(r"\d+", s) or re.fullmatch(r"\d+\s*tite", s, flags=re.I):
+        if re.fullmatch(r"\d+(?:\.0+)?", s) or re.fullmatch(
+            r"\d+(?:\.0+)?\s*tite", s, flags=re.I
+        ):
             return "3-3 Stack"
         return v
 
@@ -1247,6 +1267,18 @@ def build_scout_matchup_report(
             return empty
     if scout is None or getattr(scout, "empty", True):
         return empty
+
+    # Collapse Excel float tags (22.0 / 3.0) so booth + display stay clean
+    scout = scout.copy()
+    for col in ("def_front", "coverage", "blitz"):
+        if col in scout.columns:
+            scout[col] = scout[col].map(_normalize_hudl_label)
+    if "def_front" in scout.columns and "coverage" in scout.columns:
+        scout["def_call"] = (
+            scout["def_front"].fillna("Unknown").astype(str)
+            + "  |  "
+            + scout["coverage"].fillna("Unknown").astype(str)
+        )
 
     # Film detail keeps Hudl numbers; booth buckets stack-scheme teams to 3-3 Stack.
     scout_film = scout.copy()
@@ -4309,10 +4341,18 @@ def save_halftime_live_snapshot(
     Persist the live log that fed this HT report.
 
     Generation (not Start new game) is the storage standard for 1st-half tags.
-    Writes next to the HT JSON and a copy under data/live_log_archive/.
+    Writes next to the HT JSON, a copy under data/live_log_archive/, and a
+    data/live_games/ checkpoint (same durable store as Main End Game) so
+    tagger film tags survive Hudl refresh via remerge / film overlay.
     Does not clear live_log.csv — 2nd half still needs it.
     """
-    out: dict = {"plays": 0, "report_csv": None, "archive_csv": None}
+    out: dict = {
+        "plays": 0,
+        "report_csv": None,
+        "archive_csv": None,
+        "live_games_path": None,
+        "live_games_saved": False,
+    }
     if live_logs is None or getattr(live_logs, "empty", True):
         return out
 
@@ -4351,20 +4391,33 @@ def save_halftime_live_snapshot(
     )
     out["plays"] = int(len(snap))
 
-    # Tag fill summary so we can audit later without opening the CSV
-    def _filled(col: str) -> int:
-        if col not in snap.columns:
-            return 0
-        s = snap[col].fillna("").astype(str).str.strip()
-        return int((s.ne("") & ~s.str.lower().isin({"nan", "none", "unknown", "?"})).sum())
+    # Same durable store Main uses on End Game — so tagger film survives refresh
+    try:
+        from live_games import checkpoint_live_log_for_halftime, live_film_tag_fill
 
-    out["tag_fill"] = {
-        "def_front": _filled("def_front"),
-        "coverage": _filled("coverage"),
-        "blitz": _filled("blitz"),
-        "ball_player": _filled("ball_player"),
-        "pass_player": _filled("pass_player"),
-    }
+        ck = checkpoint_live_log_for_halftime(snap, opponent, half=None)
+        out["live_games_saved"] = bool(ck.get("saved"))
+        out["live_games_path"] = ck.get("path")
+        out["live_games_reason"] = ck.get("reason")
+        out["tag_fill"] = ck.get("tag_fill") or live_film_tag_fill(snap)
+    except Exception as exc:
+        out["live_games_reason"] = f"checkpoint_failed: {exc}"
+        # Fall back to local fill counts
+        def _filled(col: str) -> int:
+            if col not in snap.columns:
+                return 0
+            s = snap[col].fillna("").astype(str).str.strip()
+            return int((s.ne("") & ~s.str.lower().isin({"nan", "none", "unknown", "?"})).sum())
+
+        out["tag_fill"] = {
+            "def_front": _filled("def_front"),
+            "coverage": _filled("coverage"),
+            "blitz": _filled("blitz"),
+            "ball_player": _filled("ball_player"),
+            "pass_player": _filled("pass_player"),
+            "plays": int(len(snap)),
+        }
+
     return out
 
 
@@ -4391,6 +4444,9 @@ def end_first_half(opponent: str, live_logs: pd.DataFrame, plan: dict, player_bo
         else path.with_suffix(".md").name,
         "live_log_snapshot": snapshot.get("archive_csv") or snapshot.get("report_csv"),
         "live_log_snapshot_plays": snapshot.get("plays") or 0,
+        "live_games_path": snapshot.get("live_games_path"),
+        "live_games_saved": bool(snapshot.get("live_games_saved")),
+        "tag_fill": snapshot.get("tag_fill") or {},
     }
     save_game_state(state)
     return {

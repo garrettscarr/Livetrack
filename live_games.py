@@ -177,6 +177,9 @@ def live_log_to_offense_plays(
                 "result": hudl_result,
                 "motion": motion,
                 "blitz": blitz_s,
+                "ball_player": str(row.get("ball_player") or "").strip(),
+                "pass_player": str(row.get("pass_player") or "").strip(),
+                "touch_role": str(row.get("touch_role") or "").strip(),
                 "game_id": int(game_id),
                 "side": "offense",
                 "season": sid,
@@ -334,6 +337,259 @@ def merge_live_plays_into_db(plays: pd.DataFrame) -> dict:
     return {"merged": True, "plays": int(len(plays)), "source_file": src}
 
 
+def _film_blank(val) -> bool:
+    s = str(val or "").strip().lower()
+    return (not s) or s in {"nan", "none", "unknown", "?", "null", ""}
+
+
+def live_film_tag_fill(df: pd.DataFrame | None) -> dict:
+    """Count filled film fields on a live log or offense_plays frame."""
+    empty = {
+        "plays": 0,
+        "def_front": 0,
+        "coverage": 0,
+        "blitz": 0,
+        "ball_player": 0,
+        "pass_player": 0,
+        "motion": 0,
+        "tagged_by_tagger": 0,
+    }
+    if df is None or getattr(df, "empty", True):
+        return empty
+    n = int(len(df))
+    out = {"plays": n}
+
+    def _n(col: str) -> int:
+        if col not in df.columns:
+            return 0
+        return int((~df[col].map(_film_blank)).sum())
+
+    out["def_front"] = _n("def_front")
+    out["coverage"] = _n("coverage")
+    # Blitz: Yes/No or named package
+    if "blitz" in df.columns:
+        b = df["blitz"].fillna("").astype(str).str.strip()
+        out["blitz"] = int(
+            (
+                b.str.lower().isin({"yes", "no", "y", "n", "1", "0", "true", "false"})
+                | ((b.ne("")) & ~b.str.lower().isin({"nan", "none", "unknown"}))
+            ).sum()
+        )
+    else:
+        out["blitz"] = 0
+    out["ball_player"] = _n("ball_player")
+    out["pass_player"] = _n("pass_player")
+    out["motion"] = _n("motion")
+    if "tagged_by" in df.columns:
+        tb = df["tagged_by"].fillna("").astype(str)
+        out["tagged_by_tagger"] = int(tb.str.contains("Tagger", case=False, na=False).sum())
+    else:
+        out["tagged_by_tagger"] = 0
+    return out
+
+
+def checkpoint_live_log_for_halftime(
+    log_df: pd.DataFrame | None,
+    opponent: str,
+    *,
+    half: int | None = 1,
+) -> dict:
+    """
+    Persist live tags the same way End Game does — write data/live_games/.
+
+    Called on HT generate so front/coverage/blitz survive Start-new and Hudl
+    refresh (remerge / film overlay). Does not clear live_log.csv.
+    """
+    out: dict = {
+        "saved": False,
+        "plays": 0,
+        "path": None,
+        "game_id": None,
+        "tag_fill": live_film_tag_fill(None),
+        "reason": "",
+    }
+    if log_df is None or getattr(log_df, "empty", True):
+        out["reason"] = "empty_log"
+        return out
+
+    work = log_df.copy()
+    opp = str(opponent or "").strip() or finished_opponent_from_log(work)
+    if not opp:
+        out["reason"] = "no_opponent"
+        return out
+
+    if "opponent" in work.columns:
+        work = work[
+            work["opponent"].astype(str).str.strip().str.lower() == opp.lower()
+        ]
+    if half is not None and "half" in work.columns:
+        half1 = work[pd.to_numeric(work["half"], errors="coerce") == int(half)]
+        if not half1.empty:
+            work = half1
+    if work.empty:
+        out["reason"] = "no_rows_for_scope"
+        return out
+
+    season = _season_id()
+    game_id = _resolve_game_id(opp)
+    src = f"{LIVE_SOURCE_PREFIX}{_safe_name(opp)}.csv"
+    plays = live_log_to_offense_plays(
+        work, game_id=game_id, opponent=opp, season=season, source_file=src
+    )
+    if plays.empty:
+        out["reason"] = "no_offense_plays"
+        out["tag_fill"] = live_film_tag_fill(work)
+        return out
+
+    path = live_game_path(opp, game_id, season)
+    save_live_game_csv(plays, path)
+    fill = live_film_tag_fill(work)
+    # Prefer offense_plays fill for front/cov (Unknown collapsed) — use live log fill
+    out.update(
+        {
+            "saved": True,
+            "plays": int(len(plays)),
+            "path": str(path),
+            "game_id": int(game_id),
+            "tag_fill": fill,
+            "reason": "ok",
+        }
+    )
+    return out
+
+
+def overlay_live_film_onto_hudl(live_plays: pd.DataFrame) -> dict:
+    """
+    When Hudl already owns a game but film columns are blank, copy live film
+    tags onto those Hudl rows (by snap order within the game).
+
+    Keeps Hudl formation/play/yards; fills def_front / coverage / blitz / motion
+    and ball tags from the live_games checkpoint.
+    """
+    out = {"overlaid": False, "plays": 0, "updated": 0, "reason": ""}
+    if live_plays is None or live_plays.empty:
+        out["reason"] = "empty"
+        return out
+    if not DB_FILE.exists():
+        out["reason"] = "no_db"
+        return out
+
+    game_id = int(pd.to_numeric(live_plays.get("game_id"), errors="coerce").dropna().iloc[0])
+    season = str(live_plays.iloc[0].get("season") or _season_id())
+    opponent = str(live_plays.iloc[0].get("opponent") or "").strip()
+    film_cols = [
+        "def_front",
+        "coverage",
+        "blitz",
+        "motion",
+        "ball_player",
+        "pass_player",
+        "touch_role",
+    ]
+
+    with sqlite3.connect(DB_FILE) as conn:
+        try:
+            existing = pd.read_sql("SELECT * FROM offense_plays", conn)
+        except Exception:
+            out["reason"] = "read_failed"
+            return out
+        if existing.empty:
+            out["reason"] = "empty_table"
+            return out
+
+        mask = pd.Series(True, index=existing.index)
+        if "season" in existing.columns:
+            s = existing["season"].fillna("").astype(str).str.strip().str.lower()
+            mask &= (s == season.lower()) | (s == "current") | (s == "")
+        if "opponent" in existing.columns and opponent:
+            om = existing["opponent"].fillna("").astype(str).str.strip().str.lower()
+            mask &= om == opponent.lower()
+        elif "game_id" in existing.columns:
+            mask &= existing["game_id"].astype(str) == str(game_id)
+        if "source_file" in existing.columns:
+            src = existing["source_file"].fillna("").astype(str)
+            mask &= ~src.str.startswith(LIVE_SOURCE_PREFIX)
+
+        hudl = existing.loc[mask].copy()
+        if hudl.empty:
+            out["reason"] = "no_hudl_rows"
+            return out
+
+        live = live_plays.reset_index(drop=True)
+        hudl_idx = list(hudl.index)
+        n = min(len(hudl_idx), len(live))
+        updated = 0
+        for i in range(n):
+            hi = hudl_idx[i]
+            for col in film_cols:
+                if col not in live.columns:
+                    continue
+                live_val = live.iloc[i].get(col)
+                if _film_blank(live_val):
+                    continue
+                # Don't write Unknown placeholders from live conversion
+                if str(live_val).strip().lower() == "unknown":
+                    continue
+                cur = existing.at[hi, col] if col in existing.columns else ""
+                if not _film_blank(cur) and str(cur).strip().lower() != "unknown":
+                    continue
+                if col not in existing.columns:
+                    existing[col] = ""
+                existing.at[hi, col] = live_val
+                updated += 1
+            # Refresh def_call / def_tagged when fronts change
+            if "def_front" in existing.columns and "coverage" in existing.columns:
+                fr = str(existing.at[hi, "def_front"] or "").strip()
+                cv = str(existing.at[hi, "coverage"] or "").strip()
+                if "def_call" in existing.columns:
+                    existing.at[hi, "def_call"] = f"{fr or 'Unknown'}  |  {cv or 'Unknown'}"
+                if "def_tagged" in existing.columns:
+                    existing.at[hi, "def_tagged"] = int(
+                        bool(fr and fr.lower() not in {"unknown", "nan", "?"})
+                        and bool(cv and cv.lower() not in {"unknown", "nan", "?"})
+                    )
+
+        if updated == 0:
+            out["reason"] = "nothing_to_fill"
+            out["plays"] = n
+            return out
+
+        existing.to_sql("offense_plays", conn, if_exists="replace", index=False)
+        # Keep EPA table film columns in sync when present
+        try:
+            epa = pd.read_sql("SELECT * FROM offense_plays_epa", conn)
+            if not epa.empty and "opponent" in epa.columns:
+                em = pd.Series(True, index=epa.index)
+                if "season" in epa.columns:
+                    es = epa["season"].fillna("").astype(str).str.strip().str.lower()
+                    em &= (es == season.lower()) | (es == "current") | (es == "")
+                om = epa["opponent"].fillna("").astype(str).str.strip().str.lower()
+                em &= om == opponent.lower()
+                if "source_file" in epa.columns:
+                    em &= ~epa["source_file"].fillna("").astype(str).str.startswith(LIVE_SOURCE_PREFIX)
+                epa_idx = list(epa.loc[em].index)
+                live2 = live_plays.reset_index(drop=True)
+                n2 = min(len(epa_idx), len(live2))
+                for i in range(n2):
+                    ei = epa_idx[i]
+                    for col in film_cols:
+                        if col not in epa.columns or col not in live2.columns:
+                            continue
+                        live_val = live2.iloc[i].get(col)
+                        if _film_blank(live_val) or str(live_val).strip().lower() == "unknown":
+                            continue
+                        cur = epa.at[ei, col]
+                        if not _film_blank(cur) and str(cur).strip().lower() != "unknown":
+                            continue
+                        epa.at[ei, col] = live_val
+                epa.to_sql("offense_plays_epa", conn, if_exists="replace", index=False)
+        except Exception:
+            pass
+
+    out.update({"overlaid": True, "plays": n, "updated": updated, "reason": "ok"})
+    return out
+
+
 def promote_live_log_to_game_review(
     log_df: pd.DataFrame | None,
     *,
@@ -342,10 +598,12 @@ def promote_live_log_to_game_review(
     """
     Persist a finished live log into data/live_games/ and Game Review tables.
     Skips merge when Hudl already has that schedule game_id (unless force).
+    When Hudl exists, still overlays blank film columns from this live file.
     """
     out: dict = {
         "promoted": False,
         "merged": False,
+        "overlaid": False,
         "plays": 0,
         "opponent": "",
         "game_id": None,
@@ -386,8 +644,11 @@ def promote_live_log_to_game_review(
     )
 
     if not force and _hudl_has_game(game_id, season, opponent=opponent):
-        out["reason"] = "hudl_exists"
+        overlay = overlay_live_film_onto_hudl(plays)
+        out["overlaid"] = bool(overlay.get("overlaid"))
+        out["overlay_updated"] = int(overlay.get("updated") or 0)
         out["merged"] = False
+        out["reason"] = "hudl_exists_film_overlay" if out["overlaid"] else "hudl_exists"
         return out
 
     merge = merge_live_plays_into_db(plays)
@@ -407,6 +668,7 @@ def remerge_all_live_games(*, skip_hudl_conflicts: bool = True) -> dict:
     files = list_saved_live_games()
     merged = 0
     skipped = 0
+    overlaid = 0
     plays = 0
     for path in files:
         try:
@@ -421,7 +683,12 @@ def remerge_all_live_games(*, skip_hudl_conflicts: bool = True) -> dict:
         season = str(df.iloc[0].get("season") or _season_id())
         opp = str(df.iloc[0].get("opponent") or "")
         if skip_hudl_conflicts and game_id and _hudl_has_game(game_id, season, opponent=opp):
-            skipped += 1
+            ov = overlay_live_film_onto_hudl(df)
+            if ov.get("overlaid"):
+                overlaid += 1
+                plays += int(ov.get("updated") or 0)
+            else:
+                skipped += 1
             continue
         info = merge_live_plays_into_db(df)
         if info.get("merged"):
@@ -429,4 +696,10 @@ def remerge_all_live_games(*, skip_hudl_conflicts: bool = True) -> dict:
             plays += int(info.get("plays") or 0)
         else:
             skipped += 1
-    return {"files": len(files), "merged": merged, "skipped": skipped, "plays": plays}
+    return {
+        "files": len(files),
+        "merged": merged,
+        "skipped": skipped,
+        "overlaid": overlaid,
+        "plays": plays,
+    }

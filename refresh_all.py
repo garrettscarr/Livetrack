@@ -86,6 +86,11 @@ def run_refresh(*, quiet: bool = False) -> None:
             f"\nLive Track remerge: {live_info.get('merged', 0)} game(s), "
             f"{live_info.get('plays', 0)} plays"
             + (
+                f", {live_info.get('overlaid', 0)} film overlay(s)"
+                if live_info.get("overlaid")
+                else ""
+            )
+            + (
                 f" ({live_info.get('skipped', 0)} skipped)"
                 if live_info.get("skipped")
                 else ""

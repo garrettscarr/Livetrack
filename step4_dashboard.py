@@ -4743,6 +4743,192 @@ def play_missing_film_fields(row: pd.Series | dict) -> set[str]:
     return missing
 
 
+def audit_drive_film_tags(
+    live_logs: pd.DataFrame | None,
+    drive_id: int,
+    *,
+    opponent: str | None = None,
+) -> dict:
+    """
+    Per-play front / coverage / blitz check for one drive.
+
+    Used when End drive fires so Main can confirm the tagger hit every snap.
+    """
+    from booth_snaps import _as_int
+
+    empty = {
+        "drive_id": int(drive_id),
+        "plays": 0,
+        "front_n": 0,
+        "cov_n": 0,
+        "blitz_n": 0,
+        "complete_n": 0,
+        "missing_plays": [],
+        "rows": [],
+        "ok": True,
+    }
+    if live_logs is None or getattr(live_logs, "empty", True):
+        return empty
+    if "drive_id" not in live_logs.columns:
+        return empty
+
+    work = live_logs.reset_index(drop=True).copy()
+    if opponent and "opponent" in work.columns:
+        work = work[
+            work["opponent"].astype(str).str.strip().str.lower()
+            == str(opponent).strip().lower()
+        ]
+    did = int(drive_id)
+    mask = work["drive_id"].map(_as_int) == did
+    sub = work.loc[mask].copy()
+    if sub.empty:
+        return empty
+
+    # Stable play order
+    if "play_n" in sub.columns:
+        sub["_pn"] = sub["play_n"].map(_as_int)
+        sub = sub.sort_values(["_pn"], kind="stable")
+    rows: list[dict] = []
+    missing_plays: list[int] = []
+    front_n = cov_n = blitz_n = complete_n = 0
+    for i, (_, row) in enumerate(sub.iterrows(), start=1):
+        pn = _as_int(row.get("play_n")) or i
+        front = str(row.get("def_front") or "").strip()
+        cov = str(row.get("coverage") or "").strip()
+        blitz_raw = str(row.get("blitz") or "").strip()
+        blitz_ok = blitz_raw.lower() in {"yes", "no"}
+        miss = play_missing_film_fields(row)
+        if front:
+            front_n += 1
+        if cov:
+            cov_n += 1
+        if blitz_ok:
+            blitz_n += 1
+        complete = not miss
+        if complete:
+            complete_n += 1
+        else:
+            missing_plays.append(int(pn))
+        rows.append(
+            {
+                "play_n": int(pn),
+                "front": front or "—",
+                "coverage": cov or "—",
+                "blitz": blitz_raw if blitz_ok else (blitz_raw or "—"),
+                "missing": sorted(miss),
+                "ok": complete,
+            }
+        )
+
+    n = len(rows)
+    return {
+        "drive_id": did,
+        "plays": n,
+        "front_n": front_n,
+        "cov_n": cov_n,
+        "blitz_n": blitz_n,
+        "complete_n": complete_n,
+        "missing_plays": missing_plays,
+        "rows": rows,
+        "ok": n > 0 and complete_n == n,
+    }
+
+
+def _capture_end_drive_film_audit(drive_id: int, opponent: str) -> dict:
+    """Reload live_log and store drive film audit for the End-drive UI."""
+    try:
+        from mesh_engine import load_live_log
+
+        logs = load_live_log()
+    except Exception:
+        logs = None
+    audit = audit_drive_film_tags(logs, int(drive_id), opponent=opponent)
+    st.session_state["lt_drive_film_audit"] = audit
+    st.session_state["ff_drive_filter"] = str(int(drive_id))
+    n = int(audit.get("plays") or 0)
+    if n == 0:
+        st.session_state["lt_end_drive_note"] = (
+            f"Drive #{drive_id} ended · **0 snaps** in live log — tagger may not be writing."
+        )
+    elif audit.get("ok"):
+        st.session_state["lt_end_drive_note"] = (
+            f"Drive #{drive_id} ended · film complete "
+            f"({audit['front_n']}/{n} front · {audit['cov_n']}/{n} cov · "
+            f"{audit['blitz_n']}/{n} blitz)"
+        )
+    else:
+        miss = audit.get("missing_plays") or []
+        miss_s = ", ".join(f"#{p}" for p in miss[:8])
+        if len(miss) > 8:
+            miss_s += f" +{len(miss) - 8} more"
+        st.session_state["lt_end_drive_note"] = (
+            f"Drive #{drive_id} ended · **{len(miss)}/{n} plays missing film** "
+            f"({miss_s}) — front {audit['front_n']}/{n} · "
+            f"cov {audit['cov_n']}/{n} · blitz {audit['blitz_n']}/{n}"
+        )
+    return audit
+
+
+def _render_end_drive_film_audit() -> None:
+    """Show last End-drive front/coverage/blitz match sheet."""
+    audit = st.session_state.get("lt_drive_film_audit")
+    if not audit:
+        return
+    did = audit.get("drive_id")
+    n = int(audit.get("plays") or 0)
+    rows = audit.get("rows") or []
+    if n == 0:
+        st.error(
+            f"Drive #{did}: no snaps found in live_log. "
+            "If Main logged calls, the tagger still has nothing to attach to — "
+            "confirm shared booth URL / Wi‑Fi."
+        )
+        return
+
+    ok = bool(audit.get("ok"))
+    header = (
+        f"Drive #{did} film match · **{audit['complete_n']}/{n} complete** · "
+        f"Front {audit['front_n']}/{n} · Cov {audit['cov_n']}/{n} · "
+        f"Blitz {audit['blitz_n']}/{n}"
+    )
+    if ok:
+        st.success(header + " · all taggers hit every snap")
+    else:
+        st.error(header + " · fix missing plays before the next drive")
+
+    # Compact play-by-play so Main can verify tags
+    table_rows = []
+    for r in rows:
+        miss = r.get("missing") or []
+        status = "OK" if r.get("ok") else ("need " + "/".join(miss))
+        table_rows.append(
+            {
+                "Play": f"#{r['play_n']}",
+                "Front": r.get("front") or "—",
+                "Coverage": r.get("coverage") or "—",
+                "Blitz": r.get("blitz") or "—",
+                "Status": status,
+            }
+        )
+    st.dataframe(
+        pd.DataFrame(table_rows),
+        hide_index=True,
+        use_container_width=True,
+        height=min(280, 38 + 28 * max(len(table_rows), 1)),
+    )
+    miss = audit.get("missing_plays") or []
+    if miss:
+        if st.button(
+            f"Open Fill Film · fix Drive #{did}",
+            type="primary",
+            use_container_width=True,
+            key=f"lt_fix_film_drive_{did}",
+        ):
+            st.session_state.lt_play_sheet = "Fill Film"
+            st.session_state.ff_drive_filter = str(did)
+            st.rerun()
+
+
 def play_needs_tag_focuses(row: pd.Series | dict, focuses: list[str] | None) -> bool:
     """True if this play still needs any of the tagger's film focuses."""
     from booth_stations import FILM_FOCUSES
@@ -10404,7 +10590,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         ):
             ended = end_drive()
             if ended is not None:
-                st.session_state.ff_drive_filter = str(ended)
+                _capture_end_drive_film_audit(int(ended), str(opponent))
             st.rerun()
         if d4.button(
             "Undo", use_container_width=True, key="lt_undo_drive", disabled=not can_undo
@@ -10413,6 +10599,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             if entry:
                 st.success(f"Undid {entry.get('action')}.")
             st.rerun()
+        _render_end_drive_film_audit()
         _live_track_field_screen(opponent, live_logs)
         return
 
@@ -10517,7 +10704,7 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
         ):
             ended = end_drive()
             if ended is not None:
-                st.session_state.ff_drive_filter = str(ended)
+                _capture_end_drive_film_audit(int(ended), str(opponent))
             st.rerun()
         if d4.button(
             "Undo", use_container_width=True, key="lt_undo_drive", disabled=not can_undo
@@ -10526,6 +10713,8 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             if entry:
                 st.success(f"Undid {entry.get('action')}.")
             st.rerun()
+
+        _render_end_drive_film_audit()
 
         @st.fragment
         def _main_log_fragment() -> None:
@@ -15547,13 +15736,211 @@ def _execute_end_first_half(opponent: str, live_logs: pd.DataFrame) -> None:
     st.session_state.ht_last_report = result["report"]
     st.session_state.ht_last_md = result["markdown"]
     snap = result.get("live_log_snapshot") or {}
-    if int(snap.get("plays") or 0) > 0:
-        fill = snap.get("tag_fill") or {}
+    fill = snap.get("tag_fill") or {}
+    n = int(snap.get("plays") or 0)
+    if n > 0:
+        front_n = int(fill.get("def_front") or 0)
+        cov_n = int(fill.get("coverage") or 0)
+        blitz_n = int(fill.get("blitz") or 0)
+        ball_n = int(fill.get("ball_player") or 0)
+        lg = "live_games ✓" if snap.get("live_games_saved") else "live_games ✗"
+        thin = []
+        if front_n < max(1, n // 2):
+            thin.append("front")
+        if cov_n < max(1, n // 2):
+            thin.append("coverage")
+        if blitz_n < max(1, n // 2):
+            thin.append("blitz")
+        warn = (
+            f" ⚠️ Thin film tags ({', '.join(thin)}) — check the tagger phone."
+            if thin
+            else ""
+        )
         st.session_state.ht_snapshot_note = (
-            f"Saved **{snap['plays']}** 1st-half snaps with HT report "
-            f"(front {fill.get('def_front', 0)} · cov {fill.get('coverage', 0)} · "
-            f"ball {fill.get('ball_player', 0)}). "
-            f"Live log stays open for 2nd half."
+            f"Saved **{n}** 1st-half snaps ({lg}) · "
+            f"front {front_n}/{n} · cov {cov_n}/{n} · blitz {blitz_n}/{n} · "
+            f"ball {ball_n}/{n}.{warn} Live log stays open for 2nd half."
+        )
+        st.session_state.ht_film_thin = bool(thin)
+    else:
+        st.session_state.ht_snapshot_note = (
+            "⚠️ HT report generated but **0 snaps** were snapshotted — "
+            "live_log looks empty. Tagger tags may not have been writing."
+        )
+        st.session_state.ht_film_thin = True
+
+
+def _half_film_tag_rates(
+    live_logs: pd.DataFrame | None,
+    opponent: str,
+    *,
+    half: int | None = 1,
+) -> dict:
+    """Front / coverage / blitz fill rates for tonight (used on Main + HT)."""
+    from live_games import live_film_tag_fill
+    from mesh_engine import filter_live_logs
+
+    empty = {
+        "plays": 0,
+        "def_front": 0,
+        "coverage": 0,
+        "blitz": 0,
+        "ball_player": 0,
+        "tagged_by_tagger": 0,
+        "front_pct": 0.0,
+        "cov_pct": 0.0,
+        "blitz_pct": 0.0,
+    }
+    if live_logs is None or getattr(live_logs, "empty", True):
+        return empty
+    scoped = filter_live_logs(live_logs, opponent=opponent, half=half)
+    if scoped.empty and half is not None:
+        scoped = filter_live_logs(live_logs, opponent=opponent, half=None)
+    fill = live_film_tag_fill(scoped)
+    n = int(fill.get("plays") or 0) or 1
+    fill["front_pct"] = round(100.0 * int(fill.get("def_front") or 0) / n, 0)
+    fill["cov_pct"] = round(100.0 * int(fill.get("coverage") or 0) / n, 0)
+    fill["blitz_pct"] = round(100.0 * int(fill.get("blitz") or 0) / n, 0)
+    return fill
+
+
+def _render_tagger_live_status_card(
+    opponent: str,
+    live_logs: pd.DataFrame | None,
+    drive_id: int | None,
+    play_n: int | None,
+) -> None:
+    """Live tagger status for Main — half totals + current play so gaps are obvious."""
+    # Always reload so Main sees tagger writes immediately
+    try:
+        from mesh_engine import load_live_log
+
+        fresh = load_live_log()
+        if fresh is not None and not fresh.empty:
+            live_logs = fresh
+    except Exception:
+        pass
+
+    half = int(st.session_state.get("lt_half") or 1)
+    rates = _half_film_tag_rates(live_logs, opponent, half=half)
+    n = int(rates.get("plays") or 0)
+    front_n = int(rates.get("def_front") or 0)
+    cov_n = int(rates.get("coverage") or 0)
+    blitz_n = int(rates.get("blitz") or 0)
+    tagger_rows = int(rates.get("tagged_by_tagger") or 0)
+
+    st.markdown(
+        '<div class="mb-panel-label" style="margin-top:0.6rem">Tagger Live Sync</div>',
+        unsafe_allow_html=True,
+    )
+
+    if n == 0:
+        st.markdown(
+            """
+            <div style="background:#FFF3CD;border:1.5px solid #C9A227;border-radius:8px;
+                        padding:0.45rem 0.65rem;margin-bottom:0.4rem;font-size:0.88rem;color:#5C4B00;">
+              <b>No snaps in live log yet</b> — if the tagger is tapping Front/Coverage,
+              those writes are not landing. Confirm both phones share the same booth URL
+              / Wi‑Fi and a drive is open.
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        thin_front = front_n < max(1, n // 2)
+        thin_cov = cov_n < max(1, n // 2)
+        thin_blitz = blitz_n < max(1, n // 2)
+        tone_bg = "#FCE8E8" if (thin_front or thin_cov) else "#D8F3DC"
+        tone_bd = "#C1121F" if (thin_front or thin_cov) else "#2D6A4F"
+        warn = ""
+        if thin_front or thin_cov or thin_blitz:
+            bits = []
+            if thin_front:
+                bits.append("front")
+            if thin_cov:
+                bits.append("coverage")
+            if thin_blitz:
+                bits.append("blitz")
+            warn = f" · thin: {', '.join(bits)}"
+        st.markdown(
+            f"""
+            <div style="background:{tone_bg};border:1.5px solid {tone_bd};border-radius:8px;
+                        padding:0.45rem 0.65rem;margin-bottom:0.35rem;font-size:0.88rem;color:#081C15;">
+              <div style="font-weight:700;">Half {half} film tags · {n} snaps{warn}</div>
+              <div style="margin-top:0.2rem;">
+                Front <b>{front_n}/{n}</b> ({rates.get('front_pct', 0):.0f}%) ·
+                Cov <b>{cov_n}/{n}</b> ({rates.get('cov_pct', 0):.0f}%) ·
+                Blitz <b>{blitz_n}/{n}</b> ({rates.get('blitz_pct', 0):.0f}%)
+                {" · Tagger rows " + str(tagger_rows) if tagger_rows else ""}
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+
+    if drive_id is None:
+        return
+    cur_pn = int(play_n or 1)
+    from booth_snaps import find_snap_index
+
+    tagger_row = None
+    if live_logs is not None and not live_logs.empty:
+        idx = find_snap_index(live_logs, int(drive_id), cur_pn)
+        if idx is not None:
+            tagger_row = live_logs.reset_index(drop=True).loc[int(idx)].to_dict()
+
+    front = str((tagger_row or {}).get("def_front") or "").strip()
+    cov = str((tagger_row or {}).get("coverage") or "").strip()
+    blitz = str((tagger_row or {}).get("blitz") or "").strip()
+    bp = str((tagger_row or {}).get("ball_player") or "").strip()
+    mot = str((tagger_row or {}).get("motion") or "").strip()
+    tagged_by = str((tagger_row or {}).get("tagged_by") or "").strip()
+
+    if front or cov or (blitz and blitz.lower() in {"yes", "no"}) or bp:
+        tag_items = []
+        if front:
+            tag_items.append(f"Front: <b>{front}</b>")
+        if cov:
+            tag_items.append(f"Cov: <b>{cov}</b>")
+        if blitz:
+            tag_items.append(f"Blitz: <b>{blitz}</b>")
+        if bp:
+            tag_items.append(f"Ball: <b>{bp}</b>")
+        if mot:
+            tag_items.append(f"Motion: <b>{mot}</b>")
+        if tagged_by:
+            tag_items.append(f"<span style='opacity:0.75'>{tagged_by}</span>")
+        tags_html = " · ".join(tag_items)
+        st.markdown(
+            f"""
+            <div style="background:#D8F3DC;border:1.5px solid #2D6A4F;border-radius:8px;padding:0.45rem 0.65rem;margin-bottom:0.4rem;font-size:0.88rem;color:#081C15;">
+              <div style="font-weight:700;color:#1B4332;display:flex;justify-content:space-between;align-items:center;">
+                <span>Play #{cur_pn} Tagger Input</span>
+                <span style="background:#2D6A4F;color:#FFFFFF;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.75rem;font-weight:700;">RECEIVED</span>
+              </div>
+              <div style="margin-top:0.25rem;line-height:1.35;">{tags_html}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        last_tagged_txt = ""
+        if cur_pn > 1 and live_logs is not None and not live_logs.empty:
+            prev_idx = find_snap_index(live_logs, int(drive_id), cur_pn - 1)
+            if prev_idx is not None:
+                p_row = live_logs.reset_index(drop=True).loc[int(prev_idx)].to_dict()
+                pf = str(p_row.get("def_front") or "").strip()
+                pc = str(p_row.get("coverage") or "").strip()
+                pb = str(p_row.get("blitz") or "").strip()
+                if pf or pc:
+                    last_tagged_txt = f" · Last #{cur_pn-1}: {pf or '—'} / {pc or '—'}" + (f" (Blz {pb})" if pb else "")
+        st.markdown(
+            f"""
+            <div style="background:#F4F7F5;border:1px dashed #A3B899;border-radius:8px;padding:0.4rem 0.6rem;margin-bottom:0.4rem;font-size:0.82rem;color:#52796F;">
+              Play #{cur_pn}: Waiting for tagger…{last_tagged_txt}
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
 
@@ -15858,77 +16245,6 @@ def _render_main_app_bar(
     )
 
 
-def _render_tagger_live_status_card(
-    opponent: str,
-    live_logs: pd.DataFrame | None,
-    drive_id: int | None,
-    play_n: int | None,
-) -> None:
-    """Live tagger status indicator for Main booth so Main always knows tagger inputs."""
-    if drive_id is None:
-        return
-    cur_pn = int(play_n or 1)
-    from booth_snaps import find_snap_index
-
-    tagger_row = None
-    if live_logs is not None and not live_logs.empty:
-        idx = find_snap_index(live_logs, int(drive_id), cur_pn)
-        if idx is not None:
-            tagger_row = live_logs.reset_index(drop=True).loc[int(idx)].to_dict()
-
-    front = str((tagger_row or {}).get("def_front") or "").strip()
-    cov = str((tagger_row or {}).get("coverage") or "").strip()
-    blitz = str((tagger_row or {}).get("blitz") or "").strip()
-    bp = str((tagger_row or {}).get("ball_player") or "").strip()
-    mot = str((tagger_row or {}).get("motion") or "").strip()
-
-    st.markdown('<div class="mb-panel-label" style="margin-top:0.6rem">Tagger Live Sync</div>', unsafe_allow_html=True)
-    if front or cov or (blitz and blitz.lower() in {"yes", "no"}) or bp:
-        tag_items = []
-        if front:
-            tag_items.append(f"Front: <b>{front}</b>")
-        if cov:
-            tag_items.append(f"Cov: <b>{cov}</b>")
-        if blitz:
-            tag_items.append(f"Blitz: <b>{blitz}</b>")
-        if bp:
-            tag_items.append(f"Ball: <b>{bp}</b>")
-        if mot:
-            tag_items.append(f"Motion: <b>{mot}</b>")
-        tags_html = " · ".join(tag_items)
-        st.markdown(
-            f"""
-            <div style="background:#D8F3DC;border:1.5px solid #2D6A4F;border-radius:8px;padding:0.45rem 0.65rem;margin-bottom:0.4rem;font-size:0.88rem;color:#081C15;">
-              <div style="font-weight:700;color:#1B4332;display:flex;justify-content:space-between;align-items:center;">
-                <span>📡 Play #{cur_pn} Tagger Input</span>
-                <span style="background:#2D6A4F;color:#FFFFFF;padding:0.1rem 0.4rem;border-radius:4px;font-size:0.75rem;font-weight:700;">RECEIVED</span>
-              </div>
-              <div style="margin-top:0.25rem;line-height:1.35;">{tags_html}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    else:
-        last_tagged_txt = ""
-        if cur_pn > 1 and live_logs is not None and not live_logs.empty:
-            prev_idx = find_snap_index(live_logs, int(drive_id), cur_pn - 1)
-            if prev_idx is not None:
-                p_row = live_logs.reset_index(drop=True).loc[int(prev_idx)].to_dict()
-                pf = str(p_row.get("def_front") or "").strip()
-                pc = str(p_row.get("coverage") or "").strip()
-                pb = str(p_row.get("blitz") or "").strip()
-                if pf or pc:
-                    last_tagged_txt = f" · Last #{cur_pn-1}: {pf or '—'} / {pc or '—'}" + (f" (Blz {pb})" if pb else "")
-        st.markdown(
-            f"""
-            <div style="background:#F4F7F5;border:1px dashed #A3B899;border-radius:8px;padding:0.4rem 0.6rem;margin-bottom:0.4rem;font-size:0.82rem;color:#52796F;">
-              📡 Play #{cur_pn}: Waiting for tagger...{last_tagged_txt}
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-
 def _render_main_dual_rail(
     opponent: str,
     live_logs: pd.DataFrame | None,
@@ -16036,14 +16352,11 @@ def _render_main_dual_rail(
         use_container_width=True,
         key="lt_end_fill",
         disabled=active_did is None,
-        help="Ends the drive. Taggers keep filming.",
+        help="Ends the drive and shows front / coverage / blitz match for every snap.",
     ):
         ended = end_drive()
         if ended is not None:
-            st.session_state.ff_drive_filter = str(ended)
-            st.session_state["lt_end_drive_note"] = (
-                f"Drive #{ended} ended · taggers keep filming"
-            )
+            _capture_end_drive_film_audit(int(ended), str(opponent))
         st.rerun()
     if b3.button(
         "Undo",
@@ -16058,6 +16371,7 @@ def _render_main_dual_rail(
     end_note = st.session_state.pop("lt_end_drive_note", None)
     if end_note:
         st.caption(end_note)
+    _render_end_drive_film_audit()
 
     if pending_n:
         if st.button(
@@ -18286,12 +18600,20 @@ def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: s
     half1 = filter_live_logs(live_logs, opponent=opponent, half=1)
     n_half1 = len(half1)
     n_all = len(filter_live_logs(live_logs, opponent=opponent, half=None))
+    rates = _half_film_tag_rates(live_logs, opponent, half=1)
 
     if phase in {"halftime", "2nd"}:
         st.success(
             f"1st half closed vs {state.get('opponent')} at {state.get('halftime_at')}. "
             f"Coach report is below — tap **HT report** in the bar or expand Halftime."
         )
+        fill = state.get("tag_fill") or {}
+        if fill:
+            st.caption(
+                f"Saved film tags · front {fill.get('def_front', 0)} · "
+                f"cov {fill.get('coverage', 0)} · blitz {fill.get('blitz', 0)} · "
+                f"live_games: {'yes' if state.get('live_games_saved') else 'check archive'}"
+            )
     else:
         scope_note = ""
         if n_half1 == 0 and n_all > 0:
@@ -18302,6 +18624,30 @@ def _end_first_half_action(opponent: str, live_logs: pd.DataFrame, key_prefix: s
             + scope_note
             + " End the half when you’re ready for adjustments."
         )
+        # Preflight — show whether the tagger is actually writing
+        if n_half1 > 0:
+            thin = (
+                rates["def_front"] < max(1, n_half1 // 2)
+                or rates["coverage"] < max(1, n_half1 // 2)
+            )
+            msg = (
+                f"Tagger film so far · Front **{rates['def_front']}/{n_half1}** · "
+                f"Cov **{rates['coverage']}/{n_half1}** · "
+                f"Blitz **{rates['blitz']}/{n_half1}**"
+            )
+            if thin:
+                st.error(
+                    msg
+                    + " — film tags look thin. Confirm the tagger phone is saving "
+                    "(green RECEIVED on Main for each play) before you generate HT."
+                )
+            else:
+                st.info(msg + " · HT will also checkpoint to `data/live_games/`.")
+        elif n_all == 0:
+            st.error(
+                "Live log is empty — nothing for HT to save. If the tagger has been "
+                "tapping, those writes are not reaching this booth."
+            )
 
     h2_idxs = _half2_mistag_indices(live_logs, opponent)
     end_requested = bool(st.session_state.pop("lt_end_half_request", False))

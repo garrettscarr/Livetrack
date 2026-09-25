@@ -512,6 +512,7 @@ class TestStartNewGame(unittest.TestCase):
                     "down": 1,
                     "distance": "long",
                     "field_zone": "midfield",
+                    "ball_yard": 45,
                     "formation": "SLOT TRIG",
                     "play_call": "ARMY",
                     "result": "Gain",
@@ -520,6 +521,7 @@ class TestStartNewGame(unittest.TestCase):
                     "coverage": "Cover 3",
                     "blitz": "No",
                     "ball_player": "Luke Harris",
+                    "tagged_by": "Tagger",
                 },
                 {
                     "opponent": "HSAA",
@@ -528,6 +530,7 @@ class TestStartNewGame(unittest.TestCase):
                     "down": 2,
                     "distance": "medium",
                     "field_zone": "midfield",
+                    "ball_yard": 49,
                     "formation": "SLOT TRIG",
                     "play_call": "MOLLY",
                     "result": "Gain",
@@ -536,6 +539,7 @@ class TestStartNewGame(unittest.TestCase):
                     "coverage": "Cover 4",
                     "blitz": "Yes",
                     "ball_player": "Tyse Lennon",
+                    "tagged_by": "Tagger",
                 },
             ]
         )
@@ -547,12 +551,16 @@ class TestStartNewGame(unittest.TestCase):
             m.HALFTIME_REPORTS_DIR = tmp_path / "ht"
             m.LIVE_LOG_ARCHIVE_DIR = tmp_path / "archive"
             m.GAME_STATE_FILE = tmp_path / "game_state.json"
+            import live_games as lg
+
+            old_lg = lg.LIVE_GAMES_DIR
+            old_db = lg.DB_FILE
+            lg.LIVE_GAMES_DIR = tmp_path / "live_games"
+            lg.DB_FILE = tmp_path / "football.db"
             try:
                 result = m.end_first_half("HSAA", logs, plan={}, player_board=None)
                 snap = result.get("live_log_snapshot") or {}
                 self.assertEqual(int(snap.get("plays") or 0), 2)
-                report_csv = tmp_path / "ht" / Path(snap["report_csv"]).name
-                # report_csv may be relative to PROJECT_DIR — resolve via stem
                 candidates = list((tmp_path / "ht").glob("*_live.csv"))
                 self.assertTrue(candidates, "expected *_live.csv next to HT report")
                 saved = pd.read_csv(candidates[0])
@@ -561,13 +569,120 @@ class TestStartNewGame(unittest.TestCase):
                 self.assertEqual(int((saved["ball_player"].astype(str).str.len() > 0).sum()), 2)
                 arch = list((tmp_path / "archive").glob("*_halftime.csv"))
                 self.assertTrue(arch, "expected live_log_archive/*_halftime.csv")
-                # live log itself is not cleared by HT generate
                 self.assertEqual(snap.get("tag_fill", {}).get("coverage"), 2)
                 self.assertTrue((result.get("state") or {}).get("live_log_snapshot"))
+                # Same durable store as Main End Game
+                self.assertTrue(snap.get("live_games_saved"), snap)
+                lg_files = list((tmp_path / "live_games").glob("*.csv"))
+                self.assertTrue(lg_files, "expected data/live_games checkpoint on HT")
+                lg_df = pd.read_csv(lg_files[0])
+                self.assertEqual(len(lg_df), 2)
+                self.assertIn("Even", set(lg_df["def_front"].astype(str)))
             finally:
                 m.HALFTIME_REPORTS_DIR = old_ht
                 m.LIVE_LOG_ARCHIVE_DIR = old_arch
                 m.GAME_STATE_FILE = old_state
+                lg.LIVE_GAMES_DIR = old_lg
+                lg.DB_FILE = old_db
+
+    def test_overlay_live_film_onto_blank_hudl(self):
+        """Hudl game with blank film should pick up live_games film tags."""
+        import tempfile
+        from pathlib import Path
+
+        import pandas as pd
+
+        import live_games as lg
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            db = tmp_path / "football.db"
+            old_db = lg.DB_FILE
+            lg.DB_FILE = db
+            try:
+                import sqlite3
+
+                hudl = pd.DataFrame(
+                    [
+                        {
+                            "play_num": 1,
+                            "odk": "O",
+                            "formation": "SLOT TRIG",
+                            "play_call": "ARMY",
+                            "play_type": "Run",
+                            "down": 1,
+                            "distance": 10,
+                            "def_front": "",
+                            "coverage": "",
+                            "blitz": "",
+                            "yard_line": -45,
+                            "yards_gained": 4,
+                            "result": "Rush",
+                            "game_id": 6,
+                            "season": "26-27",
+                            "source_file": "season.xlsx",
+                            "opponent": "Commerce",
+                            "field_position": 45,
+                        },
+                        {
+                            "play_num": 2,
+                            "odk": "O",
+                            "formation": "DOT",
+                            "play_call": "MOLLY",
+                            "play_type": "Pass",
+                            "down": 2,
+                            "distance": 6,
+                            "def_front": "",
+                            "coverage": "",
+                            "blitz": "",
+                            "yard_line": -49,
+                            "yards_gained": 8,
+                            "result": "Complete",
+                            "game_id": 6,
+                            "season": "26-27",
+                            "source_file": "season.xlsx",
+                            "opponent": "Commerce",
+                            "field_position": 49,
+                        },
+                    ]
+                )
+                with sqlite3.connect(db) as conn:
+                    hudl.to_sql("offense_plays", conn, if_exists="replace", index=False)
+                    hudl.to_sql("offense_plays_epa", conn, if_exists="replace", index=False)
+
+                live = pd.DataFrame(
+                    [
+                        {
+                            "play_num": 1,
+                            "def_front": "3-3 Stack",
+                            "coverage": "Cover 3",
+                            "blitz": "No",
+                            "game_id": 6,
+                            "season": "26-27",
+                            "opponent": "Commerce",
+                            "source_file": "live:Commerce.csv",
+                        },
+                        {
+                            "play_num": 2,
+                            "def_front": "Even",
+                            "coverage": "Cover 1",
+                            "blitz": "Yes",
+                            "game_id": 6,
+                            "season": "26-27",
+                            "opponent": "Commerce",
+                            "source_file": "live:Commerce.csv",
+                        },
+                    ]
+                )
+                result = lg.overlay_live_film_onto_hudl(live)
+                self.assertTrue(result.get("overlaid"), result)
+                with sqlite3.connect(db) as conn:
+                    out = pd.read_sql("SELECT def_front, coverage, blitz FROM offense_plays ORDER BY play_num", conn)
+                self.assertEqual(list(out["def_front"]), ["3-3 Stack", "Even"])
+                self.assertEqual(list(out["coverage"]), ["Cover 3", "Cover 1"])
+                self.assertEqual(list(out["blitz"]), ["No", "Yes"])
+            finally:
+                lg.DB_FILE = old_db
 
     def test_ht_tendency_helpers(self):
         import step4_dashboard as d
