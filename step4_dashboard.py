@@ -2974,6 +2974,21 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
     c4.metric("Avg xPoints", f"{games['xpoints'].mean():.1f}")
 
     chart_df = games.copy()
+    game_labels = chart_df["game_label"].astype(str).tolist()
+
+    def _show_every_game(fig: go.Figure) -> None:
+        """Keep the last game on the axis when labels are long."""
+        fig.update_xaxes(
+            type="category",
+            categoryorder="array",
+            categoryarray=game_labels,
+            tickmode="array",
+            tickvals=game_labels,
+            ticktext=game_labels,
+            tickangle=-28,
+            automargin=True,
+        )
+        fig.update_layout(margin={"b": 110, "l": 48, "r": 16, "t": 56})
 
     # Build axes first, then traces — applying a Plotly template *after* traces
     # can wipe custom line colors (xP was rendering near-white).
@@ -3037,6 +3052,7 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
         hovermode="x unified",
         colorway=["#1B4332", "#C9A227"],
     )
+    _show_every_game(points_fig)
     # theme=None stops Streamlit from remapping Plotly colors to the app theme
     st.plotly_chart(points_fig, use_container_width=True, theme=None)
 
@@ -3057,6 +3073,7 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
         )
         epa_fig.update_traces(line_color="#14532D", marker_color="#14532D")
         epa_fig.update_layout(xaxis_title="Game", yaxis_title="Def EPA" if invert else "EPA")
+        _show_every_game(epa_fig)
         st.plotly_chart(epa_fig, use_container_width=True, theme=None)
     with c2:
         luck_fig = px.bar(
@@ -3071,6 +3088,7 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
         apply_chart_style(luck_fig, height=380)
         luck_fig.add_hline(y=0, line_dash="dash", line_color="#64748B")
         luck_fig.update_layout(xaxis_title="Game", yaxis_title="Luck")
+        _show_every_game(luck_fig)
         st.plotly_chart(luck_fig, use_container_width=True, theme=None)
 
     st.subheader("Game-by-game table")
@@ -3096,7 +3114,12 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
             "touchdowns": unit_cfg["td_label"],
         }
     )
-    st.dataframe(show, use_container_width=True, hide_index=True)
+    st.dataframe(
+        show,
+        use_container_width=True,
+        hide_index=True,
+        height=min(48 + 36 * max(len(show), 1), 520),
+    )
 
     best_process = games.loc[games["total_epa"].idxmax()]
     if invert:

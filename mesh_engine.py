@@ -436,6 +436,11 @@ def _stack_scheme_opponents() -> set[str]:
     return {"commerce"}
 
 
+def _odd_scheme_opponents() -> set[str]:
+    """Opponents whose Hudl numbered fronts are an Odd front, not 4-2 Even."""
+    return {"bells"}
+
+
 def _remap_numbered_fronts_to_stack(scout: pd.DataFrame) -> pd.DataFrame:
     """Rewrite bare numbered DEF FRONT tags to 3-3 Stack for stack-scheme film."""
     if scout is None or getattr(scout, "empty", True) or "def_front" not in scout.columns:
@@ -455,14 +460,38 @@ def _remap_numbered_fronts_to_stack(scout: pd.DataFrame) -> pd.DataFrame:
         return v
 
     out["def_front"] = out["def_front"].map(_map)
-    # Rebuild paired call label used in scout detail
-    if "coverage" in out.columns:
-        out["def_call"] = (
-            out["def_front"].fillna("Unknown").astype(str)
-            + "  |  "
-            + out["coverage"].fillna("Unknown").astype(str)
-        )
-    return out
+    return _rebuild_def_call(out)
+
+
+def _remap_numbered_fronts_to_odd(scout: pd.DataFrame) -> pd.DataFrame:
+    """Rewrite bare numbered DEF FRONT tags to Odd (e.g. Bells)."""
+    if scout is None or getattr(scout, "empty", True) or "def_front" not in scout.columns:
+        return scout
+    out = scout.copy()
+
+    def _map(v):
+        s = str(v or "").strip()
+        low = s.lower()
+        if not s or low in {"nan", "none", "unknown"}:
+            return v
+        if re.fullmatch(r"\d+(?:\.0+)?", s):
+            return "Odd"
+        return v
+
+    out["def_front"] = out["def_front"].map(_map)
+    return _rebuild_def_call(out)
+
+
+def _rebuild_def_call(scout: pd.DataFrame) -> pd.DataFrame:
+    if scout is None or "def_front" not in scout.columns or "coverage" not in scout.columns:
+        return scout
+    scout = scout.copy()
+    scout["def_call"] = (
+        scout["def_front"].fillna("Unknown").astype(str)
+        + "  |  "
+        + scout["coverage"].fillna("Unknown").astype(str)
+    )
+    return scout
 
 
 def _our_stats_vs_look(
@@ -1280,12 +1309,17 @@ def build_scout_matchup_report(
             + scout["coverage"].fillna("Unknown").astype(str)
         )
 
-    # Film detail keeps Hudl numbers; booth buckets stack-scheme teams to 3-3 Stack.
+    # Film detail keeps Hudl numbers; booth buckets scheme teams off 4-2 Even.
     scout_film = scout.copy()
-    stack_scheme = opp.strip().lower() in _stack_scheme_opponents()
+    opp_key = opp.strip().lower()
+    stack_scheme = opp_key in _stack_scheme_opponents()
+    odd_scheme = opp_key in _odd_scheme_opponents()
     if stack_scheme:
         scout = _remap_numbered_fronts_to_stack(scout)
         notes_pending_stack = True
+    elif odd_scheme:
+        scout = _remap_numbered_fronts_to_odd(scout)
+        notes_pending_stack = False
     else:
         notes_pending_stack = False
 
@@ -1296,6 +1330,11 @@ def build_scout_matchup_report(
         notes.append(
             "Stack scheme: Hudl numbered fronts bucketed to **3-3 Stack** "
             "(Odd-family EPA). Film numbers stay in scout front detail."
+        )
+    elif odd_scheme:
+        notes.append(
+            "Odd scheme: Hudl numbered fronts (44 / 54 / 45 / 55) bucketed to **Odd** "
+            "for booth EPA. Plan coverages are **Cover 2** and **Cover 4**."
         )
     # Coverage tags are sparse in recent seasons — fall back for cov EPA (all-time)
     our_cov_primary = our_primary
@@ -1484,7 +1523,7 @@ def build_scout_matchup_report(
 
     top_f = fronts[0]["look"] if fronts else "—"
     top_c = coverages[0]["look"] if coverages else "—"
-    if mode == "even_42":
+    if mode == "even_42" and not stack_scheme and not odd_scheme:
         notes.append(
             "Booth mode: 4-2 — numbered scout fronts mapped to Even for EPA match "
             "(3-3 Stack aliases to Odd)."
