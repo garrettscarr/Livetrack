@@ -245,6 +245,28 @@ def inject_styles() -> None:
             color: #C5D5CC !important;
             -webkit-text-fill-color: #C5D5CC !important;
         }
+        [data-testid="stMarkdownContainer"] .mb-scout-lean,
+        [data-testid="stMarkdownContainer"] .mb-scout-lean * {
+            color: #F2F7F4 !important;
+            -webkit-text-fill-color: #F2F7F4 !important;
+        }
+        [data-testid="stMarkdownContainer"] .mb-scout-lean .mb-scout-label,
+        [data-testid="stMarkdownContainer"] .mb-scout-lean .mb-scout-n {
+            color: #95D5B2 !important;
+            -webkit-text-fill-color: #95D5B2 !important;
+        }
+        [data-testid="stMarkdownContainer"] .mb-scout-lean .mb-scout-blitz {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
+        [data-testid="stMarkdownContainer"] .mb-scout-lean .mb-scout-blitz-sub {
+            color: #FFE8A3 !important;
+            -webkit-text-fill-color: #FFE8A3 !important;
+        }
+        [data-testid="stMarkdownContainer"] .mb-scout-lean .mb-scout-cross {
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+        }
         div[data-testid="stMetric"] {
             background: #F4F7F5;
             border: 1px solid #D8E2DC;
@@ -8453,12 +8475,37 @@ def in_game_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             expect = scout_situation_expect(opponent, down, dist, zone)
         except Exception:
             expect = {}
-        if expect and (expect.get("sentence") or expect.get("summary")):
-            _live_spot(
-                "Their D — most called",
-                str(expect.get("sentence") or expect.get("summary")),
-                meta=f"n={expect['plays']} ({expect.get('scope') or '—'})",
-            )
+        if expect and int(expect.get("plays") or 0) > 0:
+            blitz_pct = expect.get("blitz_pct")
+            if blitz_pct is not None:
+                value = f"BLITZ {int(blitz_pct)}%"
+                bits = []
+                if expect.get("outside_pct") is not None:
+                    bits.append(f"Out {int(expect['outside_pct'])}%")
+                if expect.get("inside_pct") is not None:
+                    bits.append(f"In {int(expect['inside_pct'])}%")
+                if expect.get("blitz_type"):
+                    bits.append(str(expect["blitz_type"]))
+                if expect.get("cross_flag"):
+                    bits.append("CROSS · protect")
+                meta = " · ".join(bits) if bits else ""
+                look = []
+                if expect.get("film_front"):
+                    look.append(str(expect["film_front"]))
+                if expect.get("coverage"):
+                    cov = str(expect["coverage"])
+                    look.append(f"Cover {cov}" if cov.isdigit() else cov)
+                if look:
+                    meta = (meta + " · " if meta else "") + " · ".join(look)
+                meta = f"{meta} · n={expect['plays']} ({expect.get('scope') or '—'})"
+                _live_spot("Their D — pressure", value, meta=meta, accent=True)
+            else:
+                _live_spot(
+                    "Their D — most called",
+                    str(expect.get("sentence") or expect.get("summary") or "—"),
+                    meta=f"n={expect['plays']} ({expect.get('scope') or '—'})",
+                    accent=True,
+                )
         elif off_tend["plays"]:
             _live_spot(
                 "Their D — most called",
@@ -15509,6 +15556,76 @@ def _inject_main_booth_css() -> None:
             font-size: 0.92rem;
             font-weight: 600;
         }
+        /* Scout lean — blitz is the billboard */
+        .mb-scout-lean {
+            background: linear-gradient(165deg, #1B4332 0%, #081C15 100%);
+            border: 2px solid #40916C;
+            border-radius: 14px;
+            padding: 0.85rem 1rem 0.95rem;
+            margin: 0.45rem 0 0.65rem 0;
+            color: #F2F7F4 !important;
+            -webkit-text-fill-color: #F2F7F4 !important;
+        }
+        .mb-scout-lean-hot {
+            border-color: #F4A261;
+            box-shadow: 0 0 0 1px rgba(244, 162, 97, 0.35);
+        }
+        .mb-scout-lean-cross {
+            border-color: #E63946;
+            box-shadow: 0 0 0 2px rgba(230, 57, 70, 0.45);
+        }
+        .mb-scout-label {
+            font-size: 0.7rem;
+            font-weight: 800;
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            color: #95D5B2 !important;
+            -webkit-text-fill-color: #95D5B2 !important;
+            margin: 0 0 0.35rem 0;
+        }
+        .mb-scout-blitz {
+            font-size: 1.85rem;
+            font-weight: 900;
+            letter-spacing: 0.04em;
+            line-height: 1.1;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            margin: 0 0 0.3rem 0;
+        }
+        .mb-scout-blitz-sub {
+            font-size: 1.05rem;
+            font-weight: 700;
+            line-height: 1.35;
+            color: #FFE8A3 !important;
+            -webkit-text-fill-color: #FFE8A3 !important;
+            margin: 0 0 0.45rem 0;
+        }
+        .mb-scout-cross {
+            background: #E63946;
+            color: #FFFFFF !important;
+            -webkit-text-fill-color: #FFFFFF !important;
+            font-size: 0.95rem;
+            font-weight: 900;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            border-radius: 8px;
+            padding: 0.45rem 0.65rem;
+            margin: 0 0 0.5rem 0;
+        }
+        .mb-scout-look {
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: #D8F3DC !important;
+            -webkit-text-fill-color: #D8F3DC !important;
+            margin: 0 0 0.25rem 0;
+        }
+        .mb-scout-n {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #95D5B2 !important;
+            -webkit-text-fill-color: #95D5B2 !important;
+            opacity: 0.9;
+        }
 
         /* Panels */
         .mb-panel {
@@ -16383,7 +16500,9 @@ def _render_scout_situation_lean(
     dist_bucket: str,
     field_zone: str,
 ) -> None:
-    """Scout look for this down / distance / zone — film numbers OK; tagger uses booth front."""
+    """Big scout callout for this situation — blitz is the headline."""
+    from html import escape
+
     opp = str(opponent or "").strip()
     if not opp:
         return
@@ -16395,13 +16514,94 @@ def _render_scout_situation_lean(
         return
     if not expect or int(expect.get("plays") or 0) <= 0:
         return
-    sentence = str(expect.get("sentence") or expect.get("summary") or "").strip()
-    if not sentence:
-        return
+
     n = int(expect["plays"])
     scope = str(expect.get("scope") or "")
-    scope_bit = f" · {scope}" if scope and scope != "exact" else ""
-    st.caption(f"{sentence} · n={n}{scope_bit}")
+    scope_bit = f" · {escape(scope)}" if scope and scope != "exact" else ""
+    blitz_pct = expect.get("blitz_pct")
+    outside_pct = expect.get("outside_pct")
+    inside_pct = expect.get("inside_pct")
+    blitz_type = str(expect.get("blitz_type") or "").strip()
+    blitz_type_pct = expect.get("blitz_type_pct")
+    blitz_lane = str(expect.get("blitz_lane") or "").strip()
+    cross_flag = bool(expect.get("cross_flag"))
+
+    film_front = str(expect.get("film_front") or "").strip()
+    booth_front = str(expect.get("booth_front") or "").strip()
+    front_pct = expect.get("front_pct")
+    coverage = str(expect.get("coverage") or "").strip()
+    coverage_pct = expect.get("coverage_pct")
+
+    # --- Blitz headline (primary) ---
+    if blitz_pct is None:
+        blitz_hero = "No blitz tags"
+        blitz_sub = "Scout has no pressure labels in this bucket"
+        card_cls = "mb-scout-lean"
+    else:
+        blitz_hero = f"BLITZ {int(blitz_pct)}%"
+        lane_bits: list[str] = []
+        if outside_pct is not None:
+            lane_bits.append(f"Outside {int(outside_pct)}%")
+        if inside_pct is not None:
+            lane_bits.append(f"Inside {int(inside_pct)}%")
+        if blitz_type:
+            lane_word = {
+                "outside": "OUT",
+                "inside": "IN",
+                "cross": "CROSS",
+            }.get(blitz_lane, "")
+            pkg = escape(blitz_type)
+            if blitz_type_pct is not None:
+                pkg = f"{pkg} {int(blitz_type_pct)}%"
+            if lane_word:
+                pkg = f"{pkg} · {lane_word}"
+            lane_bits.append(f"Most {pkg}")
+        blitz_sub = " · ".join(lane_bits) if lane_bits else "Pressure rate in this situation"
+        card_cls = "mb-scout-lean mb-scout-lean-hot" if int(blitz_pct) >= 50 else "mb-scout-lean"
+        if cross_flag:
+            card_cls += " mb-scout-lean-cross"
+
+    # --- Front / coverage (secondary) ---
+    look_bits: list[str] = []
+    if film_front:
+        if booth_front and booth_front.lower() != film_front.lower():
+            front_lbl = f"{escape(film_front)} → tag {escape(booth_front)}"
+        else:
+            front_lbl = escape(film_front)
+        if front_pct is not None:
+            look_bits.append(f"{front_lbl} {int(front_pct)}%")
+        else:
+            look_bits.append(front_lbl)
+    if coverage:
+        cov_lbl = coverage
+        if coverage.isdigit():
+            cov_lbl = f"Cover {coverage}"
+        if coverage_pct is not None:
+            look_bits.append(f"{escape(cov_lbl)} {int(coverage_pct)}%")
+        else:
+            look_bits.append(escape(cov_lbl))
+    look_line = " · ".join(look_bits) if look_bits else "Front / coverage thin in this bucket"
+
+    warn_html = ""
+    if cross_flag:
+        warn_html = (
+            '<div class="mb-scout-cross">CROSS is the top pressure · '
+            "PROTECTION CHANGE</div>"
+        )
+
+    st.markdown(
+        f"""
+        <div class="{card_cls}">
+          <div class="mb-scout-label">Their D · this situation</div>
+          <div class="mb-scout-blitz">{escape(blitz_hero)}</div>
+          <div class="mb-scout-blitz-sub">{blitz_sub}</div>
+          {warn_html}
+          <div class="mb-scout-look">{look_line}</div>
+          <div class="mb-scout-n">n={n}{scope_bit}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _film_fronts_for_opponent(opponent: str | None) -> list[str]:

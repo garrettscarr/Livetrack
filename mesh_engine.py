@@ -508,25 +508,8 @@ def scout_situation_expect(
         bits.append(blitz_bit)
     summary = " · ".join(bits) if bits else ""
 
-    # Coach-facing sentence for Live Track Main — each look has its own %
-    parts: list[str] = []
-    if film_front:
-        if booth_front and booth_front.lower() != str(film_front).lower():
-            front_lbl = f"{film_front} (tag {booth_front})"
-        else:
-            front_lbl = str(film_front)
-        if front_pct is not None:
-            parts.append(f"{front_lbl} front {front_pct}% of the time")
-        else:
-            parts.append(f"{front_lbl} front")
-    if coverage:
-        cov_lbl = str(coverage)
-        if re.fullmatch(r"\d+", cov_lbl):
-            cov_lbl = f"Cover {cov_lbl}"
-        if coverage_pct is not None:
-            parts.append(f"{cov_lbl} {coverage_pct}% of the time")
-        else:
-            parts.append(cov_lbl)
+    # Coach-facing sentence — blitz first (booth priority), then front / coverage
+    blitz_part = ""
     if blitz_pct is not None:
         detail: list[str] = []
         if outside_pct is not None or inside_pct is not None:
@@ -544,22 +527,42 @@ def scout_situation_expect(
                 detail.append(f"most {blitz_type} ({lane_word}) {blitz_type_pct}%")
             else:
                 detail.append(f"most {blitz_type} {blitz_type_pct}%")
-        blitz_part = f"blitz {blitz_pct}% of the time"
+        blitz_part = f"Blitz {blitz_pct}% of the time"
         if detail:
             blitz_part = f"{blitz_part} ({'; '.join(detail)})"
         if cross_flag:
             blitz_part = (
                 f"{blitz_part} — CROSS is the top pressure · protection change"
             )
-        parts.append(blitz_part)
+
+    front_part = ""
+    if film_front:
+        if booth_front and booth_front.lower() != str(film_front).lower():
+            front_lbl = f"{film_front} (tag {booth_front})"
+        else:
+            front_lbl = str(film_front)
+        if front_pct is not None:
+            front_part = f"{front_lbl} front {front_pct}%"
+        else:
+            front_part = f"{front_lbl} front"
+
+    cov_part = ""
+    if coverage:
+        cov_lbl = str(coverage)
+        if re.fullmatch(r"\d+", cov_lbl):
+            cov_lbl = f"Cover {cov_lbl}"
+        if coverage_pct is not None:
+            cov_part = f"{cov_lbl} {coverage_pct}%"
+        else:
+            cov_part = cov_lbl
+
+    parts = [p for p in (blitz_part, front_part, cov_part) if p]
     if not parts:
         sentence = ""
     elif len(parts) == 1:
-        sentence = f"Defense runs {parts[0]}"
-    elif len(parts) == 2:
-        sentence = f"Defense runs {parts[0]}, and {parts[1]}"
+        sentence = parts[0]
     else:
-        sentence = "Defense runs " + ", ".join(parts[:-1]) + f", and {parts[-1]}"
+        sentence = parts[0] + " · " + " · ".join(parts[1:])
 
     return {
         "plays": n_all,

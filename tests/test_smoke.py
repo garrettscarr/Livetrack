@@ -225,12 +225,12 @@ class TestPhrasePlayTags(unittest.TestCase):
         self.assertEqual(expect["inside_pct"], 25)
         self.assertFalse(expect["cross_flag"])
         self.assertIn("tag Odd", expect["summary"])
-        self.assertIn("Defense runs", expect["sentence"])
-        self.assertIn("54 (tag Odd) front 50% of the time", expect["sentence"])
-        self.assertIn("Cover 4 75% of the time", expect["sentence"])
-        self.assertIn("blitz 50% of the time", expect["sentence"])
+        # Blitz leads the sentence; front/coverage follow
+        self.assertTrue(expect["sentence"].startswith("Blitz 50%"))
         self.assertIn("BANDIT STAB", expect["sentence"])
         self.assertIn("outside", expect["sentence"])
+        self.assertIn("54 (tag Odd) front 50%", expect["sentence"])
+        self.assertIn("Cover 4 75%", expect["sentence"])
         # CROSS as top package → protection-change flag
         cross_scout = scout.copy()
         cross_scout["blitz"] = ["MIKE CROSS", "MIKE CROSS", "WILL BLAST", ""]
@@ -240,6 +240,7 @@ class TestPhrasePlayTags(unittest.TestCase):
         self.assertTrue(cross_expect["cross_flag"])
         self.assertEqual(cross_expect["blitz_lane"], "cross")
         self.assertIn("protection change", cross_expect["sentence"])
+        self.assertTrue(cross_expect["sentence"].startswith("Blitz"))
         # Favorites path (tagger chips) collapses numbers to Odd
         import mesh_engine as me
 
