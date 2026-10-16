@@ -462,16 +462,17 @@ def scout_situation_expect(
         named = is_blitz & ~low.isin({"yes", "y"})
         pkgs = raw[named]
         lanes = pkgs.map(_classify_blitz_lane) if not pkgs.empty else pd.Series(dtype=str)
-        if not pkgs.empty:
+        if blitz_yes and not pkgs.empty:
             top_pkg = pkgs.value_counts().index[0]
             top_n = int((pkgs == top_pkg).sum())
             blitz_type = str(top_pkg)
-            blitz_type_pct = round(100.0 * top_n / blitz_n)
+            # Package / lane rates are among blitz snaps only (if they blitz…)
+            blitz_type_pct = round(100.0 * top_n / blitz_yes)
             blitz_lane = _classify_blitz_lane(blitz_type) or None
-            outside_pct = round(100.0 * int((lanes == "outside").sum()) / blitz_n)
-            inside_pct = round(100.0 * int((lanes == "inside").sum()) / blitz_n)
+            outside_pct = round(100.0 * int((lanes == "outside").sum()) / blitz_yes)
+            inside_pct = round(100.0 * int((lanes == "inside").sum()) / blitz_yes)
             cross_n = int((lanes == "cross").sum())
-            cross_pct = round(100.0 * cross_n / blitz_n)
+            cross_pct = round(100.0 * cross_n / blitz_yes)
             # Flag when CROSS is the top named package (protection change)
             cross_flag = blitz_lane == "cross"
 
@@ -514,7 +515,7 @@ def scout_situation_expect(
         detail: list[str] = []
         if outside_pct is not None or inside_pct is not None:
             detail.append(
-                f"outside {outside_pct if outside_pct is not None else 0}% · "
+                f"of blitzes: outside {outside_pct if outside_pct is not None else 0}% · "
                 f"inside {inside_pct if inside_pct is not None else 0}%"
             )
         if blitz_type and blitz_type_pct is not None:

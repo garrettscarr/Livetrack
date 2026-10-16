@@ -219,10 +219,11 @@ class TestPhrasePlayTags(unittest.TestCase):
         self.assertEqual(expect["coverage_pct"], 75)  # 3 of 4
         self.assertEqual(expect["blitz_pct"], 50)
         self.assertEqual(expect["blitz_type"], "BANDIT STAB")
-        self.assertEqual(expect["blitz_type_pct"], 25)  # 1 of 4
+        # Lane / package rates are among blitz snaps only (2 blitzes here)
+        self.assertEqual(expect["blitz_type_pct"], 50)  # 1 of 2 blitzes
         self.assertEqual(expect["blitz_lane"], "outside")
-        self.assertEqual(expect["outside_pct"], 25)
-        self.assertEqual(expect["inside_pct"], 25)
+        self.assertEqual(expect["outside_pct"], 50)
+        self.assertEqual(expect["inside_pct"], 50)
         self.assertFalse(expect["cross_flag"])
         self.assertIn("tag Odd", expect["summary"])
         # Blitz leads the sentence; front/coverage follow

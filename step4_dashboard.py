@@ -8480,10 +8480,10 @@ def in_game_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
             if blitz_pct is not None:
                 value = f"BLITZ {int(blitz_pct)}%"
                 bits = []
-                if expect.get("outside_pct") is not None:
-                    bits.append(f"Out {int(expect['outside_pct'])}%")
-                if expect.get("inside_pct") is not None:
-                    bits.append(f"In {int(expect['inside_pct'])}%")
+                if expect.get("outside_pct") is not None or expect.get("inside_pct") is not None:
+                    out_i = int(expect["outside_pct"] or 0)
+                    in_i = int(expect["inside_pct"] or 0)
+                    bits.append(f"If blitz: Out {out_i}% / In {in_i}%")
                 if expect.get("blitz_type"):
                     bits.append(str(expect["blitz_type"]))
                 if expect.get("cross_flag"):
@@ -16540,10 +16540,10 @@ def _render_scout_situation_lean(
     else:
         blitz_hero = f"BLITZ {int(blitz_pct)}%"
         lane_bits: list[str] = []
-        if outside_pct is not None:
-            lane_bits.append(f"Outside {int(outside_pct)}%")
-        if inside_pct is not None:
-            lane_bits.append(f"Inside {int(inside_pct)}%")
+        if outside_pct is not None or inside_pct is not None:
+            out_i = int(outside_pct) if outside_pct is not None else 0
+            in_i = int(inside_pct) if inside_pct is not None else 0
+            lane_bits.append(f"If blitz: Outside {out_i}% · Inside {in_i}%")
         if blitz_type:
             lane_word = {
                 "outside": "OUT",
