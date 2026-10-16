@@ -154,6 +154,94 @@ class TestPhrasePlayTags(unittest.TestCase):
         self.assertFalse(p.get("run_tag"))
         self.assertEqual(p.get("play_type"), "pass")
 
+    def test_current_season_tags_enter_phrase_map(self):
+        import pandas as pd
+
+        import step4_dashboard as d
+
+        rows = pd.DataFrame(
+            {
+                "formation": ["RAIDER", "TEXAS NASTY", "SLOT DIP BASH"],
+                "motion": ["1 FLY", "", ""],
+                "season": ["26-27", "26-27", "26-27"],
+                "form_tagged": [1, 1, 1],
+            }
+        )
+        ctx = d._season_phrase_context(rows)
+        self.assertIn("Raider", ctx["formations"])
+        self.assertIn("Texas Nasty", ctx["formations"])
+        self.assertIn("Slot Dip", ctx["formations"])
+        self.assertIn("Bash", ctx["variants"])
+        self.assertIn("1 Fly", ctx["motions"])
+        favs = {"formations": [], "variants": [], "motions": [], "plays": {}, "inbox_plays": []}
+        parsed = d.parse_live_phrase(
+            "Raider Army Trap gain of 4",
+            favs,
+            extra_plays=[("Army Trap", "run")],
+            extra_formations=["Raider"],
+        )
+        self.assertEqual(parsed.get("formation"), "Raider")
+        self.assertEqual(parsed.get("play_call"), "Army Trap")
+        self.assertEqual(parsed.get("play_type"), "run")
+
+    def test_odd_scheme_tagger_front_is_odd(self):
+        import pandas as pd
+
+        from mesh_engine import (
+            _booth_front_for_opponent,
+            scout_favorite_looks,
+            scout_situation_expect,
+        )
+
+        self.assertEqual(_booth_front_for_opponent("54", "Leonard"), "Odd")
+        self.assertEqual(_booth_front_for_opponent("44", "Bells"), "Odd")
+        scout = pd.DataFrame(
+            {
+                "down": [1, 1, 1, 1],
+                "distance_bucket": ["long"] * 4,
+                "field_zone": ["own_territory"] * 4,
+                "def_front": ["54", "54", "44", "45"],
+                "coverage": ["4", "4", "4", "0"],
+                "blitz": ["BANDIT STAB", "", "WILL BLAST", ""],
+            }
+        )
+        expect = scout_situation_expect(
+            "Leonard",
+            1,
+            "long",
+            "own_territory",
+            scout_df=scout,
+        )
+        self.assertEqual(expect["film_front"], "54")
+        self.assertEqual(expect["booth_front"], "Odd")
+        self.assertEqual(expect["coverage"], "4")
+        self.assertEqual(expect["front_pct"], 50)  # 2 of 4
+        self.assertEqual(expect["coverage_pct"], 75)  # 3 of 4
+        self.assertEqual(expect["blitz_pct"], 50)
+        self.assertEqual(expect["blitz_type"], "BANDIT STAB")
+        self.assertEqual(expect["blitz_type_pct"], 25)  # 1 of 4
+        self.assertIn("tag Odd", expect["summary"])
+        self.assertIn("Defense runs", expect["sentence"])
+        self.assertIn("54 (tag Odd) front 50% of the time", expect["sentence"])
+        self.assertIn("Cover 4 75% of the time", expect["sentence"])
+        self.assertIn("blitz 50% of the time", expect["sentence"])
+        self.assertIn("BANDIT STAB", expect["sentence"])
+        # Favorites path (tagger chips) collapses numbers to Odd
+        import mesh_engine as me
+
+        orig = me.load_scout
+
+        def _fake_load(role, opponent=None, season=None):
+            return scout
+
+        me.load_scout = _fake_load
+        try:
+            looks = scout_favorite_looks("Leonard", n=4)
+        finally:
+            me.load_scout = orig
+        self.assertEqual(looks["fronts"], ["Odd"])
+        self.assertEqual(looks["coverages"][0], "4")
+
     def test_film_tags_on_live_phrase(self):
         import step4_dashboard as d
 

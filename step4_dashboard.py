@@ -4537,6 +4537,26 @@ def merge_offense_favorites_into(favs: dict, suggested: dict, *, replace: bool =
     return merged
 
 
+def sync_live_favorites_from_season(offense_df: pd.DataFrame | None) -> dict:
+    """
+    Add every current-season formation and play call to booth favorites.
+
+    One-snap installs are included. Prior-year rows are not.
+    """
+    src = current_season_plays(offense_df) if offense_df is not None else offense_df
+    suggested = suggest_offense_favorites(
+        src,
+        min_form_plays=1,
+        min_play_plays=1,
+        min_motion_plays=10_000,
+    )
+    ctx = _season_phrase_context(src)
+    suggested["motions"] = list(ctx.get("motions") or [])
+    merged = merge_offense_favorites_into(load_live_favorites(), suggested)
+    save_live_favorites(merged)
+    return merged
+
+
 def variants_for_formation(favs: dict, formation: str) -> list[str]:
     """Variants for a formation: specific list, else global variants."""
     form = str(formation or "").strip()
@@ -8427,7 +8447,19 @@ def in_game_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
     st.markdown("#### Situation snapshot")
     snap_l, snap_r = st.columns(2)
     with snap_l:
-        if off_tend["plays"]:
+        try:
+            from mesh_engine import scout_situation_expect
+
+            expect = scout_situation_expect(opponent, down, dist, zone)
+        except Exception:
+            expect = {}
+        if expect and (expect.get("sentence") or expect.get("summary")):
+            _live_spot(
+                "Their D — most called",
+                str(expect.get("sentence") or expect.get("summary")),
+                meta=f"n={expect['plays']} ({expect.get('scope') or '—'})",
+            )
+        elif off_tend["plays"]:
             _live_spot(
                 "Their D — most called",
                 f"Front {_fmt_most(off_tend.get('most_front'))} · Cov {_fmt_most(off_tend.get('most_coverage'))}",
@@ -9689,9 +9721,10 @@ def _render_current_snap_tagger(
             draft = str(st.session_state.get(draft_f_key) or "").strip()
             if draft:
                 current = draft
+            front_chips = _film_fronts_for_opponent(opponent)
             _chip_row(
                 "Front",
-                list(DEFAULT_FILM_FRONTS),
+                front_chips,
                 "def_front",
                 current,
                 more=None,
@@ -10908,6 +10941,58 @@ def _all_favorite_plays(favs: dict) -> list[tuple[str, str]]:
     return out
 
 
+def _union_phrase_names(*groups: list[str]) -> list[str]:
+    """Dedupe label lists, longest first, so 'Texas Nasty' beats 'Texas'."""
+    out: list[str] = []
+    seen: set[str] = set()
+    for group in groups:
+        for name in group or []:
+            s = _ql_norm(name)
+            if not s or s.lower() in seen:
+                continue
+            seen.add(s.lower())
+            out.append(s)
+    out.sort(key=len, reverse=True)
+    return out
+
+
+def _season_phrase_context(offense_df: pd.DataFrame | None) -> dict:
+    """
+    Every current-season formation, variant, and motion — including one-snap tags.
+
+    Prior-year formations stay out. The booth matcher uses this so a new install
+    is recognized before anyone adds it to favorites by hand.
+    """
+    empty = {"formations": [], "variants": [], "motions": []}
+    if offense_df is None or offense_df.empty:
+        return empty
+    src = current_season_plays(offense_df)
+    if src is None or src.empty:
+        return empty
+
+    bases: list[str] = []
+    variants: list[str] = []
+    if "formation" in src.columns:
+        form_src = src
+        if "form_tagged" in form_src.columns:
+            form_src = form_src[form_src["form_tagged"].fillna(0).astype(int) == 1]
+        for val in form_src["formation"].dropna().astype(str):
+            base, var = split_formation_variant(val)
+            if base:
+                bases = _add_favorite_name(bases, base)
+            if var:
+                variants = _add_favorite_name(variants, var)
+
+    motions: list[str] = []
+    if "motion" in src.columns:
+        for val in src["motion"].dropna().astype(str):
+            name = _tag_display(val)
+            if not name or name.lower() in {"nan", "none", "n/a", "unknown"}:
+                continue
+            motions = _add_favorite_name(motions, name)
+    return {"formations": bases, "variants": variants, "motions": motions}
+
+
 def _season_phrase_plays(offense_df: pd.DataFrame | None) -> list[tuple[str, str]]:
     """All season play calls (incl. rare n=1) for phrase matching."""
     out: list[tuple[str, str]] = []
@@ -10945,6 +11030,15 @@ def _cached_season_phrase_plays() -> list[tuple[str, str]]:
         return _season_phrase_plays(load_plays("Offense"))
     except Exception:
         return []
+
+
+@st.cache_data(show_spinner=False)
+def _cached_season_phrase_context() -> dict:
+    """Current-season formations, variants, and motions for phrase matching."""
+    try:
+        return _season_phrase_context(load_plays("Offense"))
+    except Exception:
+        return {"formations": [], "variants": [], "motions": []}
 
 
 def _live_log_phrase_plays() -> list[tuple[str, str]]:
@@ -11668,6 +11762,8 @@ def parse_live_phrase(
     extra_plays: list[tuple[str, str]] | None = None,
     *,
     start_ball_yard: int | float | None = None,
+    extra_formations: list[str] | None = None,
+    extra_variants: list[str] | None = None,
 ) -> dict:
     """
     Parse a booth line into situation + call + result (+ optional defense).
@@ -12123,16 +12219,20 @@ def parse_live_phrase(
     if not words:
         return result
 
-    forms = sorted(
-        [_ql_norm(x) for x in (favs.get("formations") or []) if _ql_norm(x)],
-        key=len,
-        reverse=True,
+    season_ctx = _cached_season_phrase_context()
+    forms = _union_phrase_names(
+        list(favs.get("formations") or []),
+        list(season_ctx.get("formations") or []),
+        list(extra_formations or []),
     )
-    variants = _all_favorite_variants(favs)
-    motions = sorted(
-        [_ql_norm(x) for x in (favs.get("motions") or []) if _ql_norm(x)],
-        key=len,
-        reverse=True,
+    variants = _union_phrase_names(
+        _all_favorite_variants(favs),
+        list(season_ctx.get("variants") or []),
+        list(extra_variants or []),
+    )
+    motions = _union_phrase_names(
+        list(favs.get("motions") or []),
+        list(season_ctx.get("motions") or []),
     )
     # Favorites + ALL season play calls (+ tonight + learned) — niche tags included
     plays = _phrase_play_catalog(favs, extra_plays=extra_plays)
@@ -13184,13 +13284,21 @@ def _live_track_fill_film(
         _render_live_log_tail(opponent, live_logs)
         return
 
-    front_opts = _merge_film_tag_options(
-        _tag_options(
-            offense_df["def_front"] if "def_front" in offense_df.columns else pd.Series(dtype=str),
+    front_opts = _filter_booth_front_options(
+        _merge_film_tag_options(
+            _tag_options(
+                offense_df["def_front"]
+                if "def_front" in offense_df.columns
+                else pd.Series(dtype=str),
+            ),
+            full["def_front"] if "def_front" in full.columns else pd.Series(dtype=str),
+            kind="def_front",
         ),
-        full["def_front"] if "def_front" in full.columns else pd.Series(dtype=str),
-        kind="def_front",
+        opponent,
     )
+    # Odd / stack scheme: booth chips first (Odd before Even)
+    preferred = _film_fronts_for_opponent(opponent)
+    front_opts = list(preferred) + [f for f in front_opts if f not in preferred]
     cov_opts = _merge_film_tag_options(
         _tag_options(
             offense_df["coverage"] if "coverage" in offense_df.columns else pd.Series(dtype=str),
@@ -16268,6 +16376,74 @@ def _render_main_app_bar(
     )
 
 
+def _render_scout_situation_lean(
+    opponent: str,
+    *,
+    down: int,
+    dist_bucket: str,
+    field_zone: str,
+) -> None:
+    """Scout look for this down / distance / zone — film numbers OK; tagger uses booth front."""
+    opp = str(opponent or "").strip()
+    if not opp:
+        return
+    try:
+        from mesh_engine import scout_situation_expect
+
+        expect = scout_situation_expect(opp, int(down), str(dist_bucket), str(field_zone))
+    except Exception:
+        return
+    if not expect or int(expect.get("plays") or 0) <= 0:
+        return
+    sentence = str(expect.get("sentence") or expect.get("summary") or "").strip()
+    if not sentence:
+        return
+    n = int(expect["plays"])
+    scope = str(expect.get("scope") or "")
+    scope_bit = f" · {scope}" if scope and scope != "exact" else ""
+    st.caption(f"{sentence} · n={n}{scope_bit}")
+
+
+def _film_fronts_for_opponent(opponent: str | None) -> list[str]:
+    """Booth fronts for tagger / Fill Film. Odd-scheme teams put Odd first."""
+    fronts = list(DEFAULT_FILM_FRONTS)
+    try:
+        from mesh_engine import _odd_scheme_opponents
+
+        if str(opponent or "").strip().lower() in _odd_scheme_opponents():
+            return ["Odd"] + [f for f in fronts if f != "Odd"]
+    except Exception:
+        pass
+    return fronts
+
+
+def _filter_booth_front_options(opts: list[str], opponent: str | None) -> list[str]:
+    """Drop bare numbered Hudl fronts for odd/stack scheme taggers."""
+    try:
+        from mesh_engine import (
+            _booth_front_for_opponent,
+            _odd_scheme_opponents,
+            _stack_scheme_opponents,
+        )
+    except Exception:
+        return opts
+    opp = str(opponent or "").strip().lower()
+    if opp not in _odd_scheme_opponents() and opp not in _stack_scheme_opponents():
+        return opts
+    out: list[str] = []
+    seen: set[str] = set()
+    for v in opts:
+        booth = _booth_front_for_opponent(v, opponent) or str(v or "").strip()
+        if not booth:
+            continue
+        key = booth.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(booth)
+    return out
+
+
 def _render_main_dual_rail(
     opponent: str,
     live_logs: pd.DataFrame | None,
@@ -16301,6 +16477,9 @@ def _render_main_dual_rail(
         </div>
         """,
         unsafe_allow_html=True,
+    )
+    _render_scout_situation_lean(
+        opponent, down=down, dist_bucket=dist_bucket, field_zone=field_zone
     )
 
     st.markdown('<div class="mb-panel-label">Adjust</div>', unsafe_allow_html=True)

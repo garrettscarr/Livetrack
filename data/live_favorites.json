@@ -21,7 +21,18 @@
     "Cat 5",
     "Victory",
     "Tiger",
-    "34 Dot"
+    "34 Dot",
+    "Texas Nasty",
+    "West",
+    "Acknowledge ME",
+    "Soxt Trig",
+    "Hydra",
+    "Trig",
+    "Dip",
+    "Quads",
+    "Sdip",
+    "Toronto",
+    "Raider"
   ],
   "variants": [
     "Bash",
@@ -50,6 +61,9 @@
     ],
     "Cowboy": [
       "Wide"
+    ],
+    "East": [
+      "Bash"
     ]
   },
   "motions": [
@@ -61,7 +75,9 @@
     "R Away",
     "Bump",
     "Dash",
-    "Home"
+    "Home",
+    "Z Away",
+    "1 Fly"
   ],
   "plays": {
     "run": [
@@ -89,7 +105,26 @@
       "Molly Insert",
       "Molly Q",
       "Molly Toss",
-      "Rock"
+      "Rock",
+      "3 Colt",
+      "Army Brnoco",
+      "Army Q",
+      "Army Trap",
+      "Axle Trap",
+      "Horns Gift",
+      "Horns Stab",
+      "Horns Switch",
+      "Iillinois Q",
+      "Illinios",
+      "Illinois Back",
+      "Illinois Backside",
+      "Irealnd Q",
+      "Irealnd Slice",
+      "Ireland Bubble",
+      "Ireland Q",
+      "Mary Slice",
+      "Molly Slice",
+      "Porky"
     ],
     "pass": [
       "Backside",
@@ -117,7 +152,44 @@
       "Bear",
       "Bronco",
       "Return",
-      "Stab"
+      "Stab",
+      "2 Firework",
+      "Acknowledge ME 2",
+      "Army 2",
+      "Army Trap 2",
+      "Axle Bear",
+      "Bubba",
+      "Bubble",
+      "Cyborg Gift",
+      "Dallas",
+      "Devils",
+      "Duece",
+      "Flood",
+      "Floyd",
+      "Gift",
+      "Heels Bubba",
+      "Heels Vegas",
+      "Hook And Ladder",
+      "Horns Bear",
+      "Illinois Gift",
+      "Irealnd Stab",
+      "Ireland Bear",
+      "Ireland Gift",
+      "Ireland Stab",
+      "Lake",
+      "Levels",
+      "Miami GO",
+      "Move IT Series",
+      "Ohio",
+      "Pick",
+      "Pirate Switch",
+      "R Seattle",
+      "Rodeo",
+      "Seattle",
+      "Stab GO",
+      "Supermn",
+      "Switch And GO",
+      "Switch GO"
     ],
     "rpo": [
       "Army Bronco",
@@ -147,6 +219,8 @@
     "Away Switch",
     "Axle Stab",
     "Horns Return",
-    "Ireland Backside"
+    "Ireland Backside",
+    "Acknowledge ME 1",
+    "Denver"
   ]
 }

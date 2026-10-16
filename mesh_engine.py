@@ -300,6 +300,25 @@ def load_scout_opponent_defense() -> pd.DataFrame:
     return load_scout("opponent_defense")
 
 
+def _booth_front_for_opponent(value, opponent: str | None) -> str:
+    """Map a film front to the booth tag the tagger should press."""
+    opp = str(opponent or "").strip().lower()
+    s = str(value or "").strip()
+    if not s or s.lower() in {"nan", "none", "unknown"}:
+        return ""
+    if opp in _odd_scheme_opponents() and re.fullmatch(r"\d+(?:\.0+)?", s):
+        return "Odd"
+    if opp in _stack_scheme_opponents() and (
+        re.fullmatch(r"\d+(?:\.0+)?", s)
+        or re.fullmatch(r"\d+(?:\.0+)?\s*tite", s, flags=re.I)
+    ):
+        return "3-3 Stack"
+    tagged = booth_front_tag(s, mode="even_42")
+    if tagged == "3-3 stack":
+        return "3-3 Stack"
+    return tagged.title() if tagged else s
+
+
 def scout_favorite_looks(
     opponent: str | None,
     *,
@@ -308,7 +327,8 @@ def scout_favorite_looks(
     """
     Most-used fronts / coverages vs tonight's opponent (scout opponent_defense).
 
-    Used to keep tagger chips short — favorites only.
+    Fronts are booth tags for the tagger (Odd / Even / Bear / 3-3 Stack).
+    Coverages stay as scouted (4, 0, Cloud, …).
     """
     empty: dict[str, list[str]] = {"fronts": [], "coverages": []}
     opp = str(opponent or "").strip()
@@ -320,9 +340,185 @@ def scout_favorite_looks(
         return empty
     if df is None or getattr(df, "empty", True):
         return empty
-    fronts = [r["name"] for r in _top_counts(df["def_front"], n=n) if r.get("name")]
+    if "def_front" in df.columns:
+        booth_fronts = df["def_front"].map(
+            lambda v: _booth_front_for_opponent(v, opp)
+        )
+        fronts = [r["name"] for r in _top_counts(booth_fronts, n=n) if r.get("name")]
+    else:
+        fronts = []
     covs = [r["name"] for r in _top_counts(df["coverage"], n=n) if r.get("name")]
     return {"fronts": fronts, "coverages": covs}
+
+
+def scout_situation_expect(
+    opponent: str | None,
+    down: int,
+    distance_bucket: str,
+    field_zone: str,
+    *,
+    scout_df: pd.DataFrame | None = None,
+) -> dict:
+    """
+    Most common defensive look for this booth situation.
+
+    Film front keeps Hudl numbers (54 / 44). booth_front is what the tagger
+    should press (Odd for Leonard / Bells). Coverage and blitz % from scout.
+    """
+    empty = {
+        "plays": 0,
+        "scope": "none",
+        "film_front": None,
+        "booth_front": None,
+        "front_pct": None,
+        "coverage": None,
+        "coverage_pct": None,
+        "blitz_pct": None,
+        "blitz_yes": 0,
+        "blitz_n": 0,
+        "blitz_type": None,
+        "blitz_type_pct": None,
+        "summary": "",
+        "sentence": "",
+    }
+    opp = str(opponent or "").strip()
+    if scout_df is None:
+        if not opp:
+            return empty
+        try:
+            scout_df = load_scout("opponent_defense", opponent=opp)
+        except Exception:
+            return empty
+    if scout_df is None or getattr(scout_df, "empty", True):
+        return empty
+
+    matched, scope = _broaden(scout_df, int(down), str(distance_bucket), str(field_zone))
+    if matched.empty:
+        return empty
+
+    n_all = int(len(matched))
+    fronts = (
+        _top_counts(matched["def_front"], n=3)
+        if "def_front" in matched.columns
+        else []
+    )
+    covs = (
+        _top_counts(matched["coverage"], n=3)
+        if "coverage" in matched.columns
+        else []
+    )
+    film_front = fronts[0]["name"] if fronts else None
+    coverage = covs[0]["name"] if covs else None
+    booth_front = (
+        _booth_front_for_opponent(film_front, opp) if film_front else None
+    )
+    front_pct = (
+        round(100.0 * int(fronts[0]["plays"]) / n_all) if fronts and n_all else None
+    )
+    coverage_pct = (
+        round(100.0 * int(covs[0]["plays"]) / n_all) if covs and n_all else None
+    )
+
+    blitz_yes = 0
+    blitz_n = n_all
+    blitz_pct = None
+    blitz_type = None
+    blitz_type_pct = None
+    if "blitz" in matched.columns and blitz_n:
+        raw = matched["blitz"].fillna("").astype(str).str.strip()
+        low = raw.str.lower()
+        # Blank / No = no pressure. Yes or a named package = blitz.
+        is_blitz = raw.ne("") & ~low.isin({"nan", "none", "unknown", "no", "n", "off"})
+        blitz_yes = int(is_blitz.sum())
+        blitz_pct = round(100.0 * blitz_yes / blitz_n)
+        # Most common named package (skip bare Yes)
+        named = is_blitz & ~low.isin({"yes", "y"})
+        pkgs = raw[named]
+        if not pkgs.empty:
+            top_pkg = pkgs.value_counts().index[0]
+            top_n = int((pkgs == top_pkg).sum())
+            blitz_type = str(top_pkg)
+            # Share of all snaps in this situation (same base as other %)
+            blitz_type_pct = round(100.0 * top_n / blitz_n)
+
+    bits: list[str] = []
+    if film_front:
+        front_bit = (
+            f"{film_front} → tag {booth_front}"
+            if booth_front and booth_front.lower() != str(film_front).lower()
+            else str(film_front)
+        )
+        if front_pct is not None:
+            front_bit = f"{front_bit} {front_pct}%"
+        bits.append(front_bit)
+    if coverage:
+        cov_disp = str(coverage)
+        if re.fullmatch(r"\d+", cov_disp):
+            cov_disp = f"Cover {cov_disp}"
+        if coverage_pct is not None:
+            cov_disp = f"{cov_disp} {coverage_pct}%"
+        bits.append(cov_disp)
+    if blitz_pct is not None:
+        if blitz_type:
+            bits.append(f"Blitz {blitz_pct}% ({blitz_type})")
+        else:
+            bits.append(f"Blitz {blitz_pct}%")
+    summary = " · ".join(bits) if bits else ""
+
+    # Coach-facing sentence for Live Track Main — each look has its own %
+    parts: list[str] = []
+    if film_front:
+        if booth_front and booth_front.lower() != str(film_front).lower():
+            front_lbl = f"{film_front} (tag {booth_front})"
+        else:
+            front_lbl = str(film_front)
+        if front_pct is not None:
+            parts.append(f"{front_lbl} front {front_pct}% of the time")
+        else:
+            parts.append(f"{front_lbl} front")
+    if coverage:
+        cov_lbl = str(coverage)
+        if re.fullmatch(r"\d+", cov_lbl):
+            cov_lbl = f"Cover {cov_lbl}"
+        if coverage_pct is not None:
+            parts.append(f"{cov_lbl} {coverage_pct}% of the time")
+        else:
+            parts.append(cov_lbl)
+    if blitz_pct is not None:
+        if blitz_type and blitz_type_pct is not None:
+            parts.append(
+                f"blitz {blitz_pct}% of the time "
+                f"(most {blitz_type} {blitz_type_pct}%)"
+            )
+        elif blitz_type:
+            parts.append(f"blitz {blitz_pct}% of the time (most {blitz_type})")
+        else:
+            parts.append(f"blitz {blitz_pct}% of the time")
+    if not parts:
+        sentence = ""
+    elif len(parts) == 1:
+        sentence = f"Defense runs {parts[0]}"
+    elif len(parts) == 2:
+        sentence = f"Defense runs {parts[0]}, and {parts[1]}"
+    else:
+        sentence = "Defense runs " + ", ".join(parts[:-1]) + f", and {parts[-1]}"
+
+    return {
+        "plays": n_all,
+        "scope": scope,
+        "film_front": film_front,
+        "booth_front": booth_front,
+        "front_pct": front_pct,
+        "coverage": coverage,
+        "coverage_pct": coverage_pct,
+        "blitz_pct": blitz_pct,
+        "blitz_yes": blitz_yes,
+        "blitz_n": blitz_n,
+        "blitz_type": blitz_type,
+        "blitz_type_pct": blitz_type_pct,
+        "summary": summary,
+        "sentence": sentence,
+    }
 
 
 # --- Scout matchup report (upload × our EPA) ---------------------------------
@@ -438,7 +634,7 @@ def _stack_scheme_opponents() -> set[str]:
 
 def _odd_scheme_opponents() -> set[str]:
     """Opponents whose Hudl numbered fronts are an Odd front, not 4-2 Even."""
-    return {"bells"}
+    return {"bells", "leonard"}
 
 
 def _remap_numbered_fronts_to_stack(scout: pd.DataFrame) -> pd.DataFrame:
@@ -1331,11 +1527,6 @@ def build_scout_matchup_report(
             "Stack scheme: Hudl numbered fronts bucketed to **3-3 Stack** "
             "(Odd-family EPA). Film numbers stay in scout front detail."
         )
-    elif odd_scheme:
-        notes.append(
-            "Odd scheme: Hudl numbered fronts (44 / 54 / 45 / 55) bucketed to **Odd** "
-            "for booth EPA. Plan coverages are **Cover 2** and **Cover 4**."
-        )
     # Coverage tags are sparse in recent seasons — fall back for cov EPA (all-time)
     our_cov_primary = our_primary
     our_cov_all = our_all
@@ -1408,6 +1599,8 @@ def build_scout_matchup_report(
                     or re.fullmatch(r"\d+\s*tite", name, flags=re.I)
                 ):
                     booth = "3-3 stack"
+                elif odd_scheme and re.fullmatch(r"\d+", name):
+                    booth = "odd"
                 else:
                     booth = booth_front_tag(name, mode="even_42")
                 booth_disp = (
@@ -1523,6 +1716,18 @@ def build_scout_matchup_report(
 
     top_f = fronts[0]["look"] if fronts else "—"
     top_c = coverages[0]["look"] if coverages else "—"
+    if odd_scheme:
+        plan_covs = [
+            str(r.get("look") or "").strip()
+            for r in coverages
+            if str(r.get("look") or "").strip()
+            and str(r.get("look") or "").strip().lower() not in {"nan", "none", "unknown"}
+        ][:3]
+        cov_txt = " · ".join(f"**{c}**" for c in plan_covs) if plan_covs else "scout film rates"
+        notes.append(
+            "Odd scheme: Hudl numbered fronts (44 / 54 / 45 / 55) bucketed to **Odd** "
+            f"for booth EPA. Plan coverages from scout: {cov_txt}."
+        )
     if mode == "even_42" and not stack_scheme and not odd_scheme:
         notes.append(
             "Booth mode: 4-2 — numbered scout fronts mapped to Even for EPA match "
