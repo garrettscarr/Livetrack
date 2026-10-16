@@ -319,6 +319,23 @@ def _booth_front_for_opponent(value, opponent: str | None) -> str:
     return tagged.title() if tagged else s
 
 
+def _classify_blitz_lane(package: str | None) -> str:
+    """
+    Booth blitz lane from a Hudl package name.
+
+    STAB / SMOKE → outside. Everything else named → inside.
+    CROSS is called out separately (protection change).
+    """
+    s = str(package or "").strip().upper()
+    if not s or s in {"NAN", "NONE", "UNKNOWN", "NO", "N", "OFF", "YES", "Y"}:
+        return ""
+    if re.search(r"\bCROSS\b", s):
+        return "cross"
+    if re.search(r"\bSTAB\b", s) or re.search(r"\bSMOKE\b", s):
+        return "outside"
+    return "inside"
+
+
 def scout_favorite_looks(
     opponent: str | None,
     *,
@@ -378,6 +395,11 @@ def scout_situation_expect(
         "blitz_n": 0,
         "blitz_type": None,
         "blitz_type_pct": None,
+        "blitz_lane": None,
+        "outside_pct": None,
+        "inside_pct": None,
+        "cross_pct": None,
+        "cross_flag": False,
         "summary": "",
         "sentence": "",
     }
@@ -424,6 +446,11 @@ def scout_situation_expect(
     blitz_pct = None
     blitz_type = None
     blitz_type_pct = None
+    blitz_lane = None
+    outside_pct = None
+    inside_pct = None
+    cross_pct = None
+    cross_flag = False
     if "blitz" in matched.columns and blitz_n:
         raw = matched["blitz"].fillna("").astype(str).str.strip()
         low = raw.str.lower()
@@ -434,12 +461,19 @@ def scout_situation_expect(
         # Most common named package (skip bare Yes)
         named = is_blitz & ~low.isin({"yes", "y"})
         pkgs = raw[named]
+        lanes = pkgs.map(_classify_blitz_lane) if not pkgs.empty else pd.Series(dtype=str)
         if not pkgs.empty:
             top_pkg = pkgs.value_counts().index[0]
             top_n = int((pkgs == top_pkg).sum())
             blitz_type = str(top_pkg)
-            # Share of all snaps in this situation (same base as other %)
             blitz_type_pct = round(100.0 * top_n / blitz_n)
+            blitz_lane = _classify_blitz_lane(blitz_type) or None
+            outside_pct = round(100.0 * int((lanes == "outside").sum()) / blitz_n)
+            inside_pct = round(100.0 * int((lanes == "inside").sum()) / blitz_n)
+            cross_n = int((lanes == "cross").sum())
+            cross_pct = round(100.0 * cross_n / blitz_n)
+            # Flag when CROSS is the top named package (protection change)
+            cross_flag = blitz_lane == "cross"
 
     bits: list[str] = []
     if film_front:
@@ -459,10 +493,19 @@ def scout_situation_expect(
             cov_disp = f"{cov_disp} {coverage_pct}%"
         bits.append(cov_disp)
     if blitz_pct is not None:
+        blitz_bit = f"Blitz {blitz_pct}%"
+        lane_bits: list[str] = []
+        if outside_pct is not None:
+            lane_bits.append(f"out {outside_pct}%")
+        if inside_pct is not None:
+            lane_bits.append(f"in {inside_pct}%")
         if blitz_type:
-            bits.append(f"Blitz {blitz_pct}% ({blitz_type})")
-        else:
-            bits.append(f"Blitz {blitz_pct}%")
+            lane_bits.append(str(blitz_type))
+        if cross_flag:
+            lane_bits.append("CROSS · protect")
+        if lane_bits:
+            blitz_bit = f"{blitz_bit} ({' · '.join(lane_bits)})"
+        bits.append(blitz_bit)
     summary = " · ".join(bits) if bits else ""
 
     # Coach-facing sentence for Live Track Main — each look has its own %
@@ -485,15 +528,30 @@ def scout_situation_expect(
         else:
             parts.append(cov_lbl)
     if blitz_pct is not None:
-        if blitz_type and blitz_type_pct is not None:
-            parts.append(
-                f"blitz {blitz_pct}% of the time "
-                f"(most {blitz_type} {blitz_type_pct}%)"
+        detail: list[str] = []
+        if outside_pct is not None or inside_pct is not None:
+            detail.append(
+                f"outside {outside_pct if outside_pct is not None else 0}% · "
+                f"inside {inside_pct if inside_pct is not None else 0}%"
             )
-        elif blitz_type:
-            parts.append(f"blitz {blitz_pct}% of the time (most {blitz_type})")
-        else:
-            parts.append(f"blitz {blitz_pct}% of the time")
+        if blitz_type and blitz_type_pct is not None:
+            lane_word = {
+                "outside": "outside",
+                "inside": "inside",
+                "cross": "CROSS",
+            }.get(str(blitz_lane or ""), "")
+            if lane_word:
+                detail.append(f"most {blitz_type} ({lane_word}) {blitz_type_pct}%")
+            else:
+                detail.append(f"most {blitz_type} {blitz_type_pct}%")
+        blitz_part = f"blitz {blitz_pct}% of the time"
+        if detail:
+            blitz_part = f"{blitz_part} ({'; '.join(detail)})"
+        if cross_flag:
+            blitz_part = (
+                f"{blitz_part} — CROSS is the top pressure · protection change"
+            )
+        parts.append(blitz_part)
     if not parts:
         sentence = ""
     elif len(parts) == 1:
@@ -516,6 +574,11 @@ def scout_situation_expect(
         "blitz_n": blitz_n,
         "blitz_type": blitz_type,
         "blitz_type_pct": blitz_type_pct,
+        "blitz_lane": blitz_lane,
+        "outside_pct": outside_pct,
+        "inside_pct": inside_pct,
+        "cross_pct": cross_pct,
+        "cross_flag": cross_flag,
         "summary": summary,
         "sentence": sentence,
     }
