@@ -2791,31 +2791,38 @@ def analyze_live_coverage(log_df: pd.DataFrame, unit: str | None = None) -> dict
 
 def _load_ep_table_from_season() -> dict:
     """EP lookup from season EPA table (avg ep_before by situation)."""
-    from step3_epa import DEFAULT_EP, situation_key
+    from step3_epa import DEFAULT_EP, build_ep_table, situation_key
 
+    # The season model learns from offense + defense snaps; read both back.
     df = load_table(
-        "SELECT field_zone, down, distance_bucket, AVG(ep_before) AS ep "
-        "FROM offense_plays_epa GROUP BY field_zone, down, distance_bucket"
+        "SELECT field_zone, down, distance_bucket, AVG(ep_before) AS ep FROM ("
+        " SELECT field_zone, down, distance_bucket, ep_before FROM offense_plays_epa"
+        " UNION ALL"
+        " SELECT field_zone, down, distance_bucket, ep_before FROM defense_plays_epa"
+        ") GROUP BY field_zone, down, distance_bucket"
     )
-    table: dict = {}
-    if not df.empty:
-        for _, row in df.iterrows():
-            try:
-                key = situation_key(
-                    str(row["field_zone"]),
-                    int(row["down"]),
-                    str(row["distance_bucket"]),
-                )
-                table[key] = float(row["ep"])
-            except (TypeError, ValueError):
-                continue
-    if not table:
-        # Priors if DB empty
-        from step3_epa import build_ep_table
-
+    if df is None or df.empty:
+        df = load_table(
+            "SELECT field_zone, down, distance_bucket, AVG(ep_before) AS ep "
+            "FROM offense_plays_epa GROUP BY field_zone, down, distance_bucket"
+        )
+    if df is None or df.empty:
         season = load_table("SELECT * FROM offense_plays")
         if not season.empty:
             return build_ep_table(season)
+    # Same priors the season model starts from — states never seen in the data
+    # (e.g. 4th & long backed up after a 3rd-down sack) keep those, not DEFAULT_EP.
+    table: dict = dict(build_ep_table(pd.DataFrame(), iterations=0))
+    for _, row in (df if df is not None else pd.DataFrame()).iterrows():
+        try:
+            key = situation_key(
+                str(row["field_zone"]),
+                int(row["down"]),
+                str(row["distance_bucket"]),
+            )
+            table[key] = float(row["ep"])
+        except (TypeError, ValueError):
+            continue
     return table
 
 
@@ -2853,14 +2860,15 @@ def _estimate_live_play_epa(row: pd.Series, ep_table: dict) -> float:
 
     if result == "TD":
         return round(TD_POINTS + KICKOFF_EP_AFTER - ep_before, 3)
-    if result == "Turnover":
-        ep_after = -lookup_ep(ep_table, "midfield", 1, "long") if ep_table else -DEFAULT_EP
-        return round(ep_after - ep_before, 3)
     if result == "Punt":
         ep_after = (
             -lookup_ep(ep_table, "own_territory", 1, "long") if ep_table else -DEFAULT_EP
         )
         return round(ep_after - ep_before, 3)
+
+    # Same next-state rules as the season EPA (step3_epa.after_play_state) so halftime
+    # numbers line up with the season reports. Booth ball spot beats the zone midpoint.
+    from step3_epa import after_play_state
 
     zone_fp = {
         "backed_up": 10.0,
@@ -2869,32 +2877,32 @@ def _estimate_live_play_epa(row: pd.Series, ep_table: dict) -> float:
         "opp_territory": 70.0,
         "red_zone": 90.0,
     }
-    fp = max(0.0, min(99.0, zone_fp.get(zone, 50.0) + yards))
-    new_zone = fp_to_zone(fp)
-
-    if result in {"Incomplete", "Penalty"} or (result == "No gain" and yards <= 0):
-        new_down = down + 1
-        new_dist = dist_y
-    elif yards >= dist_y or result == "Gain" and yards >= dist_y:
-        new_down = 1
-        new_dist = min(10.0, 100.0 - fp)
+    try:
+        fp = float(row.get("ball_yard"))
+        if pd.isna(fp):
+            raise ValueError
+    except (TypeError, ValueError):
+        fp = zone_fp.get(zone, 50.0)
+    state = pd.Series({
+        "field_position": fp,
+        "down": down,
+        "distance": dist_y,
+        "distance_bucket": dist_bucket,
+        "yards_gained": yards,
+        "result": result,
+        "is_touchdown": False,
+        "is_turnover": result == "Turnover",
+        "is_def_td": False,
+        "is_incomplete": result == "Incomplete",
+    })
+    after, points, turnover = after_play_state(state)
+    if after is None:
+        ep_after = KICKOFF_EP_AFTER
+    elif turnover:
+        ep_after = -lookup_ep(ep_table, after["field_zone"], after["down"], after["distance_bucket"]) if ep_table else -DEFAULT_EP
     else:
-        new_down = down + 1
-        new_dist = max(0.0, dist_y - yards)
-
-    if new_down > 4:
-        opp_zone = fp_to_zone(100.0 - fp)
-        ep_after = -lookup_ep(ep_table, opp_zone, 1, "medium") if ep_table else -DEFAULT_EP
-        return round(ep_after - ep_before, 3)
-
-    if new_dist <= 3:
-        new_bucket = "short"
-    elif new_dist <= 6:
-        new_bucket = "medium"
-    else:
-        new_bucket = "long"
-    ep_after = lookup_ep(ep_table, new_zone, int(new_down), new_bucket) if ep_table else DEFAULT_EP
-    return round(ep_after - ep_before, 3)
+        ep_after = lookup_ep(ep_table, after["field_zone"], after["down"], after["distance_bucket"]) if ep_table else DEFAULT_EP
+    return round(points + ep_after - ep_before, 3)
 
 
 def live_half_xp(log_df: pd.DataFrame, unit: str = "Offense") -> dict:
@@ -3902,6 +3910,181 @@ def _analyze_formation_combos(half1: pd.DataFrame, *, unit: str = "Offense") -> 
     return out
 
 
+# Halftime essentials — situation buckets coaches read at the half (red zone overlaps).
+_HT_SITUATIONS: tuple[tuple[str, int | None, tuple[str, ...] | None, bool], ...] = (
+    ("1st down", 1, None, False),
+    ("2nd & 7+", 2, ("long",), False),
+    ("2nd & 1–6", 2, ("short", "medium"), False),
+    ("3rd & 7+", 3, ("long",), False),
+    ("3rd & 1–6", 3, ("short", "medium"), False),
+    ("4th down", 4, None, False),
+    ("Red zone", None, None, True),
+)
+
+
+def _ht_situation_mask(df: pd.DataFrame, down, buckets, red_zone: bool, dist_col: str) -> pd.Series:
+    mask = pd.Series(True, index=df.index)
+    if red_zone:
+        zone = df["field_zone"] if "field_zone" in df.columns else pd.Series("", index=df.index)
+        return zone.astype(str).str.lower() == "red_zone"
+    if down is not None and "down" in df.columns:
+        mask &= pd.to_numeric(df["down"], errors="coerce") == down
+    if buckets and dist_col in df.columns:
+        mask &= df[dist_col].astype(str).str.strip().str.lower().isin(buckets)
+    return mask
+
+
+def _ht_look_summary(df: pd.DataFrame, opponent: str | None, *, blank_blitz_is_no: bool = False) -> dict:
+    """
+    Front / coverage / blitz read for a slice of defensive snaps.
+
+    Booth logs: only snaps with a blitz answer count. Hudl scout film: a blank
+    BLITZ cell means no blitz (blank_blitz_is_no=True).
+    """
+    from tag_normalize import blitz_is_pressure, blitz_lane, blitz_tagged
+
+    out = {"n": int(len(df)), "front": None, "front_pct": None, "coverage": None,
+           "coverage_pct": None, "blitz_n": 0, "blitz_pct": None, "outside_pct": None,
+           "inside_pct": None, "cross_pct": None, "top_pressure": None}
+    if df is None or df.empty:
+        return out
+    if "def_front" in df.columns:
+        fronts = df["def_front"].map(lambda v: _booth_front_for_opponent(v, opponent))
+        fronts = fronts[fronts.astype(str).str.len() > 0]
+        if len(fronts):
+            vc = fronts.value_counts()
+            out["front"], out["front_pct"] = str(vc.index[0]), round(100.0 * vc.iloc[0] / len(fronts))
+    if "coverage" in df.columns:
+        covs = df["coverage"].map(_clean_tag)
+        covs = covs[covs.astype(str).str.len() > 0]
+        if len(covs):
+            vc = covs.astype(str).value_counts()
+            out["coverage"], out["coverage_pct"] = str(vc.index[0]), round(100.0 * vc.iloc[0] / len(covs))
+    if "blitz" in df.columns:
+        tagged = df["blitz"] if blank_blitz_is_no else df["blitz"][df["blitz"].map(blitz_tagged)]
+        out["blitz_n"] = int(len(tagged))
+        if len(tagged):
+            pressure = tagged[tagged.map(blitz_is_pressure)]
+            out["blitz_pct"] = round(100.0 * len(pressure) / len(tagged))
+            lanes = pressure.map(blitz_lane)
+            lanes = lanes[lanes != ""]
+            if len(lanes):
+                for lane in ("outside", "inside", "cross"):
+                    out[f"{lane}_pct"] = round(100.0 * int((lanes == lane).sum()) / len(lanes))
+                named = pressure[~pressure.astype(str).str.lower().isin({"yes", "y"})]
+                if len(named):
+                    out["top_pressure"] = str(named.astype(str).value_counts().index[0])
+    return out
+
+
+def _ht_perf_rows(df: pd.DataFrame, col: str, *, min_plays: int, opponent: str | None = None) -> list[dict]:
+    """Snaps / success / yards / EPA per value of col, best EPA first."""
+    rows: list[dict] = []
+    if df is None or df.empty or col not in df.columns:
+        return rows
+    for val, grp in df.groupby(df[col].map(_clean_tag)):
+        name = str(val).strip()
+        if not name or len(grp) < min_plays:
+            continue
+        yds = pd.to_numeric(grp["yards_gained"], errors="coerce") if "yards_gained" in grp.columns else pd.Series(dtype=float)
+        ptype = grp["play_type"].astype(str).str.lower() if "play_type" in grp.columns else pd.Series("", index=grp.index)
+        typed = ptype[ptype.isin(["run", "pass"])]
+        rows.append({
+            "label": name,
+            "plays": int(len(grp)),
+            "epa": round(float(grp["_epa"].mean()), 3),
+            "success_rate": round(float(grp["_succ"].mean()), 3),
+            "avg_yards": round(float(yds.mean()), 1) if yds.notna().any() else None,
+            "run_pct": round(100.0 * float((typed == "run").mean())) if len(typed) else None,
+            "look": _ht_look_summary(grp, opponent),
+        })
+    rows.sort(key=lambda r: (-r["epa"], -r["success_rate"], -r["plays"]))
+    return rows
+
+
+def build_halftime_essentials(
+    half1: pd.DataFrame,
+    opponent: str,
+    *,
+    min_plays: int = 2,
+    scout_df: pd.DataFrame | None = None,
+) -> dict:
+    """
+    The four things a coach needs at the half, offense side:
+      1. their looks (front / coverage / blitz + lanes), tonight vs scout
+      2. situations (down & distance, red zone): their look + how we did
+      3. formations working / not
+      4. plays working / not
+    """
+    logs = _offense_logs(half1)
+    empty = {"plays": 0, "their_looks": {}, "situations": [], "formations": {"working": [], "not_working": []},
+             "plays_board": {"working": [], "not_working": []}, "min_plays": min_plays}
+    if logs.empty:
+        return empty
+    logs = logs.copy()
+    if "epa" in logs.columns and pd.to_numeric(logs["epa"], errors="coerce").notna().all():
+        logs["_epa"] = pd.to_numeric(logs["epa"], errors="coerce")
+    else:
+        ep_table = _load_ep_table_from_season()
+        logs["_epa"] = [_estimate_live_play_epa(r, ep_table) for _, r in logs.iterrows()]
+    logs["_succ"] = [int(_calc_play_success(r)) for _, r in logs.iterrows()]
+
+    if scout_df is None:
+        try:
+            scout_df = load_scout("opponent_defense", opponent=opponent)
+        except Exception:
+            scout_df = pd.DataFrame()
+    scout_df = scout_df if scout_df is not None else pd.DataFrame()
+
+    tonight = _ht_look_summary(logs, opponent)
+    scout = _ht_look_summary(scout_df, opponent, blank_blitz_is_no=True) if not scout_df.empty else None
+
+    situations: list[dict] = []
+    for label, down, buckets, rz in _HT_SITUATIONS:
+        grp = logs[_ht_situation_mask(logs, down, buckets, rz, "distance")]
+        if grp.empty:
+            continue
+        scout_grp = (
+            scout_df[_ht_situation_mask(scout_df, down, buckets, rz, "distance_bucket")]
+            if not scout_df.empty else pd.DataFrame()
+        )
+        calls = _ht_perf_rows(grp, "play_call", min_plays=1, opponent=opponent)
+        yds = pd.to_numeric(grp["yards_gained"], errors="coerce") if "yards_gained" in grp.columns else pd.Series(dtype=float)
+        ptype = grp["play_type"].astype(str).str.lower() if "play_type" in grp.columns else pd.Series("", index=grp.index)
+        typed = ptype[ptype.isin(["run", "pass"])]
+        situations.append({
+            "label": label,
+            "plays": int(len(grp)),
+            "epa": round(float(grp["_epa"].mean()), 3),
+            "success_rate": round(float(grp["_succ"].mean()), 3),
+            "avg_yards": round(float(yds.mean()), 1) if yds.notna().any() else None,
+            "run_pct": round(100.0 * float((typed == "run").mean())) if len(typed) else None,
+            "look": _ht_look_summary(grp, opponent),
+            "scout_look": (
+                _ht_look_summary(scout_grp, opponent, blank_blitz_is_no=True) if len(scout_grp) else None
+            ),
+            "best_call": calls[0] if calls and calls[0]["epa"] > 0 else None,
+            "worst_call": calls[-1] if len(calls) > 1 and calls[-1]["epa"] < 0 else None,
+        })
+
+    def _split(rows: list[dict]) -> dict:
+        return {
+            "working": [r for r in rows if r["epa"] > 0.05][:6],
+            "not_working": sorted([r for r in rows if r["epa"] < -0.05], key=lambda r: r["epa"])[:6],
+        }
+
+    return {
+        "plays": int(len(logs)),
+        "epa": round(float(logs["_epa"].mean()), 3),
+        "success_rate": round(float(logs["_succ"].mean()), 3),
+        "their_looks": {"tonight": tonight, "scout": scout},
+        "situations": situations,
+        "formations": _split(_ht_perf_rows(logs, "formation", min_plays=min_plays, opponent=opponent)),
+        "plays_board": _split(_ht_perf_rows(logs, "play_call", min_plays=min_plays, opponent=opponent)),
+        "min_plays": min_plays,
+    }
+
+
 def build_halftime_report(
     opponent: str,
     live_logs: pd.DataFrame,
@@ -4304,8 +4487,9 @@ def build_halftime_report(
     report = {
         "opponent": opponent,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
-        "version": 11,
+        "version": 12,
         "summary": summary,
+        "essentials": build_halftime_essentials(half1, opponent),
         "formation_defense": form_defense_summary,
         "formation_combos": form_combos_summary,
         "working": {
@@ -4379,6 +4563,56 @@ def build_halftime_report(
     return report
 
 
+def _format_essentials_markdown(ess: dict) -> list[str]:
+    """Their looks · situations · formations / plays working and not — printable."""
+    if not ess or not int(ess.get("plays") or 0):
+        return []
+
+    def look_txt(look: dict | None) -> str:
+        if not look or not int(look.get("n") or 0):
+            return "—"
+        bits = []
+        if look.get("front"):
+            bits.append(f"{look['front']} {int(look.get('front_pct') or 0)}%")
+        if look.get("coverage"):
+            cov = str(look["coverage"])
+            bits.append(f"{'Cover ' + cov if cov.isdigit() else cov} {int(look.get('coverage_pct') or 0)}%")
+        if look.get("blitz_pct") is not None:
+            lanes = [f"{lbl} {int(look[k])}" for k, lbl in
+                     (("outside_pct", "out"), ("inside_pct", "in"), ("cross_pct", "cross")) if look.get(k)]
+            bits.append(f"blitz {int(look['blitz_pct'])}%" + (f" ({' / '.join(lanes)})" if lanes else ""))
+        return " · ".join(bits) or "—"
+
+    out = ["", "## Their looks"]
+    looks = ess.get("their_looks") or {}
+    out.append(f"- Tonight: {look_txt(looks.get('tonight'))}")
+    if looks.get("scout"):
+        out.append(f"- Scout film: {look_txt(looks.get('scout'))}")
+    if ess.get("situations"):
+        out += ["", "## Situations", "| Situation | Snaps | Their look | EPA | Success | Best call | Avoid |",
+                "|---|---:|---|---:|---:|---|---|"]
+        def call_txt(call: dict | None) -> str:
+            return f"{call['label']} ({float(call['epa']):+.2f}, n={call['plays']})" if call else "—"
+
+        for s in ess["situations"]:
+            success = round(100 * float(s.get("success_rate") or 0))
+            out.append(
+                f"| {s['label']} | {s['plays']} | {look_txt(s.get('look'))} | {float(s['epa']):+.2f} | "
+                f"{success}% | {call_txt(s.get('best_call'))} | {call_txt(s.get('worst_call'))} |"
+            )
+    for title, key in (("Formations", "formations"), ("Plays", "plays_board")):
+        board = ess.get(key) or {}
+        if not (board.get("working") or board.get("not_working")):
+            continue
+        out += ["", f"## {title}"]
+        for label, rows in (("Working", board.get("working") or []), ("Not working", board.get("not_working") or [])):
+            if rows:
+                out.append(f"- **{label}:** " + ", ".join(
+                    f"{r['label']} {float(r['epa']):+.2f} (n={r['plays']})" for r in rows
+                ))
+    return out
+
+
 def format_halftime_report_markdown(report: dict) -> str:
     """Short printable — blitz/coverage tendencies, formations, combos, xP, players."""
     opp = report.get("opponent", "Unknown")
@@ -4397,6 +4631,7 @@ def format_halftime_report_markdown(report: dict) -> str:
             f"- **xP:** actual {xp.get('actual_points', 0)} · "
             f"xPoints {xp.get('xpoints', 0)} · luck {luck:+.1f} ({verb} process)"
         )
+    lines.extend(_format_essentials_markdown(report.get("essentials") or {}))
 
     def _short_board(title: str, rows: list[dict], n: int = 3) -> None:
         if not rows:

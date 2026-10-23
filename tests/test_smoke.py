@@ -112,6 +112,74 @@ class TestBlitzLanes(unittest.TestCase):
         self.assertAlmostEqual(out["lanes"]["inside"]["pct"], 33.3)
 
 
+class TestHalftimeEssentials(unittest.TestCase):
+    def _logs(self):
+        import pandas as pd
+
+        rows = [
+            # down, bucket, yds-to-go, zone, ball, form, call, type, result, yards, front, cov, blitz
+            (1, "long", 10, "own_territory", 25, "Slot Dip", "Superman", "pass", "Gain", 27, "54", "Cover 4", "Outside"),
+            (1, "long", 10, "own_territory", 30, "Slot Dip", "Superman", "pass", "Gain", 22, "44", "Cover 4", "No"),
+            (1, "long", 10, "midfield", 45, "Hydra", "Horns", "run", "Gain", 1, "54", "Cover 4", "Inside"),
+            (2, "long", 9, "midfield", 46, "Hydra", "Horns", "run", "Gain", 0, "54", "Cover 0", "Inside"),
+            (3, "long", 13, "own_territory", 30, "Slot Trig", "Joker", "pass", "Sack / TFL", -13, "45", "Cover 4", "Cross"),
+            (3, "long", 8, "own_territory", 28, "Slot Trig", "Joker", "pass", "Incomplete", 0, "54", "Cover 4", "Cross"),
+        ]
+        cols = ["down", "distance", "distance_yards", "field_zone", "ball_yard", "formation", "play_call",
+                "play_type", "result", "yards_gained", "def_front", "coverage", "blitz"]
+        df = pd.DataFrame(rows, columns=cols)
+        df["unit"] = "Offense"
+        df["half"] = 1
+        return df
+
+    def test_four_sections(self):
+        import pandas as pd
+
+        from mesh_engine import build_halftime_essentials
+
+        scout = pd.DataFrame({
+            "down": [1, 1, 3], "distance_bucket": ["long", "long", "long"],
+            "field_zone": ["own_territory"] * 3, "def_front": ["54", "44", "54"],
+            "coverage": ["4", "4", "3"], "blitz": ["BANDIT STAB", "", "WILL BLAST"],
+        })
+        out = build_halftime_essentials(self._logs(), "Leonard", scout_df=scout)
+        looks = out["their_looks"]
+        self.assertEqual(looks["tonight"]["front"], "Odd")  # numbered → Odd for Leonard
+        self.assertEqual(looks["tonight"]["blitz_pct"], 83)  # 5 of 6 tagged snaps
+        self.assertEqual(looks["scout"]["blitz_pct"], 67)  # blank scout cell = no blitz
+        labels = [s["label"] for s in out["situations"]]
+        self.assertEqual(labels, ["1st down", "2nd & 7+", "3rd & 7+"])
+        third = out["situations"][2]
+        self.assertEqual(third["look"]["cross_pct"], 100)
+        self.assertLess(third["epa"], 0)
+        forms_up = [r["label"] for r in out["formations"]["working"]]
+        forms_dn = [r["label"] for r in out["formations"]["not_working"]]
+        self.assertIn("Slot Dip", forms_up)
+        self.assertIn("Slot Trig", forms_dn)
+        self.assertIn("Superman", [r["label"] for r in out["plays_board"]["working"]])
+        self.assertIn("Joker", [r["label"] for r in out["plays_board"]["not_working"]])
+
+    def test_live_epa_matches_season_model(self):
+        import pandas as pd
+
+        from mesh_engine import _estimate_live_play_epa, _load_ep_table_from_season
+        from step3_epa import after_play_state, lookup_ep
+
+        ep = _load_ep_table_from_season()
+        # 3rd & 13 sack from own 30: same next-state rules as the season EPA
+        row = pd.Series({"down": 3, "distance": "long", "distance_yards": 13, "field_zone": "own_territory",
+                         "ball_yard": 30, "result": "Sack / TFL", "yards_gained": -13})
+        state = pd.Series({"field_position": 30, "down": 3, "distance": 13, "distance_bucket": "long",
+                           "yards_gained": -13, "result": "Sack / TFL", "is_touchdown": False,
+                           "is_turnover": False, "is_def_td": False, "is_incomplete": False})
+        after, pts, _ = after_play_state(state)
+        expected = pts + lookup_ep(ep, after["field_zone"], after["down"], after["distance_bucket"]) - lookup_ep(
+            ep, "own_territory", 3, "long"
+        )
+        self.assertAlmostEqual(_estimate_live_play_epa(row, ep), round(expected, 3), places=3)
+        self.assertLess(_estimate_live_play_epa(row, ep), 0)
+
+
 class TestBoothInvites(unittest.TestCase):
     URL = "http://192.168.1.20:8501/?station=tag&focus=front,blitz"
 

@@ -18337,6 +18337,167 @@ def _ht_coach_script(report: dict) -> list[str]:
     return bullets[:5]
 
 
+def _ht_epa_html(v) -> str:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return "—"
+    color = "#1B7A3D" if x >= 0.1 else ("#B42318" if x <= -0.1 else "#5c6b62")
+    return f'<span style="color:{color};font-weight:800">{x:+.2f}</span>'
+
+
+def _ht_pct(v) -> str:
+    return "—" if v is None else f"{int(round(float(v) * 100 if float(v) <= 1 else float(v)))}%"
+
+
+def _ht_cov_label(c) -> str:
+    s = str(c or "").strip()
+    return f"Cover {s}" if s.isdigit() else (s or "—")
+
+
+def _ht_look_line(look: dict | None, *, short: bool = False) -> str:
+    """'Odd · Cover 4 75% · Blitz 60% (out 33 / in 33)' from a look summary."""
+    from html import escape
+
+    if not look or not int(look.get("n") or 0):
+        return "—"
+    bits: list[str] = []
+    if look.get("front") and not short:
+        bits.append(f"{escape(str(look['front']))} {int(look.get('front_pct') or 0)}%")
+    if look.get("coverage"):
+        bits.append(f"{escape(_ht_cov_label(look['coverage']))} {int(look.get('coverage_pct') or 0)}%")
+    if look.get("blitz_pct") is not None:
+        b = f"Blitz {int(look['blitz_pct'])}%"
+        lanes = [
+            f"{lbl} {int(look[k])}"
+            for k, lbl in (("outside_pct", "out"), ("inside_pct", "in"), ("cross_pct", "cross"))
+            if look.get(k)
+        ]
+        if lanes:
+            b += f" ({' / '.join(lanes)})"
+        bits.append(b)
+    return " · ".join(bits) if bits else "—"
+
+
+def _render_halftime_essentials(report: dict, *, opponent: str, live_logs: pd.DataFrame | None) -> None:
+    """Their looks · situations · formations working/not · plays working/not."""
+    from html import escape
+
+    ess = report.get("essentials")
+    if not ess and live_logs is not None and not live_logs.empty:
+        from mesh_engine import build_halftime_essentials, filter_live_logs
+
+        ess = build_halftime_essentials(filter_live_logs(live_logs, opponent=opponent, half=1), opponent)
+    if not ess or not int(ess.get("plays") or 0):
+        st.info("No offensive snaps logged in the 1st half yet.")
+        return
+
+    min_n = int(ess.get("min_plays") or 2)
+    st.caption(
+        f"{ess['plays']} offensive snaps · EPA {float(ess.get('epa') or 0):+.2f} / play · "
+        f"{_ht_pct(ess.get('success_rate'))} success · formations & plays need {min_n}+ snaps"
+    )
+
+    # 1 · Their looks
+    looks = ess.get("their_looks") or {}
+    tonight, scout = looks.get("tonight") or {}, looks.get("scout")
+    st.markdown('<div class="ht-sec">1 · Their looks</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    with c1:
+        st.markdown(f"**Tonight** ({int(tonight.get('n') or 0)} snaps)  \n{_ht_look_line(tonight)}", unsafe_allow_html=True)
+        if tonight.get("top_pressure"):
+            st.caption(f"Most common pressure: {tonight['top_pressure']}")
+    with c2:
+        if scout:
+            st.markdown(f"**Scout film** ({int(scout.get('n') or 0)} snaps)  \n{_ht_look_line(scout)}", unsafe_allow_html=True)
+            if scout.get("top_pressure"):
+                st.caption(f"Most common pressure: {scout['top_pressure']}")
+    lanes = {k: int(tonight.get(k) or 0) for k in ("outside_pct", "inside_pct", "cross_pct")}
+    if lanes["cross_pct"] and lanes["cross_pct"] >= max(lanes["outside_pct"], lanes["inside_pct"]):
+        st.error("CROSS is their top pressure tonight — protection change.")
+
+    # 2 · Situations
+    sits = ess.get("situations") or []
+    if sits:
+        st.markdown('<div class="ht-sec">2 · Situations</div>', unsafe_allow_html=True)
+        head = "".join(
+            f"<th style='text-align:{a};padding:6px 8px;border-bottom:2px solid #1B4332'>{h}</th>"
+            for h, a in (
+                ("Situation", "left"), ("Snaps", "right"), ("Their look tonight", "left"),
+                ("EPA", "right"), ("Success", "right"), ("Best call", "left"), ("Avoid", "left"),
+            )
+        )
+        body = []
+        for s in sits:
+            best = s.get("best_call") or {}
+            worst = s.get("worst_call") or {}
+            look = _ht_look_line(s.get("look"), short=True)
+            sc = s.get("scout_look")
+            if sc and sc.get("blitz_pct") is not None and (s.get("look") or {}).get("blitz_pct") is None:
+                look = f"<span style='color:#5c6b62'>scout: {_ht_look_line(sc, short=True)}</span>"
+            best_txt = (
+                f"{escape(best['label'])} ({_ht_epa_html(best['epa'])}, n={best['plays']})" if best else "—"
+            )
+            worst_txt = (
+                f"{escape(worst['label'])} ({_ht_epa_html(worst['epa'])}, n={worst['plays']})" if worst else "—"
+            )
+            cells = (
+                (f"<b>{escape(s['label'])}</b>", "left"), (str(s["plays"]), "right"), (look, "left"),
+                (_ht_epa_html(s["epa"]), "right"), (_ht_pct(s.get("success_rate")), "right"),
+                (best_txt, "left"), (worst_txt, "left"),
+            )
+            body.append(
+                "<tr>" + "".join(
+                    f"<td style='text-align:{a};padding:6px 8px;border-bottom:1px solid #E3E9E5;"
+                    f"{'min-width:210px;' if i == 2 else 'white-space:nowrap;' if i in (0, 1, 3, 4) else ''}'>{c}</td>"
+                    for i, (c, a) in enumerate(cells)
+                ) + "</tr>"
+            )
+        st.markdown(
+            "<div style='overflow-x:auto'><table style='width:100%;border-collapse:collapse;font-size:0.92rem'>"
+            f"<thead><tr>{head}</tr></thead><tbody>{''.join(body)}</tbody></table></div>",
+            unsafe_allow_html=True,
+        )
+
+    def _board(title: str, board: dict, noun: str) -> None:
+        working, cold = board.get("working") or [], board.get("not_working") or []
+        if not working and not cold:
+            return
+        st.markdown(f'<div class="ht-sec">{title}</div>', unsafe_allow_html=True)
+        left, right = st.columns(2)
+        for col, rows, label, border in (
+            (left, working, "Working", "#2D6A4F"),
+            (right, cold, "Not working", "#B42318"),
+        ):
+            with col:
+                st.markdown(f"**{label}**")
+                if not rows:
+                    st.caption(f"No {noun} here yet.")
+                for r in rows:
+                    yds = r.get("avg_yards")
+                    extra = []
+                    if yds is not None:
+                        extra.append(f"{float(yds):+.1f} yds")
+                    extra.append(f"{_ht_pct(r.get('success_rate'))} success")
+                    if r.get("run_pct") is not None:
+                        extra.append(f"{int(r['run_pct'])}% run")
+                    look = _ht_look_line(r.get("look"), short=True)
+                    st.markdown(
+                        f"<div style='border-left:4px solid {border};background:#F7FAF8;border-radius:6px;"
+                        f"padding:6px 10px;margin:0 0 6px 0'>"
+                        f"<div style='display:flex;justify-content:space-between'><b>{escape(r['label'])}</b>"
+                        f"<span>{_ht_epa_html(r['epa'])} EPA · {r['plays']} snaps</span></div>"
+                        f"<div style='font-size:0.85rem;color:#3d4a42'>{' · '.join(extra)}"
+                        + (f" · vs {look}" if look != "—" else "")
+                        + "</div></div>",
+                        unsafe_allow_html=True,
+                    )
+
+    # 3 · Formations, 4 · Plays
+    _board("3 · Formations", ess.get("formations") or {}, "formations")
+    _board("4 · Plays", ess.get("plays_board") or {}, "plays")
+
+
 def _render_halftime_coach_mode(
     report: dict,
     markdown: str,
@@ -18664,15 +18825,17 @@ def _render_halftime_report_body(
             "Primary: tonight's tagged 1st-half snaps. All-time EPA = ideas when sample is thin."
         )
 
-    coach_default = bool(st.session_state.get("ht_coach_mode", True))
     view = st.radio(
         "View",
-        ["Coach", "Full boards"],
+        ["Essentials", "Coach", "Full boards"],
         horizontal=True,
-        index=0 if coach_default else 1,
+        index=0,
         key=f"{key_prefix}_ht_view",
     )
     st.session_state.ht_coach_mode = view == "Coach"
+    if view == "Essentials":
+        _render_halftime_essentials(report, opponent=str(opp or ""), live_logs=live_logs)
+        return
     if st.session_state.ht_coach_mode:
         _render_halftime_coach_mode(
             report,
