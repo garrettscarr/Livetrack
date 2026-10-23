@@ -237,6 +237,25 @@ def merge_snap_values(existing: dict, incoming: dict) -> dict:
     return out
 
 
+def snap_patch(existing: dict, incoming: dict, merged: dict) -> dict:
+    """
+    Only the fields this save changes.
+
+    Two taggers save the same snap seconds apart from separate reads; writing the
+    whole merged row would put back the other tagger's field from a stale read.
+    """
+    patch: dict = {}
+    for key, val in (incoming or {}).items():
+        if val is None:
+            continue
+        if isinstance(val, str) and not val.strip() and str((existing or {}).get(key) or "").strip():
+            continue
+        patch[key] = merged.get(key, val)
+    if "film_pending" in merged:
+        patch["film_pending"] = merged["film_pending"]
+    return patch
+
+
 def upsert_live_snap(
     *,
     drive_id: int,
@@ -269,7 +288,8 @@ def upsert_live_snap(
     }
     if idx is not None and logs is not None and not logs.empty:
         row = logs.reset_index(drop=True).loc[idx].to_dict()
-        merged = merge_snap_values(row, {**base, **updates})
+        incoming = {**base, **updates}
+        merged = merge_snap_values(row, incoming)
         # Recompute film_pending from film fields if present
         front = str(merged.get("def_front") or "").strip()
         cov = str(merged.get("coverage") or "").strip()
@@ -278,7 +298,7 @@ def upsert_live_snap(
             merged["film_pending"] = "No"
         elif updates.get("film_pending") is not None:
             merged["film_pending"] = updates["film_pending"]
-        ok = update_at_fn(int(idx), merged)
+        ok = update_at_fn(int(idx), snap_patch(row, incoming, merged))
         return ok, int(idx), ("updated" if ok else "update failed")
 
     stub = merge_snap_values(base, updates)

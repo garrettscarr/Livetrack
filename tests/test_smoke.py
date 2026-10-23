@@ -36,6 +36,116 @@ class TestNormalize(unittest.TestCase):
         self.assertIn("axel", phrase_token_aliases())
 
 
+class TestTurnoverScoring(unittest.TestCase):
+    def test_pick_six_is_their_score(self):
+        import pandas as pd
+
+        from step2_clean import result_flags
+        from step3_epa import TD_POINTS, after_play_state
+
+        flags = result_flags("Interception, Def TD")
+        self.assertFalse(flags["is_touchdown"])
+        self.assertTrue(flags["is_turnover"])
+        self.assertTrue(flags["is_def_td"])
+        self.assertEqual(flags["points_scored"], 0)
+        row = pd.Series({
+            "field_position": 40, "down": 1, "distance": 10, "yards_gained": 52,
+            "result": "Interception, Def TD", "distance_bucket": "long", **flags,
+        })
+        after, points, turnover = after_play_state(row)
+        self.assertIsNone(after)
+        self.assertEqual(points, -TD_POINTS)
+        self.assertTrue(turnover)
+        self.assertTrue(result_flags("Complete, TD")["is_touchdown"])
+
+
+class TestBoothInvites(unittest.TestCase):
+    URL = "http://192.168.1.20:8501/?station=tag&focus=front,blitz"
+
+    def test_local_qr_png_needs_no_packages(self):
+        import struct
+
+        from qr_local import encode, qr_png
+
+        qr = encode(self.URL)
+        self.assertEqual(qr.size, qr.version * 4 + 17)
+        # Three finder patterns: dark 7x7 ring corners
+        for x, y in ((0, 0), (qr.size - 7, 0), (0, qr.size - 7)):
+            self.assertTrue(qr.modules[y][x] and qr.modules[y + 6][x + 6])
+            self.assertFalse(qr.modules[y + 1][x + 1])
+        png = qr_png(self.URL, scale=4, border=4)
+        self.assertTrue(png.startswith(b"\x89PNG\r\n\x1a\n"))
+        w, h = struct.unpack(">II", png[16:24])
+        self.assertEqual(w, (qr.size + 8) * 4)
+        self.assertEqual(w, h)
+
+    def test_local_qr_matches_reference_library(self):
+        try:
+            import qrcode
+            from qrcode.util import MODE_8BIT_BYTE, QRData
+        except Exception:
+            self.skipTest("qrcode not installed")
+        from qr_local import encode
+
+        for mask in range(8):
+            mine = encode(self.URL, ecl="M", mask=mask)
+            ref = qrcode.QRCode(
+                version=mine.version,
+                error_correction=qrcode.constants.ERROR_CORRECT_M,
+                border=0,
+                mask_pattern=mask,
+            )
+            ref.add_data(QRData(self.URL.encode(), mode=MODE_8BIT_BYTE))
+            ref.make(fit=False)
+            self.assertEqual([list(map(bool, r)) for r in ref.modules], mine.modules)
+
+    def test_two_tagger_packs(self):
+        from booth_stations import (
+            TAGGER_PACKS,
+            default_focuses_for_station,
+            normalize_focuses,
+            tagger_invite_url,
+        )
+
+        self.assertEqual([list(p["focuses"]) for p in TAGGER_PACKS],
+                         [["front", "blitz"], ["coverage", "ball"]])
+        # No focus in the link → full film so nothing goes untagged
+        self.assertEqual(default_focuses_for_station("tag"), ["front", "coverage", "blitz", "ball"])
+        self.assertEqual(normalize_focuses("coverage_ball"), ["coverage", "ball"])
+        self.assertTrue(
+            tagger_invite_url("192.168.1.20:8501", ["front", "blitz"]).endswith(
+                "/?station=tag&focus=front,blitz"
+            )
+        )
+
+    def test_parallel_taggers_keep_both_tags(self):
+        from booth_snaps import upsert_live_snap
+
+        rows = [{"opponent": "Leonard", "half": 1, "drive_id": 3, "play_n": 2,
+                 "unit": "Offense", "def_front": "", "coverage": "", "blitz": ""}]
+
+        def load():
+            import pandas as pd
+
+            return pd.DataFrame(rows)
+
+        stale = load()  # both taggers read before either saves
+
+        def update_at(i, patch):
+            rows[i].update(patch)
+            return True
+
+        upsert_live_snap(drive_id=3, play_n=2, updates={"def_front": "Odd", "blitz": "Yes"},
+                         opponent="Leonard", append_fn=rows.append, update_at_fn=update_at,
+                         load_fn=lambda: stale)
+        upsert_live_snap(drive_id=3, play_n=2, updates={"coverage": "4"},
+                         opponent="Leonard", append_fn=rows.append, update_at_fn=update_at,
+                         load_fn=lambda: stale)
+        self.assertEqual(rows[0]["def_front"], "Odd")
+        self.assertEqual(rows[0]["blitz"], "Yes")
+        self.assertEqual(rows[0]["coverage"], "4")
+
+
 class TestFileLock(unittest.TestCase):
     def test_lock_roundtrip(self):
         with tempfile.TemporaryDirectory() as td:

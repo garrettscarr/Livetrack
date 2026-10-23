@@ -58,6 +58,10 @@ def after_play_state(row: pd.Series) -> tuple[dict | None, float, bool]:
     if row["is_touchdown"]:
         return None, TD_POINTS, False
 
+    # Returned for a score by the defense (pick-six / scoop-and-score)
+    if row["is_turnover"] and bool(row.get("is_def_td") or False):
+        return None, -TD_POINTS, True
+
     if row["is_turnover"]:
         spot = max(0.0, min(100.0, fp + yards))
         opp_fp = 100.0 - spot

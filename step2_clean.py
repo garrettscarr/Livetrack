@@ -148,10 +148,14 @@ def load_opponents(season_label: str = "current") -> pd.DataFrame | None:
 
 def result_flags(result: str) -> dict:
     text = str(result).upper() if pd.notna(result) else ""
-    is_td = "TD" in text
+    # "Def TD" / pick-six: the team on defense for this snap scored.
+    is_def_td = bool(re.search(r"\bDEF(?:ENSIVE)?\s*TD\b|\bPICK[\s\-]*(?:6|SIX)\b", text))
+    is_td = "TD" in text and not is_def_td
+    is_turnover = is_def_td or any(x in text for x in ("INTERCEPTION", "FUMBLE", "INT"))
     return {
         "is_touchdown": is_td,
-        "is_turnover": any(x in text for x in ("INTERCEPTION", "FUMBLE", "INT")),
+        "is_turnover": is_turnover,
+        "is_def_td": is_def_td,
         "is_penalty": "PENALTY" in text,
         "is_incomplete": "INCOMPLETE" in text,
         "points_scored": 6 if is_td else 0,
@@ -263,7 +267,7 @@ def clean_side(
     ).astype(int)
 
     if df.empty:
-        for k in ["is_touchdown", "is_turnover", "is_penalty", "is_incomplete", "points_scored"]:
+        for k in ["is_touchdown", "is_turnover", "is_def_td", "is_penalty", "is_incomplete", "points_scored"]:
             df[k] = pd.Series(dtype=int if k == "points_scored" else bool)
     else:
         flags = df["result"].apply(result_flags).apply(pd.Series)
@@ -386,7 +390,7 @@ def clean_scout_file(
         + df["coverage"].fillna("Unknown").astype(str)
     )
     if df.empty:
-        for k in ["is_touchdown", "is_turnover", "is_penalty", "is_incomplete", "points_scored"]:
+        for k in ["is_touchdown", "is_turnover", "is_def_td", "is_penalty", "is_incomplete", "points_scored"]:
             df[k] = pd.Series(dtype=int if k == "points_scored" else bool)
     else:
         flags = df["result"].apply(result_flags).apply(pd.Series)

@@ -59,24 +59,40 @@ FILM_FOCUSES: frozenset[str] = frozenset(
     {FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_MOTION}
 )
 
-# Normal booth with 1 extra phone: film + ball carrier (Main logs the call)
+# Normal booth: 2 taggers, each one pre-snap + one post-snap job (Main logs the call)
 TAGGER_PACKS: tuple[dict, ...] = (
     {
-        "id": "film_ball",
-        "label": "Film + Ball",
-        "subtitle": "Front · Coverage · Blitz · ball carrier (1 tagger)",
-        "focuses": (FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_BALL),
+        "id": "front_blitz",
+        "label": "Tagger 1 · Front + Blitz",
+        "subtitle": "Pre-snap front · post-snap blitz",
+        "focuses": (FOCUS_FRONT, FOCUS_BLITZ),
         "slot": 1,
+    },
+    {
+        "id": "coverage_ball",
+        "label": "Tagger 2 · Coverage + Ball",
+        "subtitle": "Pre-snap coverage · post-snap ball carrier",
+        "focuses": (FOCUS_COVERAGE, FOCUS_BALL),
+        "slot": 2,
     },
 )
 
-# Optional 2nd helper phone — motion only
+# Backup when only one tagger shows up
+TAGGER_PACK_SOLO: dict = {
+    "id": "film_ball",
+    "label": "Only 1 tagger · Film + Ball",
+    "subtitle": "Front · Coverage · Blitz · ball carrier on one phone",
+    "focuses": (FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_BALL),
+    "slot": 0,
+}
+
+# Optional extra helper phone — motion only
 TAGGER_PACK_THIRD: dict = {
     "id": "motion_only",
-    "label": "Motion (2nd phone)",
-    "subtitle": "Post-snap motion only — if you add a second tagger",
+    "label": "Motion (extra phone)",
+    "subtitle": "Post-snap motion only — if a third helper is available",
     "focuses": (FOCUS_MOTION,),
-    "slot": 2,
+    "slot": 3,
 }
 
 TAGGER_JOBS: tuple[str, ...] = (
@@ -88,8 +104,8 @@ TAGGER_JOBS: tuple[str, ...] = (
 )
 
 TAGGER_SPLIT_HELP = (
-    "1 tagger: Front, Coverage, Blitz, then ball carrier "
-    "(Pass → tag QB + WR · Run → tag carrier). "
+    "2 taggers: Tagger 1 tags Front + Blitz, Tagger 2 tags Coverage + ball carrier "
+    "(Pass → QB + WR · Run → carrier). If only one shows, use the 1-tagger pack. "
     "Main (headset) logs down, distance, formation, call, result, and yards."
 )
 
@@ -150,15 +166,18 @@ def normalize_focuses(raw) -> list[str]:
         "front_blitz": "__pack_front_blitz__",
         "coverage_motion": "__pack_coverage_motion__",
         "coverage_blitz": "__pack_coverage_blitz__",
+        "coverage_ball": "__pack_coverage_ball__",
         "blitz_motion": "__pack_blitz_motion__",
-        "pack1": "__pack_film_ball__",
-        "pack2": "__pack_blitz_motion__",
-        "pack3": "__pack_coverage_blitz__",
+        "solo": "__pack_film_ball__",
+        "pack1": "__pack_front_blitz__",
+        "pack2": "__pack_coverage_ball__",
+        "pack3": "__pack_film_ball__",
     }
     pack_map = {
         "__pack_front_coverage__": [FOCUS_FRONT, FOCUS_COVERAGE],
         "__pack_film_ball__": [FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_BALL],
         "__pack_front_blitz__": [FOCUS_FRONT, FOCUS_BLITZ],
+        "__pack_coverage_ball__": [FOCUS_COVERAGE, FOCUS_BALL],
         "__pack_coverage_motion__": [FOCUS_COVERAGE, FOCUS_MOTION],
         "__pack_coverage_blitz__": [FOCUS_COVERAGE, FOCUS_BLITZ],
         "__pack_blitz_motion__": [FOCUS_BLITZ, FOCUS_MOTION],
@@ -202,7 +221,8 @@ def default_focuses_for_station(station: BoothStation) -> list[str]:
     if station == "defense":
         return [FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_BALL]
     if station == "tag":
-        return list(TAGGER_PACKS[0]["focuses"])
+        # No focus in the link → full film so nothing goes untagged
+        return list(TAGGER_PACK_SOLO["focuses"])
     return []
 
 

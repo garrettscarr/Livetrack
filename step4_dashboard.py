@@ -8871,6 +8871,7 @@ def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
         FOCUS_HELP,
         FOCUS_LABELS,
         TAGGER_JOBS,
+        TAGGER_PACK_SOLO,
         TAGGER_PACK_THIRD,
         TAGGER_PACKS,
         TAGGER_SPLIT_HELP,
@@ -8908,7 +8909,7 @@ def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
             pass
         st.rerun()
 
-    st.markdown("### 1 tagger (recommended)")
+    st.markdown("### 2 taggers — pick your job")
     for pack in TAGGER_PACKS:
         if st.button(
             f"{pack['label']}",
@@ -8920,7 +8921,18 @@ def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
             _pick_pack(pack)
         st.caption(pack["subtitle"])
 
-    st.markdown("### 2nd phone (optional)")
+    st.markdown("### Only 1 tagger")
+    if st.button(
+        TAGGER_PACK_SOLO["label"],
+        key=f"tag_pack_{TAGGER_PACK_SOLO['id']}",
+        use_container_width=True,
+        type="secondary",
+        help=TAGGER_PACK_SOLO["subtitle"],
+    ):
+        _pick_pack(TAGGER_PACK_SOLO)
+    st.caption(TAGGER_PACK_SOLO["subtitle"])
+
+    st.markdown("### Extra phone (optional)")
     if st.button(
         TAGGER_PACK_THIRD["label"],
         key=f"tag_pack_{TAGGER_PACK_THIRD['id']}",
@@ -10030,55 +10042,110 @@ def _booth_switch_role_control() -> None:
         st.rerun()
 
 
+def _lan_ip() -> str:
+    """This laptop's Wi-Fi / Ethernet IPv4 (no packets sent; works with no internet)."""
+    import socket
+    import subprocess
+
+    def _ok(ip: str) -> bool:
+        return bool(ip) and not ip.startswith(("127.", "0.", "169.254."))
+
+    for probe in ("10.255.255.255", "192.168.255.255", "8.8.8.8"):
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+                s.connect((probe, 1))
+                ip = s.getsockname()[0]
+            if _ok(ip):
+                return ip
+        except OSError:
+            continue
+    for iface in ("en0", "en1", "en2"):
+        try:
+            ip = subprocess.run(
+                ["ipconfig", "getifaddr", iface], capture_output=True, text=True, timeout=2
+            ).stdout.strip()
+            if _ok(ip):
+                return ip
+        except Exception:
+            continue
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if _ok(ip):
+            return ip
+    except OSError:
+        pass
+    return ""
+
+
+def _detected_booth_base_url() -> tuple[str, str]:
+    """
+    (url, source) for the server this page is actually being served from.
+
+    Main on localhost → swap in the laptop's LAN IP so phones on the same Wi-Fi can reach it.
+    """
+    from booth_stations import normalize_base_url
+
+    host, proto = "", "http"
+    try:
+        headers = getattr(st, "context", None) and st.context.headers
+        if headers:
+            host = str(headers.get("Host") or headers.get("host") or "").strip()
+            proto = str(
+                headers.get("X-Forwarded-Proto") or headers.get("x-forwarded-proto") or ""
+            ).strip() or ("https" if host and ":" not in host else "http")
+    except Exception:
+        pass
+    hostname, _, port = host.partition(":")
+    if hostname and hostname.lower() not in {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}:
+        return normalize_base_url(f"{proto}://{host}"), "this page"
+    if not port:
+        try:
+            port = str(st.get_option("server.port") or "8501")
+        except Exception:
+            port = "8501"
+    ip = _lan_ip()
+    if ip:
+        return f"http://{ip}:{port}", "laptop Wi-Fi"
+    return "", ""
+
+
 def _resolve_booth_base_url() -> str:
-    """Best-known public URL for sharing tagger invites."""
+    """Best URL for tagger invites: this session's override, live server, then saved."""
+    return _resolve_booth_base_url_with_source()[0]
+
+
+def _resolve_booth_base_url_with_source() -> tuple[str, str]:
     import os
 
     from booth_stations import normalize_base_url
     from team_config import booth_public_url
 
-    for candidate in (
-        st.session_state.get("booth_base_url"),
-        os.environ.get("BOOTH_PUBLIC_URL"),
-        booth_public_url(),
+    override = normalize_base_url(str(st.session_state.get("booth_base_url") or ""))
+    if override:
+        return override, "set on this device"
+    # Live address beats a saved one — a saved LAN IP goes stale when DHCP changes it.
+    detected, source = _detected_booth_base_url()
+    if detected:
+        return detected, source
+    for candidate, src in (
+        (os.environ.get("BOOTH_PUBLIC_URL"), "BOOTH_PUBLIC_URL"),
+        (booth_public_url(), "saved booth URL"),
     ):
         base = normalize_base_url(str(candidate or ""))
         if base:
-            return base
-    try:
-        headers = getattr(st, "context", None) and st.context.headers
-        if headers:
-            host = headers.get("Host") or headers.get("host") or ""
-            proto = headers.get("X-Forwarded-Proto") or headers.get("x-forwarded-proto") or "https"
-            if host and "localhost" not in str(host).lower():
-                return normalize_base_url(f"{proto}://{host}")
-    except Exception:
-        pass
-    return ""
+            return base, src
+    return "", ""
 
 
 def _invite_qr_png(url: str) -> bytes | None:
-    """PNG bytes for a QR that opens url. None if qrcode is unavailable."""
+    """PNG bytes for a QR that opens url — built locally, no packages or internet."""
     url = str(url or "").strip()
     if not url:
         return None
     try:
-        import io
+        from qr_local import qr_png
 
-        import qrcode
-
-        qr = qrcode.QRCode(
-            version=None,
-            error_correction=qrcode.constants.ERROR_CORRECT_M,
-            box_size=8,
-            border=2,
-        )
-        qr.add_data(url)
-        qr.make(fit=True)
-        img = qr.make_image(fill_color="#0F2419", back_color="#FFFFFF")
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        return buf.getvalue()
+        return qr_png(url, scale=7, border=4)
     except Exception:
         return None
 
@@ -10101,21 +10168,21 @@ def _render_invite_link(
     with c_qr:
         png = _invite_qr_png(url)
         if png is not None:
-            st.image(png, width=200, caption="Scan with camera")
+            st.image(png, width=220, caption="Scan with camera")
         else:
-            # Offline-safe fallback: phone still gets a QR via public encoder
-            from urllib.parse import quote
-
-            enc = quote(url, safe="")
-            st.markdown(
-                f'<img src="https://api.qrserver.com/v1/create-qr-code/'
-                f'?size=200x200&margin=8&data={enc}" width="200" alt="Invite QR" />',
-                unsafe_allow_html=True,
-            )
-            st.caption("Scan with camera")
+            st.error("QR could not be drawn — type or text the link instead.")
     with c_link:
         st.code(url, language=None)
         st.caption("Or copy the link")
+        if png is not None:
+            st.download_button(
+                "Save QR image",
+                data=png,
+                file_name=f"{key}_qr.png",
+                mime="image/png",
+                key=f"dl_{key}",
+                help="Save or print before the game as a backup.",
+            )
 
 
 def _import_booth_stations():
@@ -10145,6 +10212,7 @@ def _render_home_page() -> None:
         FOCUS_LABELS = bs.FOCUS_LABELS
         TAGGER_PACK_THIRD = bs.TAGGER_PACK_THIRD
         TAGGER_PACKS = bs.TAGGER_PACKS
+        TAGGER_PACK_SOLO = bs.TAGGER_PACK_SOLO
         TAGGER_SPLIT_HELP = bs.TAGGER_SPLIT_HELP
         main_invite_url = bs.main_invite_url
         tagger_invite_url = bs.tagger_invite_url
@@ -10219,46 +10287,66 @@ def _render_home_page() -> None:
         + " Point their camera at the QR — no typing."
     )
 
-    base = _resolve_booth_base_url()
-    with st.expander("Set booth website URL", expanded=not bool(base)):
+    base, base_source = _resolve_booth_base_url_with_source()
+    with st.expander("Change booth address", expanded=not bool(base)):
         st.caption(
-            "Paste your Streamlit Cloud link once (e.g. https://your-app.streamlit.app). "
-            "Saved so invite QR codes open the right site."
+            "Usually detected automatically. Only set this if phones can't open the link "
+            "(for example a hosted site like https://your-app.onrender.com)."
         )
         url_in = st.text_input(
             "Booth URL",
             value=base,
             key="home_booth_url_input",
-            placeholder="https://your-app.streamlit.app",
+            placeholder="http://192.168.1.20:8501",
             label_visibility="collapsed",
         )
-        if st.button("Save URL", key="home_save_booth_url"):
+        b_save, b_auto = st.columns(2)
+        if b_save.button("Use this address", key="home_save_booth_url"):
             cleaned = save_booth_public_url(url_in)
             st.session_state.booth_base_url = cleaned
             st.success("Saved." if cleaned else "Cleared.")
             st.rerun()
+        if b_auto.button("Back to auto-detect", key="home_auto_booth_url"):
+            save_booth_public_url("")
+            st.session_state.pop("booth_base_url", None)
+            st.rerun()
 
-    base = _resolve_booth_base_url()
     if not base:
-        st.warning("Set the booth website URL above so invite QR codes work.")
+        st.warning(
+            "Couldn't find this laptop's Wi-Fi address. Connect to the press box Wi-Fi, "
+            "then reload this page."
+        )
         return
+    if base.startswith("http://") and base_source == "laptop Wi-Fi":
+        st.info(
+            f"QR codes open **{base}** — taggers' phones must be on the **same Wi-Fi** as "
+            "this laptop. No internet needed."
+        )
+    else:
+        st.caption(f"QR codes open **{base}** ({base_source}).")
 
-    st.markdown("**Scan one QR (1 tagger)**")
+    st.markdown("**2 taggers — one QR per phone**")
     for pack in TAGGER_PACKS:
-        foc = list(pack["focuses"])
-        link = tagger_invite_url(base, foc)
         _render_invite_link(
-            link,
-            title=f"Phone {pack['slot']}: {pack['label']}",
+            tagger_invite_url(base, list(pack["focuses"])),
+            title=pack["label"],
             subtitle=pack["subtitle"],
-            key=f"pack_{pack['slot']}",
+            key=f"pack_{pack['id']}",
         )
 
-    with st.expander("2nd phone (optional)"):
+    with st.expander("Only 1 tagger tonight"):
+        _render_invite_link(
+            tagger_invite_url(base, list(TAGGER_PACK_SOLO["focuses"])),
+            title=TAGGER_PACK_SOLO["label"],
+            subtitle=TAGGER_PACK_SOLO["subtitle"],
+            key=f"pack_{TAGGER_PACK_SOLO['id']}",
+        )
+
+    with st.expander("Extra phone (motion)"):
         foc = list(TAGGER_PACK_THIRD["focuses"])
         _render_invite_link(
             tagger_invite_url(base, foc),
-            title=TAGGER_PACK_THIRD.get("label") or "2nd phone",
+            title=TAGGER_PACK_THIRD.get("label") or "Extra phone",
             subtitle=TAGGER_PACK_THIRD["subtitle"],
             key="pack_third",
         )

@@ -32,7 +32,10 @@
     "Quads",
     "Sdip",
     "Toronto",
-    "Raider"
+    "Raider",
+    "Fat Texas",
+    "Slot Tirg",
+    "Fat Texas Nasty"
   ],
   "variants": [
     "Bash",
@@ -124,7 +127,9 @@
       "Ireland Q",
       "Mary Slice",
       "Molly Slice",
-      "Porky"
+      "Porky",
+      "Reland",
+      "Smash GO"
     ],
     "pass": [
       "Backside",
@@ -189,7 +194,15 @@
       "Stab GO",
       "Supermn",
       "Switch And GO",
-      "Switch GO"
+      "Switch GO",
+      "Boot",
+      "Firework 2",
+      "Heels Back 2",
+      "Ireland 2",
+      "Miami",
+      "Miami Pump",
+      "Smash",
+      "Stick"
     ],
     "rpo": [
       "Army Bronco",
