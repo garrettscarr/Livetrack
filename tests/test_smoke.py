@@ -59,6 +59,59 @@ class TestTurnoverScoring(unittest.TestCase):
         self.assertTrue(result_flags("Complete, TD")["is_touchdown"])
 
 
+class TestBlitzLanes(unittest.TestCase):
+    def test_normalize_and_lanes(self):
+        from tag_normalize import blitz_is_pressure, blitz_lane, blitz_tagged, normalize_blitz
+
+        self.assertEqual(normalize_blitz("outside"), "Outside")
+        self.assertEqual(normalize_blitz(" no "), "No")
+        self.assertEqual(normalize_blitz("nan"), "")
+        self.assertTrue(blitz_tagged("No"))
+        self.assertFalse(blitz_tagged(""))
+        self.assertFalse(blitz_is_pressure("No"))
+        self.assertTrue(blitz_is_pressure("Cross"))
+        self.assertEqual(blitz_lane("Inside"), "inside")
+        self.assertEqual(blitz_lane("BANDIT STAB"), "outside")
+        self.assertEqual(blitz_lane("WILL BLAST"), "inside")
+        self.assertEqual(blitz_lane("MIKE CROSS"), "cross")
+        self.assertEqual(blitz_lane("Yes"), "")
+
+    def test_phrase_and_film_checks_accept_lanes(self):
+        import step4_dashboard as d
+
+        p = d.parse_film_phrase("odd front inside blitz cover 4")
+        self.assertEqual(p["def_front"], "Odd")
+        self.assertEqual(p["blitz"], "Inside")
+        self.assertEqual(p["coverage"], "Cover 4")
+        self.assertEqual(d.parse_film_phrase("cross blitz")["blitz"], "Cross")
+        self.assertEqual(d.parse_film_phrase("no blitz")["blitz"], "No")
+        row = {"def_front": "Odd", "coverage": "Cover 4", "blitz": "Outside"}
+        self.assertEqual(d.play_missing_film_fields(row), set())
+        self.assertTrue(d._tagger_pack_complete(
+            {"drive_id": 1, "play_n": 1, "def_front": "Odd", "blitz": "Cross"}, ["front", "blitz"]
+        ))
+        self.assertFalse(d._tagger_pack_complete(
+            {"drive_id": 1, "play_n": 1, "def_front": "Odd"}, ["front", "blitz"]
+        ))
+
+    def test_live_blitz_lane_split(self):
+        import pandas as pd
+
+        from mesh_engine import analyze_live_blitz
+
+        logs = pd.DataFrame({
+            "unit": ["Offense"] * 5,
+            "blitz": ["No", "Inside", "Outside", "Outside", ""],
+            "result": ["Gain"] * 5,
+            "yards_gained": [3, 1, 0, 6, 2],
+        })
+        out = analyze_live_blitz(logs, "Offense")
+        self.assertEqual(out["plays"], 4)  # blank is untagged
+        self.assertEqual(out["blitz_plays"], 3)
+        self.assertEqual(out["lanes"]["outside"]["plays"], 2)
+        self.assertAlmostEqual(out["lanes"]["inside"]["pct"], 33.3)
+
+
 class TestBoothInvites(unittest.TestCase):
     URL = "http://192.168.1.20:8501/?station=tag&focus=front,blitz"
 
@@ -109,8 +162,8 @@ class TestBoothInvites(unittest.TestCase):
 
         self.assertEqual([list(p["focuses"]) for p in TAGGER_PACKS],
                          [["front", "blitz"], ["coverage", "ball"]])
-        # No focus in the link → full film so nothing goes untagged
-        self.assertEqual(default_focuses_for_station("tag"), ["front", "coverage", "blitz", "ball"])
+        # No focus in the link → tagger picks a job on the phone
+        self.assertEqual(default_focuses_for_station("tag"), [])
         self.assertEqual(normalize_focuses("coverage_ball"), ["coverage", "ball"])
         self.assertTrue(
             tagger_invite_url("192.168.1.20:8501", ["front", "blitz"]).endswith(

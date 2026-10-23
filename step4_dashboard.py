@@ -4360,6 +4360,12 @@ def save_live_favorites(favs: dict) -> None:
 
 
 from tag_normalize import normalize_play_call  # shared with ingest
+from tag_normalize import (  # noqa: E402
+    BLITZ_FORM_CHOICES,
+    BLITZ_TAGGER_CHOICES,
+    blitz_tagged,
+    normalize_blitz,
+)
 
 
 def _tag_display(name: str) -> str:
@@ -4802,8 +4808,7 @@ def play_missing_film_fields(row: pd.Series | dict) -> set[str]:
         missing.add("front")
     if not str(row.get("coverage", "") or "").strip():
         missing.add("coverage")
-    blitz = str(row.get("blitz", "") or "").strip().lower()
-    if blitz not in {"yes", "no"}:
+    if not blitz_tagged(row.get("blitz")):
         missing.add("blitz")
     return missing
 
@@ -4861,7 +4866,7 @@ def audit_drive_film_tags(
         front = str(row.get("def_front") or "").strip()
         cov = str(row.get("coverage") or "").strip()
         blitz_raw = str(row.get("blitz") or "").strip()
-        blitz_ok = blitz_raw.lower() in {"yes", "no"}
+        blitz_ok = blitz_tagged(blitz_raw)
         miss = play_missing_film_fields(row)
         if front:
             front_n += 1
@@ -9090,7 +9095,7 @@ def _render_shared_snap_bar(
                     key=f"{key_prefix}_sync_main",
                 ):
                     st.session_state[f"{key_prefix}_follow"] = True
-                    st.rerun()
+                    _tagger_rerun()
         elif follow:
             st.caption("Following live")
         else:
@@ -9104,7 +9109,7 @@ def _render_shared_snap_bar(
                 st.session_state[f"{key_prefix}_follow"] = True
                 st.session_state[f"{key_prefix}_view_drive"] = did
                 st.session_state[f"{key_prefix}_view_play"] = shared_pn
-                st.rerun()
+                _tagger_rerun()
         # Catch-up buried — stays out of the hot path
         with st.expander("More · jump / catch-up", expanded=False):
             j1, j2, j3 = st.columns([1, 1, 1])
@@ -9117,12 +9122,12 @@ def _render_shared_snap_bar(
                 ):
                     st.session_state[f"{key_prefix}_follow"] = False
                     st.session_state[f"{key_prefix}_view_play"] = max(1, view_pn - 1)
-                    st.rerun()
+                    _tagger_rerun()
             with j2:
                 if st.button("▶", use_container_width=True, key=f"{key_prefix}_next"):
                     st.session_state[f"{key_prefix}_follow"] = False
                     st.session_state[f"{key_prefix}_view_play"] = view_pn + 1
-                    st.rerun()
+                    _tagger_rerun()
             with j3:
                 jump_n = st.number_input(
                     "Play",
@@ -9137,7 +9142,7 @@ def _render_shared_snap_bar(
                     st.session_state[f"{key_prefix}_view_play"] = int(jump_n)
                     if did is not None:
                         st.session_state[f"{key_prefix}_view_drive"] = int(did)
-                    st.rerun()
+                    _tagger_rerun()
     else:
         live_lbl = snap_label(did, shared_pn) if did else "No drive — Start on Main"
         st.caption(f"Live pointer: {live_lbl}" + (" · following" if follow else " · jumped"))
@@ -9287,7 +9292,7 @@ def _tagger_field_filled(row: dict, fid: str) -> bool:
     col = _tagger_focus_to_col(fid)
     val = str(row.get(col) or "").strip()
     if fid == FOCUS_BLITZ:
-        return val.lower() in {"yes", "no"}
+        return blitz_tagged(val)
     return bool(val)
 
 
@@ -9422,7 +9427,7 @@ def _tagger_undo_tags(
     if idx is None or not _tagger_row_has_tags(row, focuses):
         st.session_state["tagger_flash"] = "Nothing to undo"
         st.session_state[f"{key_prefix}_view_play"] = target_pn
-        st.rerun()
+        _tagger_rerun()
         return
 
     # Force-clear (upsert merge intentionally ignores blanks to protect parallel tags)
@@ -9440,7 +9445,7 @@ def _tagger_undo_tags(
         st.session_state["tagger_flash_strong"] = True
     else:
         st.session_state["tagger_flash"] = "Undo failed"
-    st.rerun()
+    _tagger_rerun()
 
 
 def _tagger_pulse_done() -> None:
@@ -9461,6 +9466,24 @@ def _tagger_recalc_yards_from_end(row: dict) -> dict:
     return {}
 
 
+def _tagger_rerun() -> None:
+    """Redraw only the tagger panel when inside its fragment (keeps phones fast)."""
+    from streamlit.errors import StreamlitAPIException
+
+    try:
+        st.rerun(scope="fragment")
+    except StreamlitAPIException:
+        st.rerun()
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _cached_scout_looks(opponent: str, mtime: float, size: int) -> dict:
+    """Scout chip order for tonight — the tagger polls every second, the DB rarely changes."""
+    from mesh_engine import scout_favorite_looks
+
+    return scout_favorite_looks(opponent, n=8)
+
+
 def _tagger_instant_save(
     *,
     opponent: str,
@@ -9470,15 +9493,15 @@ def _tagger_instant_save(
     focuses: list[str],
     field_updates: dict,
     key_prefix: str = "tag",
-    advance: bool | None = False,
+    advance: bool | None = None,
 ) -> None:
     """
     Save field(s) and remember sticky last values.
 
     advance:
-      False (default) — stay on this play (tagger confirms when the pack is done).
+      None (default) — advance as soon as this tagger's pack is complete.
+      False — stay on this play.
       True — always advance after save.
-      None — advance only when the full pack is complete (SAME LOOK fast path).
     """
     from booth_stations import FOCUS_BLITZ, FOCUS_COVERAGE, FOCUS_FRONT, FOCUS_MOTION
     from booth_snaps import find_snap_index
@@ -9503,7 +9526,7 @@ def _tagger_instant_save(
     )
     if not ok:
         st.session_state["tagger_flash"] = msg or "Save failed"
-        st.rerun()
+        _tagger_rerun()
         return
 
     # Sticky last values
@@ -9536,12 +9559,9 @@ def _tagger_instant_save(
     pack_done = _tagger_pack_complete(row, focuses)
     if advance is True or (advance is None and pack_done):
         _tagger_advance_after_save(play_n, key_prefix=key_prefix)
-    else:
-        if pack_done:
-            st.session_state["tagger_flash"] = "Pack ready — tap Confirm to next play"
-        elif "tagger_flash" not in st.session_state:
-            st.session_state["tagger_flash"] = "Saved"
-    st.rerun()
+    elif "tagger_flash" not in st.session_state:
+        st.session_state["tagger_flash"] = "Saved"
+    _tagger_rerun()
 
 
 def _render_current_snap_tagger(
@@ -9567,7 +9587,7 @@ def _render_current_snap_tagger(
         has_snaps_focus,
     )
     from booth_snaps import find_snap_index
-    from mesh_engine import load_live_log, scout_favorite_looks
+    from mesh_engine import load_live_log
 
     if drive_id is None:
         st.info("Waiting for Main to start the drive…")
@@ -9586,15 +9606,15 @@ def _render_current_snap_tagger(
     need_ball = FOCUS_BALL in focuses
     title = " · ".join(FOCUS_LABELS.get(f, f) for f in focuses) or focus_summary(focuses)
     st.markdown(f'<p class="live-title">{title}</p>', unsafe_allow_html=True)
-    st.caption("Tap each tag · Confirm when the pack is ready to move on")
+    st.caption("Tap your tags · moves to the next play on its own when your job is done")
 
     undo_col, _ = st.columns([1, 2])
     with undo_col:
         if st.button(
-            "Undo tags",
+            "Undo last",
             use_container_width=True,
             key=f"tg_undo_{drive_id}_{play_n}",
-            help="Clear your tags on this play (or the previous play if this one is empty).",
+            help="Clear your tags on this play — or the play you just finished if this one is empty.",
         ):
             _tagger_undo_tags(
                 opponent=opponent,
@@ -9643,9 +9663,12 @@ def _render_current_snap_tagger(
         else:
             st.caption(str(flash))
 
-    ensure_default_film_tags()
+    if not st.session_state.get("_tg_film_tags_seeded"):
+        ensure_default_film_tags()
+        st.session_state["_tg_film_tags_seeded"] = True
     full = logs if logs is not None and not logs.empty else pd.DataFrame()
-    scout_looks = scout_favorite_looks(opponent, n=8)
+    db_mtime, db_size = _file_mtime_size(DB_FILE)
+    scout_looks = _cached_scout_looks(str(opponent or ""), db_mtime, db_size)
     scout_covs = list(scout_looks.get("coverages") or [])
 
     draft_f_key = f"tg_draft_front_{drive_id}_{play_n}"
@@ -9682,7 +9705,7 @@ def _render_current_snap_tagger(
             )
         st.markdown("</div>", unsafe_allow_html=True)
 
-    def _save_look_fields(updates: dict, *, advance: bool | None = False) -> None:
+    def _save_look_fields(updates: dict, *, advance: bool | None = None) -> None:
         _tagger_instant_save(
             opponent=opponent,
             half=half,
@@ -9696,7 +9719,7 @@ def _render_current_snap_tagger(
     def _tap_front_or_cov(col: str, opt: str) -> None:
         """Batch Front+Coverage into one save when both are chosen (stay on play)."""
         if not batch_look:
-            _save_look_fields({col: opt}, advance=False)
+            _save_look_fields({col: opt})
             return
         if col == "def_front":
             st.session_state[draft_f_key] = opt
@@ -9719,13 +9742,13 @@ def _render_current_snap_tagger(
         if col == "coverage":
             cov = opt
         if front and cov:
-            _save_look_fields({"def_front": front, "coverage": cov}, advance=False)
+            _save_look_fields({"def_front": front, "coverage": cov})
             return
         missing = "Coverage" if front and not cov else "Front"
         st.session_state["tagger_flash"] = (
             f"{'Front' if col == 'def_front' else 'Coverage'} set · tap {missing}"
         )
-        st.rerun()
+        _tagger_rerun()
 
     def _chip_row(
         label: str,
@@ -9751,7 +9774,7 @@ def _render_current_snap_tagger(
                     if batch:
                         _tap_front_or_cov(col, opt)
                     else:
-                        _save_look_fields({col: opt}, advance=False)
+                        _save_look_fields({col: opt})
         extra = [x for x in (more or []) if x not in opts]
         if extra:
             with st.expander("More…", expanded=False):
@@ -9771,7 +9794,7 @@ def _render_current_snap_tagger(
                             if batch:
                                 _tap_front_or_cov(col, opt)
                             else:
-                                _save_look_fields({col: opt}, advance=False)
+                                _save_look_fields({col: opt})
 
     def _render_field(fid: str) -> None:
         cur_col = _tagger_focus_to_col(fid)
@@ -9805,25 +9828,20 @@ def _render_current_snap_tagger(
                 batch=batch_look,
             )
         elif fid == FOCUS_BLITZ:
-            st.caption("Blitz · tap to select")
-            cur_b = current.strip().title() if current else ""
-            b1, b2 = st.columns(2)
-            with b1:
-                if st.button(
-                    "No",
-                    key=f"tg_blitz_no_{drive_id}_{play_n}",
-                    use_container_width=True,
-                    type="primary" if cur_b == "No" else "secondary",
-                ):
-                    _save_look_fields({"blitz": "No"}, advance=False)
-            with b2:
-                if st.button(
-                    "Yes",
-                    key=f"tg_blitz_yes_{drive_id}_{play_n}",
-                    use_container_width=True,
-                    type="primary" if cur_b == "Yes" else "secondary",
-                ):
-                    _save_look_fields({"blitz": "Yes"}, advance=False)
+            st.caption("Blitz · Stab / Smoke = Outside · Cross = protection change")
+            cur_b = normalize_blitz(current)
+            choices = list(BLITZ_TAGGER_CHOICES)
+            for r0 in range(0, len(choices), 2):
+                cols = st.columns(2)
+                for c, choice in zip(cols, choices[r0: r0 + 2]):
+                    with c:
+                        if st.button(
+                            choice,
+                            key=f"tg_blitz_{choice.lower()}_{drive_id}_{play_n}",
+                            use_container_width=True,
+                            type="primary" if cur_b == choice else "secondary",
+                        ):
+                            _save_look_fields({"blitz": choice})
         elif fid == FOCUS_MOTION:
             motion_opts = _merge_tag_options(
                 _tag_options(
@@ -9870,7 +9888,7 @@ def _render_current_snap_tagger(
                     updates = {field: name}
                     if extra:
                         updates.update(extra)
-                    _save_look_fields(updates, advance=False)
+                    _save_look_fields(updates)
         rest = [n for n in names if n not in show]
         if rest:
             with st.expander("More players…", expanded=False):
@@ -9887,7 +9905,7 @@ def _render_current_snap_tagger(
                             updates = {field: name}
                             if extra:
                                 updates.update(extra)
-                            _save_look_fields(updates, advance=False)
+                            _save_look_fields(updates)
 
     # Always show every focus — no "Edit look" gate
     if pre:
@@ -9916,7 +9934,7 @@ def _render_current_snap_tagger(
                     type="primary",
                 ):
                     st.session_state[ptype_key] = "pass"
-                    st.rerun()
+                    _tagger_rerun()
             with p2:
                 if st.button(
                     "Run",
@@ -9925,7 +9943,7 @@ def _render_current_snap_tagger(
                     type="secondary",
                 ):
                     st.session_state[ptype_key] = "run"
-                    st.rerun()
+                    _tagger_rerun()
         else:
             kind = "Pass" if is_pass else "Run"
             if main_hint:
@@ -9991,30 +10009,24 @@ def _render_current_snap_tagger(
                 advance=False,
             )
 
-    # Confirm advances only after the full pack is tagged
+    # Pack complete → auto-advances on the last tap. This is for re-visits / skips.
     pack_ready = _tagger_pack_complete(row, focuses)
     st.markdown("---")
-    if pack_ready:
-        if st.button(
-            "Confirm · next play ▶",
-            type="primary",
-            use_container_width=True,
-            key=f"tg_confirm_{drive_id}_{play_n}",
-        ):
-            st.session_state.pop(draft_f_key, None)
-            st.session_state.pop(draft_c_key, None)
-            st.session_state.pop(f"tg_edit_look_{drive_id}_{play_n}", None)
-            _tagger_advance_after_save(int(play_n), key_prefix="tag")
-            st.rerun()
-    else:
-        st.button(
-            "Confirm · next play ▶",
-            type="secondary",
-            use_container_width=True,
-            key=f"tg_confirm_disabled_{drive_id}_{play_n}",
-            disabled=True,
-            help="Tag every field in your pack first.",
-        )
+    if st.button(
+        "Next play ▶" if pack_ready else "Skip to next play ▶",
+        type="primary" if pack_ready else "secondary",
+        use_container_width=True,
+        key=f"tg_next_{drive_id}_{play_n}",
+        help=None if pack_ready else "Couldn't see it? Move on — Main's end-of-drive check flags the gap.",
+    ):
+        st.session_state.pop(draft_f_key, None)
+        st.session_state.pop(draft_c_key, None)
+        st.session_state.pop(f"tg_edit_look_{drive_id}_{play_n}", None)
+        _tagger_advance_after_save(int(play_n), key_prefix="tag")
+        if not pack_ready:
+            st.session_state["tagger_flash"] = f"Skipped Play #{int(play_n)} — on Play #{int(play_n) + 1}"
+            st.session_state["tagger_flash_strong"] = False
+        _tagger_rerun()
 
 
 
@@ -10325,38 +10337,22 @@ def _render_home_page() -> None:
     else:
         st.caption(f"QR codes open **{base}** ({base_source}).")
 
-    st.markdown("**2 taggers — one QR per phone**")
-    for pack in TAGGER_PACKS:
-        _render_invite_link(
-            tagger_invite_url(base, list(pack["focuses"])),
-            title=pack["label"],
-            subtitle=pack["subtitle"],
-            key=f"pack_{pack['id']}",
-        )
+    jobs = " · ".join(p["label"].split("·")[-1].strip() for p in TAGGER_PACKS)
+    _render_invite_link(
+        tagger_invite_url(base),
+        title="All taggers — scan, then pick your job",
+        subtitle=f"Same QR for every phone. Jobs: {jobs} · or 1-tagger Film + Ball.",
+        key="pack_pick",
+    )
 
-    with st.expander("Only 1 tagger tonight"):
-        _render_invite_link(
-            tagger_invite_url(base, list(TAGGER_PACK_SOLO["focuses"])),
-            title=TAGGER_PACK_SOLO["label"],
-            subtitle=TAGGER_PACK_SOLO["subtitle"],
-            key=f"pack_{TAGGER_PACK_SOLO['id']}",
-        )
-
-    with st.expander("Extra phone (motion)"):
-        foc = list(TAGGER_PACK_THIRD["focuses"])
-        _render_invite_link(
-            tagger_invite_url(base, foc),
-            title=TAGGER_PACK_THIRD.get("label") or "Extra phone",
-            subtitle=TAGGER_PACK_THIRD["subtitle"],
-            key="pack_third",
-        )
-
-    with st.expander("Let them pick the pack"):
-        _render_invite_link(
-            tagger_invite_url(base),
-            title="Open as tagger · pick job",
-            key="pack_pick",
-        )
+    with st.expander("Direct QR per job (skips the picker)"):
+        for pack in (*TAGGER_PACKS, TAGGER_PACK_SOLO, TAGGER_PACK_THIRD):
+            _render_invite_link(
+                tagger_invite_url(base, list(pack["focuses"])),
+                title=pack["label"],
+                subtitle=pack["subtitle"],
+                key=f"pack_{pack['id']}",
+            )
 
     with st.expander("Main device link"):
         _render_invite_link(
@@ -12292,10 +12288,11 @@ def parse_live_phrase(
         result["def_front"] = film["def_front"]
         work = re.sub(r"\b(even|odd)(?:\s+fronts?)?\b", " ", work, flags=re.I)
         work = re.sub(r"\b(?:bear|bare)\s+fronts?\b", " ", work, flags=re.I)
-    if film.get("blitz") in {"Yes", "No"}:
+    if film.get("blitz"):
         result["blitz"] = film["blitz"]
         work = re.sub(
-            r"\bno\s+blitz\b|\bwithout\s+blitz\b|\bnon[- ]?blitz\b|\bblitz\b",
+            r"\b(?:inside|outside|edge|cross)\s+blitz\b|\bblitz\s+(?:inside|outside|cross)\b"
+            r"|\bno\s+blitz\b|\bwithout\s+blitz\b|\bnon[- ]?blitz\b|\bblitz\b",
             " ",
             work,
             flags=re.I,
@@ -12525,7 +12522,7 @@ def _ql_apply_phrase_parse(parsed: dict) -> None:
     if parsed.get("coverage"):
         st.session_state.ql_cov = parsed["coverage"]
         st.session_state.ql_cov_custom = ""
-    if parsed.get("blitz") in {"Yes", "No"}:
+    if parsed.get("blitz") in BLITZ_FORM_CHOICES:
         st.session_state.ql_blitz = parsed["blitz"]
 
 
@@ -12569,9 +12566,15 @@ def parse_film_phrase(phrase: str) -> dict:
         work = re.sub(pat, repl, work, flags=re.I)
     low = work.lower()
 
-    # Blitz — check "no blitz" before bare "blitz"
+    # Blitz — "no blitz" first, then lane ("inside blitz" / "blitz outside"), then bare "blitz"
     if re.search(r"\bno\s+blitz\b|\bwithout\s+blitz\b|\bnon[- ]?blitz\b|\bblitz\s*:\s*no\b", low):
         out["blitz"] = "No"
+    elif re.search(r"\bcross\s+blitz\b|\bblitz\s+cross\b", low):
+        out["blitz"] = "Cross"
+    elif re.search(r"\b(?:outside|edge)\s+blitz\b|\bblitz\s+outside\b", low):
+        out["blitz"] = "Outside"
+    elif re.search(r"\binside\s+blitz\b|\bblitz\s+inside\b", low):
+        out["blitz"] = "Inside"
     elif re.search(r"\bblitz\b", low):
         out["blitz"] = "Yes"
 
@@ -12608,7 +12611,7 @@ def _ff_apply_phrase_to_keys(parsed: dict, idx: int) -> None:
     if parsed.get("coverage"):
         st.session_state[f"ff_cov_{idx}"] = parsed["coverage"]
         st.session_state[f"ff_cov_{idx}_custom"] = ""
-    if parsed.get("blitz") in {"Yes", "No"}:
+    if parsed.get("blitz") in BLITZ_FORM_CHOICES:
         st.session_state[f"ff_blitz_{idx}"] = parsed["blitz"]
 
 
@@ -12616,7 +12619,7 @@ def _ff_phrase_has_tags(parsed: dict) -> bool:
     return bool(
         parsed.get("def_front")
         or parsed.get("coverage")
-        or parsed.get("blitz") in {"Yes", "No"}
+        or blitz_tagged(parsed.get("blitz"))
     )
 
 
@@ -13195,11 +13198,11 @@ def _commit_live_play(
                 merged[k] = new_row[k]
         front = str(merged.get("def_front") or "").strip()
         cov = str(merged.get("coverage") or "").strip()
-        blitz_v = str(merged.get("blitz") or "").strip().lower()
+        blitz_v = merged.get("blitz")
         has_ball = bool(str(merged.get("ball_player") or "").strip()) or bool(
             str(merged.get("pass_player") or "").strip()
         )
-        if front and cov and blitz_v in {"yes", "no"} and has_ball:
+        if front and cov and blitz_tagged(blitz_v) and has_ball:
             merged["film_pending"] = "No"
         elif front and cov:
             merged["film_pending"] = "No"
@@ -13523,7 +13526,7 @@ def _live_track_fill_film(
             still_missing.add("front")
         if not str(cov_v or "").strip():
             still_missing.add("coverage")
-        if str(blitz_v or "").strip().lower() not in {"yes", "no"}:
+        if not blitz_tagged(blitz_v):
             still_missing.add("blitz")
 
         patch: dict = {
@@ -13680,8 +13683,8 @@ def _live_track_fill_film(
                     bits.append(f"Front {row.get('def_front')}")
                 if str(row.get("coverage") or "").strip():
                     bits.append(f"Cov {row.get('coverage')}")
-                bz = str(row.get("blitz") or "").strip()
-                if bz.lower() in {"yes", "no"}:
+                bz = normalize_blitz(row.get("blitz"))
+                if bz:
                     bits.append(f"Blitz {bz}")
                 if bits:
                     st.caption("Already tagged: " + " · ".join(bits))
@@ -13696,10 +13699,11 @@ def _live_track_fill_film(
                 st.session_state[f"ff_front_{idx}"] = str(row.get("def_front") or "")
             if show_cov and f"ff_cov_{idx}" not in st.session_state:
                 st.session_state[f"ff_cov_{idx}"] = str(row.get("coverage") or "")
+            saved_blitz = normalize_blitz(row.get("blitz"))
+            if saved_blitz not in BLITZ_FORM_CHOICES:
+                saved_blitz = "Yes" if blitz_tagged(saved_blitz) else "No"
             if show_blitz and f"ff_blitz_{idx}" not in st.session_state:
-                st.session_state[f"ff_blitz_{idx}"] = (
-                    "Yes" if str(row.get("blitz") or "").strip().lower() == "yes" else "No"
-                )
+                st.session_state[f"ff_blitz_{idx}"] = saved_blitz
             if not partial and f"ff_motion_{idx}" not in st.session_state:
                 st.session_state[f"ff_motion_{idx}"] = str(row.get("motion") or "")
             front = str(row.get("def_front") or "")
@@ -13718,10 +13722,9 @@ def _live_track_fill_film(
                 with cols[ci]:
                     blitz = st.radio(
                         "Blitz",
-                        ["No", "Yes"],
+                        list(BLITZ_FORM_CHOICES),
                         horizontal=True,
                         key=f"ff_blitz_{idx}",
-                        index=1 if str(row.get("blitz") or "").strip().lower() == "yes" else 0,
                     )
                 ci += 1
             if not partial:
@@ -13985,7 +13988,7 @@ def _ql_build_phrase_draft(phrase: str, parsed: dict, booth_favs: dict) -> dict:
 
     def_front = str(parsed.get("def_front") or "")
     coverage = str(parsed.get("coverage") or "")
-    blitz = parsed.get("blitz") if parsed.get("blitz") in {"Yes", "No"} else ""
+    blitz = normalize_blitz(parsed.get("blitz"))
     auto_first = bool(parsed.get("auto_first")) or (
         str(result) == "Penalty" and int(yards) >= 15
     )
@@ -14164,9 +14167,7 @@ def _ql_commit_phrase_draft(
     coverage = _ql_norm(
         coverage if coverage is not None else draft.get("coverage") or ""
     )
-    blitz = str(blitz if blitz is not None else draft.get("blitz") or "")
-    if blitz not in {"Yes", "No"}:
-        blitz = ""
+    blitz = normalize_blitz(blitz if blitz is not None else draft.get("blitz") or "")
 
     if not formation and not play_call and not run_tag and not pass_tag:
         return ["Need a formation or run/pass tag."]
@@ -14820,9 +14821,9 @@ def _render_phrase_confirm_card(
                 key=cov_key,
             )
             blitz_key = f"ql_cf_blitz_{gen}"
-            blitz_ui = ["", "No", "Yes"]
-            cur_blitz = str(draft.get("blitz") or "")
-            if cur_blitz not in {"Yes", "No"}:
+            blitz_ui = [""] + list(BLITZ_FORM_CHOICES)
+            cur_blitz = normalize_blitz(draft.get("blitz"))
+            if cur_blitz not in blitz_ui:
                 cur_blitz = ""
             if blitz_key not in st.session_state:
                 st.session_state[blitz_key] = cur_blitz
@@ -15466,10 +15467,9 @@ def _render_quick_log_wizard(
             with d3:
                 if "ql_blitz" not in st.session_state:
                     st.session_state.ql_blitz = "No"
-                blitz = st.radio("Blitz", ["No", "Yes"], horizontal=True, key="ql_blitz")
+                blitz = st.radio("Blitz", list(BLITZ_FORM_CHOICES), horizontal=True, key="ql_blitz")
 
-            film_pending = not (def_front or coverage or str(blitz).lower() in {"yes", "no"})
-            # blitz always yes/no from radio — film pending if front+cov empty
+            # Blitz always has an answer from the radio — film pending if front+cov empty
             film_pending = not (bool(def_front) and bool(coverage))
 
             b1, b2 = st.columns(2)
@@ -16232,7 +16232,7 @@ def _render_tagger_live_status_card(
     mot = str((tagger_row or {}).get("motion") or "").strip()
     tagged_by = str((tagger_row or {}).get("tagged_by") or "").strip()
 
-    if front or cov or (blitz and blitz.lower() in {"yes", "no"}) or bp:
+    if front or cov or blitz_tagged(blitz) or bp:
         tag_items = []
         if front:
             tag_items.append(f"Front: <b>{front}</b>")
@@ -17140,7 +17140,7 @@ def _live_track_log_screen(
         coverage = _select_or_type("Coverage", cov_opts, "lt_cov")
         if "lt_blitz" not in st.session_state:
             st.session_state.lt_blitz = "No"
-        blitz = st.radio("Blitz", ["No", "Yes"], horizontal=True, key="lt_blitz")
+        blitz = st.radio("Blitz", list(BLITZ_FORM_CHOICES), horizontal=True, key="lt_blitz")
     note = st.text_input("Note (optional)", key="lt_note")
 
     if st.button("Log play (full tags)", type="primary", use_container_width=True, key="lt_submit"):
@@ -18137,6 +18137,19 @@ def _ht_blitz_blurb(report: dict) -> str:
     wn = blitz.get("when_no_blitz") or {}
     rate = blitz.get("blitz_pct", 0)
     parts = [f"Blitz <b>{rate}%</b> ({blitz.get('blitz_plays', 0)}/{blitz.get('plays', 0)})"]
+    lanes = blitz.get("lanes") or {}
+    if int(blitz.get("lane_plays") or 0) > 0:
+        bits = [
+            f"{lbl} {lanes[k]['pct']:.0f}%"
+            for k, lbl in (("inside", "inside"), ("outside", "outside"), ("cross", "cross"))
+            if (lanes.get(k) or {}).get("plays")
+        ]
+        if bits:
+            parts.append("when they blitz: " + " · ".join(bits))
+        cross = (lanes.get("cross") or {}).get("plays") or 0
+        top = max(lanes, key=lambda k: (lanes[k].get("plays") or 0))
+        if cross and top == "cross":
+            parts.append("<b>CROSS is their top pressure — protection change</b>")
     if wb and wn and wb.get("plays") and wn.get("plays"):
         bs, ns = float(wb.get("score") or 0), float(wn.get("score") or 0)
         if bs < ns - 0.05:

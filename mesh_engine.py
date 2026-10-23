@@ -321,19 +321,14 @@ def _booth_front_for_opponent(value, opponent: str | None) -> str:
 
 def _classify_blitz_lane(package: str | None) -> str:
     """
-    Booth blitz lane from a Hudl package name.
+    Booth blitz lane from a Hudl package name or a tagger lane.
 
     STAB / SMOKE → outside. Everything else named → inside.
     CROSS is called out separately (protection change).
     """
-    s = str(package or "").strip().upper()
-    if not s or s in {"NAN", "NONE", "UNKNOWN", "NO", "N", "OFF", "YES", "Y"}:
-        return ""
-    if re.search(r"\bCROSS\b", s):
-        return "cross"
-    if re.search(r"\bSTAB\b", s) or re.search(r"\bSMOKE\b", s):
-        return "outside"
-    return "inside"
+    from tag_normalize import blitz_lane
+
+    return blitz_lane(package)
 
 
 def scout_favorite_looks(
@@ -1364,10 +1359,9 @@ def _build_matchup_call_sheet(
 
 def _scout_blitz_tagged(val) -> bool:
     """True when Hudl scout BLITZ cell is a real send (named package or Yes)."""
-    s = str(val or "").strip().lower()
-    if not s or s in {"nan", "none", "no", "n", "0", "false", "-", "—"}:
-        return False
-    return True
+    from tag_normalize import blitz_is_pressure
+
+    return blitz_is_pressure(val)
 
 
 def analyze_scout_blitz(scout: pd.DataFrame, *, top_n: int = 8) -> dict:
@@ -2504,7 +2498,9 @@ def _live_result_sets(unit: str) -> tuple[set[str], set[str]]:
 
 
 def _is_blitz(val) -> bool:
-    return str(val).strip().lower() in {"yes", "y", "1", "true", "blitz"}
+    from tag_normalize import blitz_is_pressure
+
+    return blitz_is_pressure(val)
 
 
 def score_live_dimension(
@@ -2585,13 +2581,10 @@ def analyze_live_blitz(log_df: pd.DataFrame, unit: str | None = None) -> dict:
     if logs.empty:
         return out
 
-    # Only snaps with an explicit Yes/No blitz tag (skip quick-log blanks)
-    def _blitz_tagged(val) -> bool:
-        return str(val).strip().lower() in {
-            "yes", "y", "1", "true", "blitz", "no", "n", "0", "false"
-        }
+    # Only snaps with an explicit blitz answer (skip quick-log blanks)
+    from tag_normalize import blitz_lane, blitz_tagged
 
-    logs = logs[logs["blitz"].map(_blitz_tagged)]
+    logs = logs[logs["blitz"].map(blitz_tagged)]
     if logs.empty:
         return out
 
@@ -2601,6 +2594,17 @@ def analyze_live_blitz(log_df: pd.DataFrame, unit: str | None = None) -> dict:
     out["plays"] = n
     out["blitz_plays"] = b
     out["blitz_pct"] = round(100.0 * b / n, 1) if n else 0.0
+    # When they blitz: which lane (taggers pick Inside / Outside / Cross)
+    lanes = logs.loc[flags, "blitz"].map(blitz_lane)
+    known = lanes[lanes != ""]
+    out["lane_plays"] = int(len(known))
+    out["lanes"] = {
+        lane: {
+            "plays": int((known == lane).sum()),
+            "pct": round(100.0 * int((known == lane).sum()) / len(known), 1) if len(known) else 0.0,
+        }
+        for lane in ("inside", "outside", "cross")
+    }
 
     def _meta(sub: pd.DataFrame) -> dict | None:
         if sub.empty:
@@ -3663,9 +3667,10 @@ def _analyze_formation_defense(half1: pd.DataFrame, *, unit: str = "Offense") ->
         blitz_n = 0
         blitz_tagged_n = 0
         if "blitz" in grp.columns:
+            from tag_normalize import blitz_tagged
+
             for b_val in grp["blitz"].dropna():
-                b_str = str(b_val).strip().lower()
-                if b_str in {"yes", "no", "true", "false", "1", "0"}:
+                if blitz_tagged(b_val):
                     blitz_tagged_n += 1
                     if _is_blitz(b_val):
                         blitz_n += 1

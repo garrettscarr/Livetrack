@@ -46,7 +46,7 @@ FOCUS_HELP: dict[str, str] = {
     FOCUS_SNAPS: "Down, distance, formation, call, result, yards (Main)",
     FOCUS_FRONT: "Pre-snap — Even / Odd / Bear / 3-3 Stack",
     FOCUS_COVERAGE: "Pre-snap — Cover 2 / 3 / 4 / …",
-    FOCUS_BLITZ: "Post-snap — Yes or No",
+    FOCUS_BLITZ: "Post-snap — No / Inside / Outside / Cross",
     FOCUS_MOTION: "Post-snap — motion / shift",
     FOCUS_BALL: "Pass → QB + WR · Run → ball carrier",
 }
@@ -64,7 +64,7 @@ TAGGER_PACKS: tuple[dict, ...] = (
     {
         "id": "front_blitz",
         "label": "Tagger 1 · Front + Blitz",
-        "subtitle": "Pre-snap front · post-snap blitz",
+        "subtitle": "Pre-snap front · post-snap blitz (No / Inside / Outside / Cross)",
         "focuses": (FOCUS_FRONT, FOCUS_BLITZ),
         "slot": 1,
     },
@@ -220,9 +220,7 @@ def default_focuses_for_station(station: BoothStation) -> list[str]:
         return [FOCUS_SNAPS]
     if station == "defense":
         return [FOCUS_FRONT, FOCUS_COVERAGE, FOCUS_BLITZ, FOCUS_BALL]
-    if station == "tag":
-        # No focus in the link → full film so nothing goes untagged
-        return list(TAGGER_PACK_SOLO["focuses"])
+    # station=tag with no focus → tagger picks a job on their phone
     return []
 
 

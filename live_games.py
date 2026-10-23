@@ -366,15 +366,11 @@ def live_film_tag_fill(df: pd.DataFrame | None) -> dict:
 
     out["def_front"] = _n("def_front")
     out["coverage"] = _n("coverage")
-    # Blitz: Yes/No or named package
+    # Blitz: No / Yes / lane / named package
     if "blitz" in df.columns:
-        b = df["blitz"].fillna("").astype(str).str.strip()
-        out["blitz"] = int(
-            (
-                b.str.lower().isin({"yes", "no", "y", "n", "1", "0", "true", "false"})
-                | ((b.ne("")) & ~b.str.lower().isin({"nan", "none", "unknown"}))
-            ).sum()
-        )
+        from tag_normalize import blitz_tagged
+
+        out["blitz"] = int(df["blitz"].map(blitz_tagged).sum())
     else:
         out["blitz"] = 0
     out["ball_player"] = _n("ball_player")
