@@ -10089,27 +10089,76 @@ def _lan_ip() -> str:
     return ""
 
 
+_LOCAL_HOSTNAMES = {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}
+
+
+def _is_hosted_runtime() -> bool:
+    """Streamlit Cloud / Render / Docker host — never hand phones a LAN IP there."""
+    import os
+
+    if os.environ.get("STREAMLIT_RUNTIME_ENV", "").strip().lower() == "cloud":
+        return True
+    if os.environ.get("RENDER") or os.environ.get("BOOTH_PUBLIC_URL"):
+        return True
+    return str(PROJECT_DIR).startswith("/mount/src") or str(PROJECT_DIR).startswith("/app")
+
+
+def _origin_of(url: str) -> tuple[str, str, str]:
+    """(scheme, hostname, netloc) of a URL — query/path dropped."""
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(str(url or "").strip())
+    except ValueError:
+        return "", "", ""
+    return parts.scheme, (parts.hostname or "").lower(), parts.netloc
+
+
 def _detected_booth_base_url() -> tuple[str, str]:
     """
-    (url, source) for the server this page is actually being served from.
+    (url, source) phones should open — the address Main's browser is actually on.
 
-    Main on localhost → swap in the laptop's LAN IP so phones on the same Wi-Fi can reach it.
+    Main on localhost (local booth) → swap in the laptop's LAN IP for phones on the same Wi-Fi.
     """
     from booth_stations import normalize_base_url
 
-    host, proto = "", "http"
+    candidates: list[tuple[str, str]] = []
+    ctx = getattr(st, "context", None)
     try:
-        headers = getattr(st, "context", None) and st.context.headers
-        if headers:
-            host = str(headers.get("Host") or headers.get("host") or "").strip()
-            proto = str(
-                headers.get("X-Forwarded-Proto") or headers.get("x-forwarded-proto") or ""
-            ).strip() or ("https" if host and ":" not in host else "http")
+        page_url = getattr(ctx, "url", None) if ctx is not None else None
+        if page_url:
+            candidates.append((str(page_url), "this page"))
     except Exception:
         pass
-    hostname, _, port = host.partition(":")
-    if hostname and hostname.lower() not in {"localhost", "127.0.0.1", "0.0.0.0", "::1", "[::1]"}:
-        return normalize_base_url(f"{proto}://{host}"), "this page"
+    try:
+        headers = ctx.headers if ctx is not None else None
+    except Exception:
+        headers = None
+    if headers:
+        def _h(name: str) -> str:
+            return str(headers.get(name) or headers.get(name.lower()) or "").split(",")[0].strip()
+
+        if _h("Origin"):
+            candidates.append((_h("Origin"), "this page"))
+        fwd_host = _h("X-Forwarded-Host")
+        proto = _h("X-Forwarded-Proto") or "https"
+        if fwd_host:
+            candidates.append((f"{proto}://{fwd_host}", "this page"))
+        if _h("Host"):
+            candidates.append((f"{_h('X-Forwarded-Proto') or 'http'}://{_h('Host')}", "this page"))
+
+    port = ""
+    for url, source in candidates:
+        scheme, hostname, netloc = _origin_of(url)
+        if not hostname:
+            continue
+        if hostname in _LOCAL_HOSTNAMES:
+            port = port or (netloc.rpartition(":")[2] if ":" in netloc else "")
+            continue
+        return normalize_base_url(f"{scheme or 'https'}://{netloc}"), source
+
+    if _is_hosted_runtime():
+        return "", ""
     if not port:
         try:
             port = str(st.get_option("server.port") or "8501")

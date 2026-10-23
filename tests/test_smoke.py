@@ -152,6 +152,40 @@ class TestBoothInvites(unittest.TestCase):
             ref.make(fit=False)
             self.assertEqual([list(map(bool, r)) for r in ref.modules], mine.modules)
 
+    def test_invite_address_detection(self):
+        import step4_dashboard as d
+
+        class _Ctx:
+            def __init__(self, url, headers):
+                self.url = url
+                self.headers = headers
+
+        class _St:
+            def __init__(self, url=None, headers=None):
+                self.context = _Ctx(url, headers or {})
+
+            @staticmethod
+            def get_option(_name):
+                return 8501
+
+        real_st, real_ip, real_hosted = d.st, d._lan_ip, d._is_hosted_runtime
+        try:
+            d._lan_ip = lambda: "192.168.1.5"
+            d._is_hosted_runtime = lambda: False
+            d.st = _St(url="https://livetrack.streamlit.app/")
+            self.assertEqual(d._detected_booth_base_url()[0], "https://livetrack.streamlit.app")
+            d.st = _St(url="http://localhost:8501/")
+            self.assertEqual(d._detected_booth_base_url(), ("http://192.168.1.5:8501", "laptop Wi-Fi"))
+            # Hosted behind a proxy that only shows localhost → never a container LAN IP
+            d._is_hosted_runtime = lambda: True
+            d.st = _St(url=None, headers={"Host": "localhost:8501"})
+            self.assertEqual(d._detected_booth_base_url(), ("", ""))
+            d.st = _St(url=None, headers={"Host": "localhost:8501",
+                                          "X-Forwarded-Host": "booth.onrender.com"})
+            self.assertEqual(d._detected_booth_base_url()[0], "https://booth.onrender.com")
+        finally:
+            d.st, d._lan_ip, d._is_hosted_runtime = real_st, real_ip, real_hosted
+
     def test_two_tagger_packs(self):
         from booth_stations import (
             TAGGER_PACKS,
