@@ -132,6 +132,17 @@ class TestBoothInvites(unittest.TestCase):
         self.assertEqual(w, (qr.size + 8) * 4)
         self.assertEqual(w, h)
 
+    def test_inline_svg_qr_matches_matrix(self):
+        import re
+
+        from qr_local import encode, qr_svg
+
+        qr = encode(self.URL)
+        svg = qr_svg(self.URL, size_px=220, border=4)
+        self.assertTrue(svg.startswith("<svg") and f'viewBox="0 0 {qr.size + 8} {qr.size + 8}"' in svg)
+        dark = sum(int(w) for w in re.findall(r"h(\d+)v1", svg))
+        self.assertEqual(dark, sum(sum(1 for v in row if v) for row in qr.modules))
+
     def test_local_qr_matches_reference_library(self):
         try:
             import qrcode

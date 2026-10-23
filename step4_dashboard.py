@@ -10228,8 +10228,21 @@ def _render_invite_link(
     c_qr, c_link = st.columns([1, 1.35])
     with c_qr:
         png = _invite_qr_png(url)
-        if png is not None:
-            st.image(png, width=220, caption="Scan with camera")
+        try:
+            from qr_local import qr_svg
+
+            svg = qr_svg(url, size_px=220)
+        except Exception:
+            svg = ""
+        if svg:
+            # Inline markup, not st.image — nothing for the browser to fetch, so it can't
+            # show as a broken image on a hosted booth.
+            st.markdown(
+                f'<div style="background:#fff;padding:6px;display:inline-block;'
+                f'border-radius:8px;line-height:0">{svg}</div>',
+                unsafe_allow_html=True,
+            )
+            st.caption("Scan with camera")
         else:
             st.error("QR could not be drawn — type or text the link instead.")
     with c_link:

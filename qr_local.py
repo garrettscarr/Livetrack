@@ -331,6 +331,35 @@ def _png_bytes(rows: list[bytes], width: int, height: int) -> bytes:
     )
 
 
+def qr_svg(text: str, *, size_px: int = 220, border: int = 4, ecl: str = "M") -> str:
+    """
+    Inline SVG of the QR — drawn in the page itself, so there is no image file to fetch.
+
+    Dark modules are merged into horizontal runs to keep the markup small.
+    """
+    qr = encode(text, ecl=ecl)
+    n = qr.size + 2 * border
+    path: list[str] = []
+    for y in range(qr.size):
+        row = qr.modules[y]
+        x = 0
+        while x < qr.size:
+            if row[x]:
+                start = x
+                while x < qr.size and row[x]:
+                    x += 1
+                path.append(f"M{start + border} {y + border}h{x - start}v1h-{x - start}z")
+            else:
+                x += 1
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {n} {n}" '
+        f'width="{size_px}" height="{size_px}" shape-rendering="crispEdges" '
+        f'role="img" aria-label="QR code">'
+        f'<rect width="{n}" height="{n}" fill="#ffffff"/>'
+        f'<path fill="#000000" d="{"".join(path)}"/></svg>'
+    )
+
+
 def qr_png(text: str, *, scale: int = 8, border: int = 4, ecl: str = "M") -> bytes:
     """Grayscale PNG of the QR (black on white, quiet zone of `border` modules)."""
     qr = encode(text, ecl=ecl)
