@@ -8871,17 +8871,8 @@ def _render_booth_role_gate() -> None:
 
 
 def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
-    """Pick a pre+post pack (2-tagger default) — balanced across the snap."""
-    from booth_stations import (
-        FOCUS_HELP,
-        FOCUS_LABELS,
-        TAGGER_JOBS,
-        TAGGER_PACK_SOLO,
-        TAGGER_PACK_THIRD,
-        TAGGER_PACKS,
-        TAGGER_SPLIT_HELP,
-        normalize_focuses,
-    )
+    """Checkbox picker: the tagger checks whichever jobs they'll track on this phone."""
+    from booth_stations import normalize_focuses
 
     st.markdown(
         """
@@ -8898,76 +8889,65 @@ def _render_tag_focus_picker(*, require_save: bool = True) -> list[str]:
         """,
         unsafe_allow_html=True,
     )
-    st.markdown("## Your phone")
-    st.caption(TAGGER_SPLIT_HELP)
-
-    def _pick_pack(pack: dict) -> None:
-        foc = list(pack["focuses"])
-        st.session_state.tag_focuses = foc
-        st.session_state.tag_pack_id = pack["id"]
-        st.session_state.tag_focus_force_edit = False
-        st.session_state.pop("tag_focus_draft", None)
-        try:
-            st.query_params["station"] = "tag"
-            st.query_params["focus"] = ",".join(foc)
-        except Exception:
-            pass
-        st.rerun()
-
-    st.markdown("### 2 taggers — pick your job")
-    for pack in TAGGER_PACKS:
-        if st.button(
-            f"{pack['label']}",
-            key=f"tag_pack_{pack['id']}",
-            use_container_width=True,
-            type="primary",
-            help=pack["subtitle"],
-        ):
-            _pick_pack(pack)
-        st.caption(pack["subtitle"])
-
-    st.markdown("### Only 1 tagger")
+    st.markdown("## What are you tagging?")
+    st.caption("Check everything you'll track on this phone. You can change it any time.")
+    chosen = _render_tag_focus_checkboxes("tagpick", normalize_focuses(st.session_state.get("tag_focuses")))
     if st.button(
-        TAGGER_PACK_SOLO["label"],
-        key=f"tag_pack_{TAGGER_PACK_SOLO['id']}",
+        "Start tagging ▶",
+        type="primary",
         use_container_width=True,
-        type="secondary",
-        help=TAGGER_PACK_SOLO["subtitle"],
+        key="tagpick_start",
+        disabled=not chosen,
     ):
-        _pick_pack(TAGGER_PACK_SOLO)
-    st.caption(TAGGER_PACK_SOLO["subtitle"])
-
-    st.markdown("### Extra phone (optional)")
-    if st.button(
-        TAGGER_PACK_THIRD["label"],
-        key=f"tag_pack_{TAGGER_PACK_THIRD['id']}",
-        use_container_width=True,
-        type="secondary",
-        help=TAGGER_PACK_THIRD["subtitle"],
-    ):
-        _pick_pack(TAGGER_PACK_THIRD)
-    st.caption(TAGGER_PACK_THIRD["subtitle"])
-
-    with st.expander("Single field only (not recommended)", expanded=False):
-        for key in TAGGER_JOBS:
-            if st.button(
-                FOCUS_LABELS.get(key, key),
-                key=f"tag_job_single_{key}",
-                use_container_width=True,
-            ):
-                st.session_state.tag_focuses = [key]
-                st.session_state.tag_focus_force_edit = False
-                try:
-                    st.query_params["station"] = "tag"
-                    st.query_params["focus"] = key
-                except Exception:
-                    pass
-                st.rerun()
-            st.caption(FOCUS_HELP.get(key, ""))
-
-    if require_save:
-        st.caption("Tap a pack above.")
+        _apply_tag_focuses(chosen)
+    if not chosen:
+        st.caption("Check at least one box.")
     return normalize_focuses(st.session_state.get("tag_focuses"))
+
+
+def _apply_tag_focuses(focuses: list[str]) -> None:
+    """Save this phone's jobs (kept in the URL so a reload keeps them) and reopen tagging."""
+    st.session_state.tag_focuses = list(focuses)
+    st.session_state.tag_focus_force_edit = False
+    st.session_state.pop("tag_focus_draft", None)
+    try:
+        st.query_params["station"] = "tag"
+        st.query_params["focus"] = ",".join(focuses)
+    except Exception:
+        pass
+    st.rerun()
+
+
+def _render_tag_focus_checkboxes(prefix: str, current: list[str]) -> list[str]:
+    """
+    One checkbox per tagger job, with one-tap shortcuts for the usual splits.
+
+    Returns the checked jobs in snap order (pre-snap first).
+    """
+    from booth_stations import FOCUS_HELP, FOCUS_LABELS, TAGGER_JOBS, TAGGER_PACK_SOLO, TAGGER_PACKS
+
+    keys = {fid: f"{prefix}_cb_{fid}" for fid in TAGGER_JOBS}
+    for fid, k in keys.items():
+        if k not in st.session_state:
+            st.session_state[k] = fid in (current or [])
+
+    shortcuts = [
+        (p["label"].split("·")[-1].strip(), list(p["focuses"])) for p in TAGGER_PACKS
+    ] + [("Everything", list(TAGGER_PACK_SOLO["focuses"]))]
+    st.caption("Quick fill")
+    cols = st.columns(len(shortcuts))
+    for col, (label, focs) in zip(cols, shortcuts):
+        with col:
+            if st.button(label, key=f"{prefix}_fill_{label}", use_container_width=True):
+                for fid, k in keys.items():
+                    st.session_state[k] = fid in focs
+
+    for fid in TAGGER_JOBS:
+        st.checkbox(
+            f"**{FOCUS_LABELS.get(fid, fid)}** — {FOCUS_HELP.get(fid, '')}",
+            key=keys[fid],
+        )
+    return [fid for fid in TAGGER_JOBS if st.session_state.get(keys[fid])]
 
 
 def _booth_upsert_snap(
@@ -10611,10 +10591,16 @@ def live_track_page(offense_df: pd.DataFrame, defense_df: pd.DataFrame) -> None:
                 drive_id=view_did,
                 play_n=view_pn,
             )
-            with st.expander("More · change job", expanded=False):
-                if st.button("Change job", key="tag_refocus_bottom"):
-                    st.session_state.tag_focus_force_edit = True
-                    st.rerun()
+            with st.expander(f"What I'm tagging · {focus_summary(focuses)}", expanded=False):
+                picked = _render_tag_focus_checkboxes("tagedit", list(focuses))
+                if st.button(
+                    "Update",
+                    type="primary",
+                    use_container_width=True,
+                    key="tagedit_apply",
+                    disabled=not picked or picked == list(focuses),
+                ):
+                    _apply_tag_focuses(picked)
 
         _tagger_snap_loop()
         return

@@ -104,9 +104,10 @@ TAGGER_JOBS: tuple[str, ...] = (
 )
 
 TAGGER_SPLIT_HELP = (
-    "2 taggers: Tagger 1 tags Front + Blitz, Tagger 2 tags Coverage + ball carrier "
-    "(Pass → QB + WR · Run → carrier). If only one shows, use the 1-tagger pack. "
-    "Main (headset) logs down, distance, formation, call, result, and yards."
+    "Each tagger checks what they'll track (Front, Coverage, Blitz, Ball carrier, Motion) "
+    "and can change it mid-game. Usual 2-tagger split: Front + Blitz on one phone, "
+    "Coverage + Ball on the other. Main (headset) logs down, distance, formation, call, "
+    "result, and yards."
 )
 
 STATION_LABELS: dict[str, str] = {
