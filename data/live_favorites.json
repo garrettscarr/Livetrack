@@ -67,6 +67,9 @@
     ],
     "East": [
       "Bash"
+    ],
+    "Fat Texas": [
+      "Bash"
     ]
   },
   "motions": [
@@ -129,7 +132,10 @@
       "Molly Slice",
       "Porky",
       "Reland",
-      "Smash GO"
+      "Smash GO",
+      "G Molly",
+      "G Molly Slice",
+      "Wheel"
     ],
     "pass": [
       "Backside",

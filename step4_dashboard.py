@@ -2945,6 +2945,11 @@ def game_review_page(df: pd.DataFrame, unit_cfg: dict) -> None:
         )
 
     review_df = plays_for_season(df, picked)
+    if is_active and (review_df is None or review_df.empty) and df is not None and not df.empty:
+        st.warning(
+            f"No **{cur}** games are in the loaded database. On the hosted booth, open "
+            "**Home → Replace database** and upload `football.db` from your Mac."
+        )
     # Pull in any live_games CSVs that never merged (e.g. promote skipped / cache stale)
     try:
         from live_games import remerge_all_live_games
@@ -10329,6 +10334,9 @@ def _render_home_page() -> None:
     else:
         n = len(off) if off is not None and not off.empty else 0
         st.success(f"Database ready · **{n:,}** offense plays · taggers can join")
+        _render_db_season_check(DB_FILE)
+        with st.expander("Replace database / film (Main only)", expanded=False):
+            _render_first_run_wizard(show_db_check=False)
 
     if st.button("Open Live Track →", type="primary", key="home_goto_live"):
         st.session_state.lt_nav_page = "Live Track"
@@ -20327,7 +20335,69 @@ def _epa_db_ready(offense_df, defense_df) -> bool:
     )
 
 
-def _render_first_run_wizard() -> None:
+def _hudl_upload_fingerprint(data: bytes) -> dict:
+    """Games / rows / unit mix in an uploaded Hudl export (PLAY # resets = new game)."""
+    import io
+
+    try:
+        raw = pd.read_excel(io.BytesIO(data))
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    games = 0
+    if "PLAY #" in raw.columns:
+        pn = pd.to_numeric(raw["PLAY #"], errors="coerce").dropna()
+        games = int((pn.diff() < 0).sum()) + 1 if len(pn) else 0
+    odk = raw["ODK"].astype(str).str.upper().value_counts().to_dict() if "ODK" in raw.columns else {}
+    return {"ok": True, "rows": int(len(raw)), "games": games, "odk": odk}
+
+
+def _season_from_filename(name: str) -> str:
+    """'season_25-26.xlsx' → '25-26'; '' when the name doesn't say."""
+    import re
+
+    m = re.search(r"(\d{2}-\d{2})", str(name or ""))
+    return m.group(1) if m else ""
+
+
+def _scheduled_games(season_id: str) -> int:
+    try:
+        from step2_clean import load_opponents
+
+        opp = load_opponents(season_id)
+        return int(len(opp)) if opp is not None else 0
+    except Exception:
+        return 0
+
+
+def _db_season_counts(db_path) -> list[tuple[str, int, int]]:
+    """(season, snaps, games) in a football.db — offense table."""
+    try:
+        with sqlite3.connect(db_path) as conn:
+            rows = conn.execute(
+                "SELECT COALESCE(season, ''), COUNT(*), COUNT(DISTINCT game_id) "
+                "FROM offense_plays_epa GROUP BY season ORDER BY season DESC"
+            ).fetchall()
+        return [(str(s or "(blank)"), int(n), int(g)) for s, n, g in rows]
+    except Exception:
+        return []
+
+
+def _render_db_season_check(db_path) -> None:
+    """Show which seasons a database holds; warn when the active one is missing."""
+    tc = _season_api()
+    cur = tc.current_season_id()
+    counts = _db_season_counts(db_path)
+    if not counts:
+        return
+    st.caption(" · ".join(f"**{s}**: {g} games, {n:,} snaps" for s, n, g in counts))
+    if not any(s == cur for s, _, _ in counts):
+        st.warning(
+            f"This database has no **{cur}** games. Upload the `football.db` from your Mac "
+            "(Projects → football-epa → data), not an older copy."
+        )
+
+
+def _render_first_run_wizard(*, show_db_check: bool = True) -> None:
     """CP5 first-run / empty-data onboarding (Main only — works on Streamlit Cloud via uploads)."""
     st.title("Football EPA — Setup")
     st.markdown(
@@ -20335,10 +20405,10 @@ def _render_first_run_wizard() -> None:
 **Main device only** — upload the season database once.  
 Taggers never do this; they join with the invite link after Main is ready.
 
-**Fastest (Streamlit Cloud)**  
-Upload your local `data/football.db` below.
+**Best (Streamlit Cloud)** — upload `football.db` from your Mac:
+`OneDrive → Projects → football-epa → data → football.db`. It already has every season labeled.
 
-**Or** upload Hudl `season.xlsx` / `season_25-26.xlsx` and refresh.
+**Or** upload Hudl season exports and pick the season for each.
 """
     )
 
@@ -20364,34 +20434,63 @@ Upload your local `data/football.db` below.
         st.success(f"Saved {db_path.name} ({len(db_up.getvalue()):,} bytes).")
         st.cache_data.clear()
         st.rerun()
+    if show_db_check and db_path.exists():
+        _render_db_season_check(db_path)
 
     st.subheader("2 · Or upload Hudl season film")
+    tc = _season_api()
+    cur = tc.current_season_id()
+    prior = str(tc.season_block().get("prior_id") or "").strip()
+    st.caption(
+        f"Tell the app which season each file is. Only **{cur}** film should be saved as this season — "
+        "an old `season.xlsx` from another folder will put last year's games under this year."
+    )
     xlsx_up = st.file_uploader(
-        "season.xlsx / season_YY-YY.xlsx",
+        "Hudl season export(s)",
         type=["xlsx"],
         key="setup_upload_xlsx",
         accept_multiple_files=True,
     )
     if xlsx_up:
-        for f in xlsx_up:
-            name = str(f.name or "season.xlsx")
-            dest = exports / name
-            dest.write_bytes(f.getvalue())
-            st.write(f"Saved `{dest.name}`")
-        if not season.exists():
-            candidates = sorted(
-                (
-                    p
-                    for p in exports.glob("season*.xlsx")
-                    if not p.name.startswith("~$")
-                ),
-                key=lambda p: p.stat().st_mtime,
+        cur_sched = _scheduled_games(cur)
+        options = list(dict.fromkeys([cur, prior, "24-25"] + [s for s in [_season_from_filename(f.name) for f in xlsx_up] if s]))
+        options = [o for o in options if o]
+        picks: dict[str, str] = {}
+        for i, f in enumerate(xlsx_up):
+            fp = _hudl_upload_fingerprint(f.getvalue())
+            if not fp.get("ok"):
+                st.error(f"`{f.name}` couldn't be read: {fp.get('error')}")
+                continue
+            named = _season_from_filename(f.name)
+            too_many = bool(cur_sched) and fp["games"] > cur_sched + 1
+            default = named or (prior if too_many and prior else cur)
+            st.markdown(
+                f"**{f.name}** — {fp['games']} games · {fp['rows']:,} rows · "
+                + ", ".join(f"{k} {v}" for k, v in sorted(fp["odk"].items()))
             )
-            if candidates:
-                season.write_bytes(candidates[-1].read_bytes())
-                st.caption(f"Also copied → season.xlsx from {candidates[-1].name}")
+            pick = st.selectbox(
+                "Season for this file",
+                options,
+                index=options.index(default) if default in options else 0,
+                key=f"setup_season_{i}_{f.name}",
+            )
+            if pick == cur and too_many:
+                st.warning(
+                    f"This file has **{fp['games']} games**, but the {cur} schedule has **{cur_sched}**. "
+                    f"It's probably last season — pick {prior or 'the right year'}."
+                )
+            picks[f.name] = pick
+        if picks and st.button("Save film files", type="primary", key="setup_save_xlsx"):
+            for f in xlsx_up:
+                sid = picks.get(f.name)
+                if not sid:
+                    continue
+                dest = season if sid == cur else exports / f"season_{sid}.xlsx"
+                dest.write_bytes(f.getvalue())
+                st.write(f"Saved `{f.name}` as **{sid}** → `{dest.name}`")
 
-    st.write("season.xlsx:", "✅ found" if season.exists() else "❌ missing")
+    found = sorted(p.name for p in exports.glob("season*.xlsx") if not p.name.startswith("~$"))
+    st.write("Film files:", ", ".join(f"`{n}`" for n in found) if found else "❌ none")
     st.write("football.db:", "✅ found" if db_path.exists() else "❌ missing")
     st.caption(
         "Note: Streamlit Cloud storage is temporary — re-upload after a full redeploy, "
@@ -20407,14 +20506,6 @@ Upload your local `data/football.db` below.
                 try:
                     from refresh_all import run_refresh
 
-                    if not season.exists():
-                        alts = sorted(
-                            p
-                            for p in exports.glob("season*.xlsx")
-                            if not p.name.startswith("~$")
-                        )
-                        if alts:
-                            season.write_bytes(alts[-1].read_bytes())
                     with st.spinner("Running refresh_all (may take a minute)…"):
                         run_refresh()
                     st.success("Refresh complete.")

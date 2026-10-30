@@ -180,6 +180,41 @@ class TestHalftimeEssentials(unittest.TestCase):
         self.assertLess(_estimate_live_play_epa(row, ep), 0)
 
 
+class TestSeasonUploadChecks(unittest.TestCase):
+    def test_fingerprint_counts_games_by_play_reset(self):
+        import io
+
+        import pandas as pd
+
+        import step4_dashboard as d
+
+        buf = io.BytesIO()
+        pd.DataFrame({"PLAY #": [1, 2, 3, 1, 2, 5, 1], "ODK": ["O", "O", "D", "O", "K", "O", "O"]}).to_excel(
+            buf, index=False
+        )
+        fp = d._hudl_upload_fingerprint(buf.getvalue())
+        self.assertTrue(fp["ok"])
+        self.assertEqual(fp["games"], 3)
+        self.assertEqual(fp["odk"]["O"], 5)
+        self.assertEqual(d._season_from_filename("season_25-26.xlsx"), "25-26")
+        self.assertEqual(d._season_from_filename("season.xlsx"), "")
+
+    def test_db_season_counts(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+
+        import step4_dashboard as d
+
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / "f.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("CREATE TABLE offense_plays_epa (season TEXT, game_id INT)")
+                conn.executemany("INSERT INTO offense_plays_epa VALUES (?, ?)",
+                                 [("26-27", 1), ("26-27", 1), ("26-27", 2), ("25-26", 9)])
+            self.assertEqual(d._db_season_counts(db), [("26-27", 3, 2), ("25-26", 1, 1)])
+
+
 class TestBoothInvites(unittest.TestCase):
     URL = "http://192.168.1.20:8501/?station=tag&focus=front,blitz"
 
